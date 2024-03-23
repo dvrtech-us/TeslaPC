@@ -10,20 +10,20 @@ namespace Streaming
     /// Provides a streaming server that can be used to stream any images source
     /// to any client.
     /// </summary>
-    public class ImageStreamingServer:IDisposable
+    public class ImageStreamingServer : IDisposable
     {
 
         private List<Socket> _Clients;
         private Thread _Thread;
 
-    
+
 
         // constructor that takes in the size of the screen
-     
+
 
         public ImageStreamingServer(int width, int height)
         {
-    
+
             _Clients = new List<Socket>();
             _Thread = null;
 
@@ -72,14 +72,6 @@ namespace Streaming
 
         }
 
-        /// <summary>
-        /// Starts the server to accepts any new connections on the default port (8080).
-        /// </summary>
-        public void Start()
-        {
-            this.Start(8080);
-        }
-
         public void Stop()
         {
 
@@ -95,7 +87,7 @@ namespace Streaming
 
                     lock (_Clients)
                     {
-                        
+
                         foreach (var s in _Clients)
                         {
                             try
@@ -125,14 +117,14 @@ namespace Streaming
             {
                 Socket Server = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
 
-                Server.Bind(new IPEndPoint(IPAddress.Any,(int)state));
+                Server.Bind(new IPEndPoint(IPAddress.Parse("172.16.1.26"), (int)state));
                 Server.Listen(10);
 
                 System.Diagnostics.Debug.WriteLine(string.Format("Server started on port {0}.", state));
-                
+
                 foreach (Socket client in Server.IncommingConnectoins())
                     ThreadPool.QueueUserWorkItem(new WaitCallback(ClientThread), client);
-            
+
             }
             catch { }
 
@@ -148,7 +140,7 @@ namespace Streaming
 
             Socket socket = (Socket)client;
 
-            System.Diagnostics.Debug.WriteLine(string.Format("New client from {0}",socket.RemoteEndPoint.ToString()));
+            System.Diagnostics.Debug.WriteLine(string.Format("New client from {0}", socket.RemoteEndPoint.ToString()));
 
             lock (_Clients)
                 _Clients.Add(socket);
@@ -172,7 +164,10 @@ namespace Streaming
 
                 }
             }
-            catch { }
+            catch (Exception e)
+            {
+                Console.WriteLine(e.Message);
+            }
             finally
             {
                 lock (_Clients)
@@ -196,7 +191,7 @@ namespace Streaming
 
         public static IEnumerable<Socket> IncommingConnectoins(this Socket server)
         {
-            while(true)
+            while (true)
                 yield return server.Accept();
         }
 
@@ -209,7 +204,7 @@ namespace Streaming
 
         public static IEnumerable<Image> Snapshots()
         {
-            return Screen.Snapshots(System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width, System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height,true);
+            return Screen.Snapshots(System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width, System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height, true);
         }
 
         /// <summary>
@@ -217,10 +212,10 @@ namespace Streaming
         /// </summary>
         /// <param name="delayTime"></param>
         /// <returns></returns>
-        public static IEnumerable<Image> Snapshots(int width,int height,bool showCursor)
+        public static IEnumerable<Image> Snapshots(int width, int height, bool showCursor)
         {
             Size size = new Size(System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width, System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
-            
+
             Bitmap srcImage = new Bitmap(size.Width, size.Height);
             Graphics srcGraphics = Graphics.FromImage(srcImage);
 
@@ -229,7 +224,7 @@ namespace Streaming
             Bitmap dstImage = srcImage;
             Graphics dstGraphics = srcGraphics;
 
-            if(scaled)
+            if (scaled)
             {
                 dstImage = new Bitmap(width, height);
                 dstGraphics = Graphics.FromImage(dstImage);
@@ -244,22 +239,16 @@ namespace Streaming
                 srcGraphics.CopyFromScreen(0, 0, 0, 0, size);
 
                 if (showCursor)
-                    Cursors.Default.Draw(srcGraphics,new Rectangle(Cursor.Position,curSize));
+                    Cursors.Default.Draw(srcGraphics, new Rectangle(Cursor.Position, curSize));
 
                 if (scaled)
                     dstGraphics.DrawImage(srcImage, dst, src, GraphicsUnit.Pixel);
-       
+
                 yield return dstImage;
 
             }
 
-            srcGraphics.Dispose();
-            dstGraphics.Dispose();
 
-            srcImage.Dispose();
-            dstImage.Dispose();
-
-            yield break;
         }
 
         internal static IEnumerable<MemoryStream> Streams(this IEnumerable<Image> source)
@@ -274,9 +263,8 @@ namespace Streaming
             }
 
             ms.Close();
-            ms = null;
 
-            yield break;
+
         }
 
     }

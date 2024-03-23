@@ -108,6 +108,7 @@ namespace WebSocketServer
                     System.IO.Stream output = response.OutputStream;
                     output.Write(buffer, 0, buffer.Length);
                     output.Close();
+                    response.Close();
 
                 }
             }
@@ -117,7 +118,7 @@ namespace WebSocketServer
         {
             HttpListenerWebSocketContext webSocketContext = await context.AcceptWebSocketAsync(null);
             WebSocket webSocket = webSocketContext.WebSocket;
-
+           
             while (webSocket.State == WebSocketState.Open)
             {
                 try
@@ -138,7 +139,14 @@ namespace WebSocketServer
                     Console.WriteLine($"Mouse position: {mousePosition.X}, {mousePosition.Y}");
                     //move the mouse
 
-                    SetCursorPos(mousePosition.X, mousePosition.Y);
+                    Win32.SetCursorPos(mousePosition.X, mousePosition.Y);
+                    if(mousePosition.Type == "click")
+                    {
+                        //click the mouse
+                        //simulate a mouse click
+                        Win32.mouse_event(Win32.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+                        Win32.mouse_event(Win32.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+                    }
 
                 }
                 catch (WebSocketException e)
@@ -148,12 +156,9 @@ namespace WebSocketServer
             }
         }
 
-        private void SetCursorPos(int xPos, int yPos)
-        {
-            Win32.POINT p = new Win32.POINT(xPos, yPos);
 
-            Win32.SetCursorPos(p.x, p.y);
-        }
+
+      
 
         public async Task StopAsync()
         {
@@ -167,17 +172,34 @@ namespace WebSocketServer
 }
 class MousePosition
 {
+    //{"Type":"click","X":820,"Y":45,"DisplaySize":{"width":1280,"height":720}}
     public string Type { get; set; }
     public int X { get; set; }
     public int Y { get; set; }
+    
+    public DisplaySize DisplaySize { get; set; }
+}
+class DisplaySize
+{
+    public int width { get; set; }
+    public int height { get; set; }
 }
 public class Win32
 {
-    [DllImport("User32.Dll")]
-    public static extern long SetCursorPos(int x, int y);
 
-    [DllImport("User32.Dll")]
-    public static extern bool ClientToScreen(IntPtr hWnd, ref POINT point);
+    public const int MOUSEEVENTF_LEFTDOWN = 0x02;
+    public const int MOUSEEVENTF_LEFTUP = 0x04;
+
+        [DllImport("user32.dll")]
+    public static extern void SetCursorPos(int x, int y);
+        [DllImport("user32.dll")]
+    public static extern bool GetCursorPos(out POINT lpPoint);
+        [DllImport("user32.dll")]
+    public static extern void ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
+        [DllImport("user32.dll")]
+    public static extern void mouse_event(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo);
+        [DllImport("user32.dll")]
+    public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct POINT
