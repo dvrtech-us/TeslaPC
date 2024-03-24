@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Runtime.InteropServices;
 using Streaming;
 using System.Reflection.Metadata;
+using System.Security.Policy;
 
 namespace WebSocketServer
 {
@@ -18,8 +19,7 @@ namespace WebSocketServer
             var webServer = new WebServer();
 
             var audioCapture = new AudioCapture();
-            CaptureScreenToMJPEGStream();
-
+       
             webServer.StartWebServerAsync();
             audioCapture.Start(8082);
 
@@ -40,7 +40,8 @@ namespace WebSocketServer
             int PortNumber = 8081;
             ImageStreamingServer server = new ImageStreamingServer(1280, 720);
             server.Start(PortNumber);
-            Console.WriteLine("Listening for MJPEG Request on " + PortNumber);
+    
+           
         }
 
         public static async Task WaitForInput()
@@ -64,13 +65,18 @@ namespace WebSocketServer
         {
 
             _Listener.Prefixes.Add("http://*:8080/");
-            Console.WriteLine("Listening for WebSocket connections on " + _Listener.Prefixes.First());
+            Console.WriteLine("Listening for WebSocket connections on: ");
+            foreach (var prefix in _Listener.Prefixes)
+            {
+                Console.WriteLine("\t" + prefix);
+            }
+
             _Listener.Start();
 
             while (!_cancellationTokenSource.IsCancellationRequested)
             {
                 var context = await _Listener.GetContextAsync();
-                Task.Run(async () =>
+                _ = Task.Run(async () =>
                    {
                        if (context.Request.IsWebSocketRequest)
                        {
@@ -90,8 +96,21 @@ namespace WebSocketServer
             HttpListenerRequest request = context.Request;
             HttpListenerResponse response = context.Response;
             string PathToHtml = "";
-
+            string rootPath = "";
             var runningInDebugMode = false;
+
+            string requestPath =  request.Url.LocalPath.TrimStart('/');
+
+            if(requestPath == "stream.jpg")
+            {
+                // Writes the response header to the client.
+                MjpegWriter wr = new MjpegWriter(context, "--boundary");
+                wr.WriteHeader();
+
+              
+            }
+
+
             //detect if visual studio is running in debug mode
             if (System.Diagnostics.Debugger.IsAttached)
             {
@@ -100,24 +119,24 @@ namespace WebSocketServer
             //if running in debug mode, serve the html file from the project directory
             if (!runningInDebugMode)
             {
-                PathToHtml = "";
+                rootPath = "";
             }
             else
             {
-                PathToHtml = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "");
+                rootPath = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "");
                 //get the location of bin in the path
-                PathToHtml = PathToHtml.Substring(0, PathToHtml.LastIndexOf("bin"));
-                Console.WriteLine("Path to html: " + PathToHtml);
+                rootPath = PathToHtml.Substring(0, rootPath.LastIndexOf("bin"));
+                Console.WriteLine("Path to html: " + rootPath);
             }
             //if not running in debug mode, serve the html file from the directory where the executable is located
             //see if the request is for the html file
             if (request.Url.LocalPath == "/")
             {
-                PathToHtml = System.IO.Path.Combine(PathToHtml, "index.html");
+                PathToHtml = System.IO.Path.Combine(rootPath, "index.html");
             }
             else
             {
-                PathToHtml = System.IO.Path.Combine(PathToHtml, request.Url.LocalPath.TrimStart('/'));
+                PathToHtml = System.IO.Path.Combine(rootPath, request.Url.LocalPath.TrimStart('/'));
             }
             //if the file does not exist, return a 404 error
             if (!System.IO.File.Exists(PathToHtml))
@@ -126,23 +145,61 @@ namespace WebSocketServer
                 response.Close();
                 return;
             }
+            //only allow html, js , css and image files to be served
+            if (!PathToHtml.EndsWith(".html") && !PathToHtml.EndsWith(".js") && !PathToHtml.EndsWith(".css") && !PathToHtml.EndsWith(".png") && !PathToHtml.EndsWith(".jpg"))
+            {
+                response.StatusCode = 403;
+                response.Close();
+                return;
+            }
 
             string responseString = System.IO.File.ReadAllText(PathToHtml);
+            response.StatusCode = 200;
+            //serve the right content type
+            if (PathToHtml.EndsWith(".html"))
+            {
+                //get actual server ip request was made to
+                string serverIp = request.LocalEndPoint.Address.ToString();
 
-            //get actual server ip request was made to
-            string serverIp = request.LocalEndPoint.Address.ToString();
+                response.ContentType = "text/html";
 
 
-            //replace all instances of the string "localhost:8081" with the actual IP address of the server
+                //replace all instances of the string "localhost:8081" with the actual IP address of the server
 
-            responseString = responseString.Replace("//LOCALHOST", "//" + serverIp);
+                responseString = responseString.Replace("//LOCALHOST", "//" + serverIp);
+                responseString = responseString.Replace("127.0.0.1", "172.16.1.29");
+
+            }
+            else if (PathToHtml.EndsWith(".js"))
+            {
+                response.ContentType = "application/javascript";
+            }
+            else if (PathToHtml.EndsWith(".css"))
+            {
+                response.ContentType = "text/css";
+            }
+            else if (PathToHtml.EndsWith(".png"))
+            {
+                response.ContentType = "image/png";
+            }
+            else if (PathToHtml.EndsWith(".jpg"))
+            {
+                response.ContentType = "image/jpeg";
+            }
+
+     
+
+     
+
+         
+         
             byte[] buffer = System.Text.Encoding.UTF8.GetBytes(responseString);
             response.ContentLength64 = buffer.Length;
             System.IO.Stream output = response.OutputStream;
             output.Write(buffer, 0, buffer.Length);
             output.Close();
             response.Close();
-          return ;
+            return;
         }
 
         private async Task AcceptWebSocketAsync(HttpListenerContext context)

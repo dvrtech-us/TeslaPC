@@ -11,7 +11,7 @@
 </style>
 
 
-<img title="playback" style="max-width: 100%" />
+<img title="playback" style="max-width: 100%" src="http://LOCALHOST:8081" />
 <button onclick="startAudioPlayback()"> start playback</button>
 
 <!-- Include the WebSocket JavaScript library -->
@@ -24,13 +24,14 @@
     let audioContext = null
     let audioSocket = null;
     let pcmPlayerNode = null;
+
     async function startAudioPlayback() {
         console.log('Before AudioContext start');
 
         audioContext = new AudioContext({ sampleRate: 48000, channels: 2, latencyHint: 'interactive' });
         console.log('After AudioContext start');
 
-        await audioContext.audioWorklet.addModule('audio-pcmplayer.js');
+        await audioContext.audioWorklet.addModule('PCMPlayerProcessor.js');
         console.log("starting audioContext");
         var pcmPlayerNode = new AudioWorkletNode(audioContext, 'pcm-player-processor');
         var audioSocket = new WebSocket('ws://LOCALHOST:8082/');
@@ -41,8 +42,7 @@
         audioContext.resume();
         console.log('after AudioContext resume');
 
-        //set image source to src="http://LOCALHOST:8081" 
-        document.querySelector('img').src = "http://LOCALHOST:8081";
+
     }
 
 </script>

@@ -69,9 +69,17 @@ namespace Streaming
         {
             _listener = new HttpListener();
             _listener.Prefixes.Add("http://*:" + port.ToString() + "/");
-            _listener.Start();
 
-            Console.WriteLine($"Image Server started on " + _listener.Prefixes.First());
+            _listener.Prefixes.Add("https://*:" + (port + 10).ToString() + "/");
+
+            Console.WriteLine($"Image Server started on: ");
+            foreach (var prefix in _listener.Prefixes)
+            {
+                Console.WriteLine("\t" + prefix);
+            }
+
+
+            _listener.Start();
 
             ThreadPool.QueueUserWorkItem(o =>
             {

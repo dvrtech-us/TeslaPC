@@ -20,7 +20,7 @@ public class AudioCapture
 
         waveSource.StartRecording();
     }
-    private ConcurrentQueue<byte[]> _audioDataQueue = new ConcurrentQueue<byte[]>();
+    public ConcurrentQueue<byte[]> _audioDataQueue = new ConcurrentQueue<byte[]>();
     private void waveSource_DataAvailable(object sender, WaveInEventArgs e)
     {
         try
@@ -56,9 +56,14 @@ public class AudioCapture
     {
         HttpListener listener = new HttpListener();
         listener.Prefixes.Add($"http://*:{port}/");
+
         listener.Start();
 
-        Console.WriteLine($"Server started on {listener.Prefixes.First()}");
+        Console.WriteLine($"Audio Server started on: ");
+        foreach (var prefix in listener.Prefixes)
+        {
+            Console.WriteLine("\t" + prefix);
+        }
         StartCapturing();
         while (true)
         {
