@@ -9,12 +9,50 @@
         user-drag: none;
     }
 </style>
-<img style="max-width: 100%" src="http://LOCALHOST:8081" />
-<!-- <audio controls autoplay src="http://LOCALHOST:63859/stream/swyh.mp3"></audio> -->
+
+
+<img title="playback" style="max-width: 100%" />
+<button onclick="startAudioPlayback()"> start playback</button>
+
 <!-- Include the WebSocket JavaScript library -->
+
+
+
+
+<script>
+
+    let audioContext = null
+    let audioSocket = null;
+    let pcmPlayerNode = null;
+    async function startAudioPlayback() {
+        console.log('Before AudioContext start');
+
+        audioContext = new AudioContext({ sampleRate: 48000, channels: 2, latencyHint: 'interactive' });
+        console.log('After AudioContext start');
+
+        await audioContext.audioWorklet.addModule('audio-pcmplayer.js');
+        console.log("starting audioContext");
+        var pcmPlayerNode = new AudioWorkletNode(audioContext, 'pcm-player-processor');
+        var audioSocket = new WebSocket('ws://LOCALHOST:8082/');
+        pcmPlayerNode.connect(audioContext.destination);
+        audioSocket.onmessage = function (event) {
+            pcmPlayerNode.port.postMessage(event.data);
+        };
+        audioContext.resume();
+        console.log('after AudioContext resume');
+
+        //set image source to src="http://LOCALHOST:8081" 
+        document.querySelector('img').src = "http://LOCALHOST:8081";
+    }
+
+</script>
+
+
+
+
 <script>
     // Create a WebSocket connection
-    var socket = new WebSocket('ws://LOCALHOST:8080/ws/');
+    var mouseSocket = new WebSocket('ws://LOCALHOST:8080/ws/');
 
     // Get the image element
     var img = document.querySelector('img');
@@ -31,7 +69,7 @@
         y = parseInt(y);
 
         // Send these coordinates over the WebSocket connection
-        socket.send(JSON.stringify({
+        mouseSocket.send(JSON.stringify({
             Type: 'click',
             X: x,
             Y: y,
@@ -40,7 +78,10 @@
                 height: img.height
             }
         }));
+
     });
+
+
     //add an event listener for the 'mousemove' event
-   
+
 </script>

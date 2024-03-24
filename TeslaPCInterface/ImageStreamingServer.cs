@@ -29,6 +29,8 @@ namespace Streaming
 
             this.ImagesSource = Screen.Snapshots(width, height, true);
             this.Interval = 50;
+            //set interval to 24 frames per second
+            this.Interval = 1000 / 24;
 
         }
 
@@ -55,6 +57,9 @@ namespace Streaming
         /// running and ready to serve any client requests.
         /// </summary>
         public bool IsRunning { get { return (_Thread != null && _Thread.IsAlive); } }
+        private HttpListener _listener;
+
+        private List<HttpListenerContext> _clients = new List<HttpListenerContext>();
 
         /// <summary>
         /// Starts the server to accepts any new connections on the specified port.
@@ -62,14 +67,50 @@ namespace Streaming
         /// <param name="port"></param>
         public void Start(int port)
         {
+            _listener = new HttpListener();
+            _listener.Prefixes.Add("http://*:" + port.ToString() + "/");
+            _listener.Start();
 
-            lock (this)
+            Console.WriteLine($"Image Server started on " + _listener.Prefixes.First());
+
+            ThreadPool.QueueUserWorkItem(o =>
             {
-                _Thread = new Thread(new ParameterizedThreadStart(ServerThread));
-                _Thread.IsBackground = true;
-                _Thread.Start(port);
-            }
+                try
+                {
+                    while (_listener.IsListening)
+                    {
+                        ThreadPool.QueueUserWorkItem(c =>
+                        {
+                            var ctx = c as HttpListenerContext;
 
+                            try
+                            {
+                                // Writes the response header to the client.
+                                MjpegWriter wr = new MjpegWriter(ctx, "--boundary");
+                                wr.WriteHeader();
+
+                                // Streams the images from the source to the client.
+                                foreach (var imgStream in Screen.Streams(this.ImagesSource))
+                                {
+                                    if (this.Interval > 0)
+                                        Thread.Sleep(this.Interval);
+
+                                    wr.Write(imgStream);
+                                }
+                            }
+                            catch (Exception e)
+                            {
+                                Console.WriteLine(e.Message);
+                            }
+                            finally
+                            {
+                                ctx.Response.OutputStream.Close();
+                            }
+                        }, _listener.GetContext());
+                    }
+                }
+                catch { } // suppress any exceptions
+            });
         }
 
         public void Stop()
@@ -105,75 +146,13 @@ namespace Streaming
             }
         }
 
-        /// <summary>
-        /// This the main thread of the server that serves all the new 
-        /// connections from clients.
-        /// </summary>
-        /// <param name="state"></param>
-        private void ServerThread(object state)
-        {
 
-            try
-            {
-                Socket Server = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-
-                Server.Bind(new IPEndPoint(IPAddress.Parse("172.16.1.26"), (int)state));
-                Server.Listen(10);
-
-                System.Diagnostics.Debug.WriteLine(string.Format("Server started on port {0}.", state));
-
-                foreach (Socket client in Server.IncommingConnectoins())
-                    ThreadPool.QueueUserWorkItem(new WaitCallback(ClientThread), client);
-
-            }
-            catch { }
-
-            this.Stop();
-        }
 
         /// <summary>
         /// Each client connection will be served by this thread.
         /// </summary>
         /// <param name="client"></param>
-        private void ClientThread(object client)
-        {
 
-            Socket socket = (Socket)client;
-
-            System.Diagnostics.Debug.WriteLine(string.Format("New client from {0}", socket.RemoteEndPoint.ToString()));
-
-            lock (_Clients)
-                _Clients.Add(socket);
-
-            try
-            {
-                using (MjpegWriter wr = new MjpegWriter(new NetworkStream(socket, true)))
-                {
-
-                    // Writes the response header to the client.
-                    wr.WriteHeader();
-
-                    // Streams the images from the source to the client.
-                    foreach (var imgStream in Screen.Streams(this.ImagesSource))
-                    {
-                        if (this.Interval > 0)
-                            Thread.Sleep(this.Interval);
-
-                        wr.Write(imgStream);
-                    }
-
-                }
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine(e.Message);
-            }
-            finally
-            {
-                lock (_Clients)
-                    _Clients.Remove(socket);
-            }
-        }
 
 
         #region IDisposable Members
@@ -226,6 +205,7 @@ namespace Streaming
 
             if (scaled)
             {
+                Console.WriteLine("Scaling images to " + width + "x" + height);
                 dstImage = new Bitmap(width, height);
                 dstGraphics = Graphics.FromImage(dstImage);
             }
