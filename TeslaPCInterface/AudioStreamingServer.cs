@@ -67,6 +67,7 @@ public class AudioCapture
         StartCapturing();
         while (true)
         {
+
             HttpListenerContext listenerContext = await listener.GetContextAsync();
 
             if (listenerContext.Request.IsWebSocketRequest)

@@ -81,7 +81,75 @@
 
     });
 
-
     //add an event listener for the 'mousemove' event
+    img.addEventListener('mousemove', function (event) {
+        // Get the click coordinates relative to the image
+        var rect = img.getBoundingClientRect();
+        var x = event.clientX - rect.left;
+        var y = event.clientY - rect.top;
+        //take into account the image size vs the actual size
+        //convert to integer
+        x = parseInt(x);
+        y = parseInt(y);
+
+        // Send these coordinates over the WebSocket connection
+        mouseSocket.send(JSON.stringify({
+            Type: 'move',
+            X: x,
+            Y: y,
+            DisplaySize: {
+                width: img.width,
+                height: img.height
+            }
+        }));
+
+    });
+    //Add event for mouse down
+    img.addEventListener('mousedown', function (event) {
+        // Get the click coordinates relative to the image
+        var rect = img.getBoundingClientRect();
+        var x = event.clientX - rect.left;
+        var y = event.clientY - rect.top;
+        //take into account the image size vs the actual size
+        //convert to integer
+        x = parseInt(x);
+        y = parseInt(y);
+
+        // Send these coordinates over the WebSocket connection
+        mouseSocket.send(JSON.stringify({
+            Type: 'down',
+            X: x,
+            Y: y,
+            DisplaySize: {
+                width: img.width,
+                height: img.height
+            }
+        }));
+
+    });
+    //Add event for mouse up
+    img.addEventListener('mouseup', function (event) {
+        // Get the click coordinates relative to the image
+        var rect = img.getBoundingClientRect();
+        var x = event.clientX - rect.left;
+        var y = event.clientY - rect.top;
+        //take into account the image size vs the actual size
+        //convert to integer
+        x = parseInt(x);
+        y = parseInt(y);
+
+        // Send these coordinates over the WebSocket connection
+        mouseSocket.send(JSON.stringify({
+            Type: 'up',
+            X: x,
+            Y: y,
+            DisplaySize: {
+                width: img.width,
+                height: img.height
+            }
+        }));
+
+    });
+
 
 </script>

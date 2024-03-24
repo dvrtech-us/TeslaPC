@@ -1,7 +1,7 @@
 ﻿
 using System.Net;
 using System.Net.Sockets;
-
+using System.Runtime.InteropServices;
 
 namespace Streaming
 {
@@ -14,7 +14,7 @@ namespace Streaming
     {
 
         private List<Socket> _Clients;
-        private Thread _Thread;
+        private Thread? _Thread;
 
 
 
@@ -26,11 +26,12 @@ namespace Streaming
 
             _Clients = new List<Socket>();
             _Thread = null;
+           
 
             this.ImagesSource = Screen.Snapshots(width, height, true);
             this.Interval = 50;
             //set interval to 24 frames per second
-            this.Interval = 1000 / 24;
+            this.Interval = 1000 / 30;
 
         }
 
@@ -201,7 +202,9 @@ namespace Streaming
         /// <returns></returns>
         public static IEnumerable<Image> Snapshots(int width, int height, bool showCursor)
         {
+            SetDpiAwareness();
             Size size = new Size(System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width, System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
+
 
             Bitmap srcImage = new Bitmap(size.Width, size.Height);
             Graphics srcGraphics = Graphics.FromImage(srcImage);
@@ -214,6 +217,7 @@ namespace Streaming
             if (scaled)
             {
                 Console.WriteLine("Scaling images to " + width + "x" + height);
+                //resize the image to the specified width and height
                 dstImage = new Bitmap(width, height);
                 dstGraphics = Graphics.FromImage(dstImage);
             }
@@ -226,8 +230,8 @@ namespace Streaming
             {
                 srcGraphics.CopyFromScreen(0, 0, 0, 0, size);
 
-                if (showCursor)
-                    Cursors.Default.Draw(srcGraphics, new Rectangle(Cursor.Position, curSize));
+                //if (showCursor)
+                  //  Cursors.Default.Draw(srcGraphics, new Rectangle(Cursor.Position, curSize));
 
                 if (scaled)
                     dstGraphics.DrawImage(srcImage, dst, src, GraphicsUnit.Pixel);
@@ -237,6 +241,29 @@ namespace Streaming
             }
 
 
+        }
+        private enum ProcessDPIAwareness
+        {
+            ProcessDPIUnaware = 0,
+            ProcessSystemDPIAware = 1,
+            ProcessPerMonitorDPIAware = 2
+        }
+
+        [DllImport("shcore.dll")]
+        private static extern int SetProcessDpiAwareness(ProcessDPIAwareness value);
+
+        private static void SetDpiAwareness()
+        {
+            try
+            {
+                if (Environment.OSVersion.Version.Major >= 6)
+                {
+                    SetProcessDpiAwareness(ProcessDPIAwareness.ProcessPerMonitorDPIAware);
+                }
+            }
+            catch (EntryPointNotFoundException)//this exception occures if OS does not implement this API, just ignore it.
+            {
+            }
         }
 
         internal static IEnumerable<MemoryStream> Streams(this IEnumerable<Image> source)
