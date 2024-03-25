@@ -3,6 +3,7 @@ using System.Net.WebSockets;
 using System.Net;
 using System.Text.Json;
 using System.Text;
+using System;
 
 public class WebServer
 {
@@ -12,10 +13,11 @@ public class WebServer
     //serve the html file
 
 
-    public async Task StartWebServerAsync()
+    public async Task StartWebServerAsync(int port, int sslPort)
     {
 
-        _Listener.Prefixes.Add("http://*:8080/");
+        _Listener.Prefixes.Add("http://*:"+port+"/");
+        _Listener.Prefixes.Add("https://*:" + sslPort + "/");
         Console.WriteLine("Listening for WebSocket connections on: ");
         foreach (var prefix in _Listener.Prefixes)
         {
@@ -26,6 +28,10 @@ public class WebServer
 
         while (!_cancellationTokenSource.IsCancellationRequested)
         {
+            try
+            {
+
+       
             var context = await _Listener.GetContextAsync();
             _ = Task.Run(async () =>
             {
@@ -39,6 +45,11 @@ public class WebServer
                     await HandleHttpAsync(context);
                 }
             });
+            }
+            catch (HttpListenerException e)
+            {
+                Console.WriteLine("StartWebServer Async While: " + e.Message);
+            }
         }
 
         //restart the server
@@ -49,7 +60,7 @@ public class WebServer
         }
         catch { }
 
-        StartWebServerAsync();
+        _ = StartWebServerAsync(port, sslPort);
     }
 
     private Task HandleHttpAsync(HttpListenerContext context)
@@ -125,7 +136,7 @@ public class WebServer
     
             //replace all instances of the string "localhost:8081" with the actual IP address of the server
 
-            responseString = responseString.Replace("//LOCALHOST", "//" + getRequestHost(request));
+           
           
 
         }
@@ -144,6 +155,20 @@ public class WebServer
         output.Close();
         response.Close();
         return Task.CompletedTask;
+    }
+
+    private string handleHTMLReplacements(string html, HttpListenerRequest request)
+    {
+        html = html.Replace("//LOCALHOST", "//" + getRequestHost(request));
+        //check if the request is on port 8443
+
+        if (request.Url.Port == 8443)
+        {
+            html = html.Replace(":8080", ":8443");
+            html = html.Replace(":8081", ":8444");
+            html = html.Replace(":8082", ":8445");
+        }
+        return html;
     }
 
     private string getClientIp(HttpListenerRequest request)

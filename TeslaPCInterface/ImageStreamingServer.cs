@@ -26,12 +26,11 @@ namespace Streaming
 
             _Clients = new List<Socket>();
             _Thread = null;
-           
+
 
             this.ImagesSource = Screen.Snapshots(width, height, true);
             this.Interval = 50;
-            //set interval to 24 frames per second
-            this.Interval = 1000 / 30;
+
 
         }
 
@@ -66,12 +65,12 @@ namespace Streaming
         /// Starts the server to accepts any new connections on the specified port.
         /// </summary>
         /// <param name="port"></param>
-        public void Start(int port)
+        public void Start(int port, int sslPort)
         {
             _listener = new HttpListener();
             _listener.Prefixes.Add("http://*:" + port.ToString() + "/");
 
-            _listener.Prefixes.Add("https://*:" + (port + 10).ToString() + "/");
+            _listener.Prefixes.Add("https://*:" + sslPort.ToString() + "/");
 
             Console.WriteLine($"Image Server started on: ");
             foreach (var prefix in _listener.Prefixes)
@@ -211,7 +210,7 @@ namespace Streaming
 
             bool scaled = (width != size.Width || height != size.Height);
 
-            Bitmap dstImage = srcImage;
+            var dstImage = srcImage;
             Graphics dstGraphics = srcGraphics;
 
             if (scaled)
@@ -231,7 +230,7 @@ namespace Streaming
                 srcGraphics.CopyFromScreen(0, 0, 0, 0, size);
 
                 //if (showCursor)
-                  //  Cursors.Default.Draw(srcGraphics, new Rectangle(Cursor.Position, curSize));
+                //  Cursors.Default.Draw(srcGraphics, new Rectangle(Cursor.Position, curSize));
 
                 if (scaled)
                     dstGraphics.DrawImage(srcImage, dst, src, GraphicsUnit.Pixel);
@@ -268,7 +267,7 @@ namespace Streaming
 
         internal static IEnumerable<MemoryStream> Streams(this IEnumerable<Image> source)
         {
-            MemoryStream ms = new MemoryStream();
+            var ms = new MemoryStream();
 
             foreach (var img in source)
             {

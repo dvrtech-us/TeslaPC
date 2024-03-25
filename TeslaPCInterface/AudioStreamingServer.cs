@@ -52,10 +52,11 @@ public class AudioCapture
     /// Starts the server to accepts any new connections on the specified port.
     /// </summary>
     /// <param name="port"></param>
-    public async Task Start(int port)
+    public async Task Start(int port, int sslPort)
     {
         HttpListener listener = new HttpListener();
         listener.Prefixes.Add($"http://*:{port}/");
+        listener.Prefixes.Add("https://*:" +  sslPort + "/");
 
         listener.Start();
 

@@ -65,7 +65,7 @@ namespace Streaming
 
         private static MemoryStream BytesOf(Image image)
         {
-            MemoryStream ms = new MemoryStream();
+            var ms = new MemoryStream();
             image.Save(ms, System.Drawing.Imaging.ImageFormat.Jpeg);
             return ms;
         }

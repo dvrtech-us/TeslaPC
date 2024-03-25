@@ -15,13 +15,14 @@ namespace PrimaryProcess
     {
         static async Task Main(string[] args)
         {
-            _ = StartMJPEGStream();
+       
             var webServer = new WebServer();
 
             var audioCapture = new AudioCapture();
 
-            _ = webServer.StartWebServerAsync();
-            _ = audioCapture.Start(8082);
+            _ = webServer.StartWebServerAsync(8080,8443);
+            _ = StartMJPEGStream(8081, 8444);
+            _ = audioCapture.Start(8082, 8445);
 
 
 
@@ -35,11 +36,11 @@ namespace PrimaryProcess
             await webServer.StopAsync();
         }
 
-        public static async Task StartMJPEGStream()
+        public static async Task StartMJPEGStream(int PortNumber,int SSLPortNumber)
         {
-            int PortNumber = 8081;
+       
             ImageStreamingServer server = new ImageStreamingServer(1280, 720);
-            server.Start(PortNumber);
+            server.Start(PortNumber,SSLPortNumber);
     
            
         }
