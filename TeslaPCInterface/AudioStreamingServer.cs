@@ -8,11 +8,17 @@ using System.Text;
 public class AudioCapture
 {
     private WaveInEvent waveSource = null;
+    private readonly CancellationTokenSource _cancellationTokenSource = new CancellationTokenSource();
 
+    /// <summary>
+    /// Starts capturing the audio from the default audio input device.
+    /// </summary>
     private void StartCapturing()
     {
-        waveSource = new WaveInEvent();
-        waveSource.WaveFormat = new WaveFormat(44100, 2); // 44.1kHz mono PCM
+        waveSource = new WaveInEvent
+        {
+            WaveFormat = new WaveFormat(44100, 2) // 44.1kHz mono PCM
+        };
 
         waveSource.DataAvailable += waveSource_DataAvailable;
         waveSource.RecordingStopped += waveSource_RecordingStopped;
@@ -20,7 +26,15 @@ public class AudioCapture
 
         waveSource.StartRecording();
     }
+    /// <summary>
+    /// A queue that holds the audio data that will be sent to the client.
+    /// </summary>
     public ConcurrentQueue<byte[]> _audioDataQueue = new ConcurrentQueue<byte[]>();
+    /// <summary>
+    /// This event is called when the audio data is available.
+    /// </summary>
+    /// <param name="sender"></param>
+    /// <param name="e"></param>
     private void waveSource_DataAvailable(object sender, WaveInEventArgs e)
     {
         try
@@ -56,7 +70,7 @@ public class AudioCapture
     {
         HttpListener listener = new HttpListener();
         listener.Prefixes.Add($"http://*:{port}/");
-        listener.Prefixes.Add("https://*:" +  sslPort + "/");
+        listener.Prefixes.Add("https://*:" + sslPort + "/");
 
         listener.Start();
 
@@ -66,7 +80,7 @@ public class AudioCapture
             Console.WriteLine("\t" + prefix);
         }
         StartCapturing();
-        while (true)
+        while (!_cancellationTokenSource.IsCancellationRequested)
         {
 
             HttpListenerContext listenerContext = await listener.GetContextAsync();
@@ -103,25 +117,5 @@ public class AudioCapture
             }
         }
     }
-    public byte[] GenerateHeader(int sampleRate, int bitsPerSample, int channels, int samples)
-    {
-        int dataSize = 10240000; // Some very big number here
-        List<byte> header = new List<byte>();
 
-        header.AddRange(Encoding.ASCII.GetBytes("RIFF"));
-        header.AddRange(BitConverter.GetBytes(dataSize + 36));
-        header.AddRange(Encoding.ASCII.GetBytes("WAVE"));
-        header.AddRange(Encoding.ASCII.GetBytes("fmt "));
-        header.AddRange(BitConverter.GetBytes(16));
-        header.AddRange(BitConverter.GetBytes((short)1));
-        header.AddRange(BitConverter.GetBytes((short)channels));
-        header.AddRange(BitConverter.GetBytes(sampleRate));
-        header.AddRange(BitConverter.GetBytes(sampleRate * channels * bitsPerSample / 8));
-        header.AddRange(BitConverter.GetBytes((short)(channels * bitsPerSample / 8)));
-        header.AddRange(BitConverter.GetBytes((short)bitsPerSample));
-        header.AddRange(Encoding.ASCII.GetBytes("data"));
-        header.AddRange(BitConverter.GetBytes(dataSize));
-
-        return header.ToArray();
-    }
 }

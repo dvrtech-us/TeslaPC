@@ -18,8 +18,11 @@ namespace Streaming
 
 
 
-        // constructor that takes in the size of the screen
-
+        /// <summary>
+        /// constructor that takes in the size of the screen
+        /// </summary>
+        /// <param name="width"></param>
+        /// <param name="height"></param>
 
         public ImageStreamingServer(int width, int height)
         {
