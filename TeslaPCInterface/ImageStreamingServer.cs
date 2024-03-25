@@ -211,7 +211,7 @@ namespace Streaming
             bool scaled = (width != size.Width || height != size.Height);
 
             var dstImage = srcImage;
-            Graphics dstGraphics = srcGraphics;
+            var dstGraphics = srcGraphics;
 
             if (scaled)
             {
