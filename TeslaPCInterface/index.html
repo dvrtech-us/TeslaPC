@@ -37,6 +37,7 @@
         var audioSocket = new WebSocket('ws://LOCALHOST:8082/');
         pcmPlayerNode.connect(audioContext.destination);
         audioSocket.onmessage = function (event) {
+            console.log('received message');
             pcmPlayerNode.port.postMessage(event.data);
         };
         audioContext.resume();
@@ -83,6 +84,7 @@
 
     //add an event listener for the 'mousemove' event
     img.addEventListener('mousemove', function (event) {
+        return;
         // Get the click coordinates relative to the image
         var rect = img.getBoundingClientRect();
         var x = event.clientX - rect.left;
