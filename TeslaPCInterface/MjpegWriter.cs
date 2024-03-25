@@ -14,8 +14,9 @@ namespace Streaming
     /// </summary>
     public class MjpegWriter : IDisposable
     {
-        private HttpListenerContext _context;
-        private string _boundary;
+        private readonly HttpListenerContext _context;
+        private readonly string _boundary;
+        private bool _disposed = false;
 
         public MjpegWriter(HttpListenerContext context, string boundary)
         {
@@ -31,7 +32,7 @@ namespace Streaming
 
         public void Write(Image image)
         {
-            MemoryStream ms = BytesOf(image);
+            var ms = BytesOf(image);
             this.Write(ms);
         }
 
@@ -72,7 +73,24 @@ namespace Streaming
 
         public void Dispose()
         {
-            throw new NotImplementedException();
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_disposed)
+            {
+                if (disposing)
+                {
+                    // Dispose managed resources
+                    _context?.Response.OutputStream?.Dispose();
+                }
+
+                // Dispose unmanaged resources
+
+                _disposed = true;
+            }
         }
     }
 }
