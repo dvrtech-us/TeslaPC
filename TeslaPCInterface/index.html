@@ -52,9 +52,10 @@
 
         let audioContext = null
         let audioSocket = null;
+        var audioSource = null;
         let pcmPlayerNode = null;
 
-        async function startAudioPlayback() {
+        async function startAudioPlaybackold() {
             if (audioContext != null) {
                 return;
             }
@@ -82,6 +83,25 @@
 
 
 
+        }
+        var totalDuration = 0;
+        async function startAudioPlayback() {
+            if (audioContext == null) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                audioSource = audioContext.createBufferSource();
+                audioSocket = new WebSocket('ws://LOCALHOST:8082/');
+                audioSocket.binaryType = 'arraybuffer';
+                audioSocket.onmessage = function (event) {
+                    var audioData = new Float32Array(event.data);
+                    var buffer = audioContext.createBuffer(1, audioData.length, audioContext.sampleRate);
+                    buffer.copyToChannel(audioData, 0);
+                    var source = audioContext.createBufferSource();
+                    source.buffer = buffer;
+                    source.connect(audioContext.destination);
+                    source.start(totalDuration); // Schedule to play after previous buffer
+                    totalDuration += buffer.duration; // Update total duration
+                };
+            }
         }
 
 

@@ -1,4 +1,7 @@
-using NAudio.Wave;
+using CSCore;
+using CSCore.CoreAudioAPI;
+using CSCore.SoundIn;
+using CSCore.Codecs.WAV;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.IO;
@@ -15,19 +18,39 @@ namespace AudioStreamingServer
         /// <summary>
         /// Starts capturing the audio from the default audio input device.
         /// </summary>
-        private void StartCapturing()
+        public void StartCapture()
         {
-            capture = new WasapiLoopbackCapture()
-            {
-                WaveFormat = new WaveFormat(48000, 2) // 44.1kHz mono PCM
-            };
+            capture = new WasapiLoopbackCapture();
+            // initialize the soundIn instance
+            capture.Initialize();
 
-            capture.DataAvailable += waveSource_DataAvailable;
-            capture.RecordingStopped += waveSource_RecordingStopped;
+            // choose the correct format 
+            var format = new WaveFormat(48000, 16, 2); // 48kHz, 16bit, stereo
 
+            // create a wavewriter to write the data to
 
-            capture.StartRecording();
+            MemoryStream memoryStream = new MemoryStream();
+            WaveWriter writer = new WaveWriter(memoryStream, format);
+            // setup an eventhandler to receive the recorded data
+            capture.DataAvailable += async (s, e) =>
+  {
+      // Write the recorded audio to the MemoryStream
+      writer.Write(e.Data, e.Offset, e.ByteCount);
+
+      // Convert the MemoryStream's data to an ArraySegment<byte>
+      var buffer = new ArraySegment<byte>(memoryStream.ToArray());
+
+      // Send the data over the WebSocket
+      _audioDataQueue.Enqueue(buffer.Array);
+
+      // Clear the MemoryStream
+      memoryStream.SetLength(0);
+  };
+
+            // start capturing
+            capture.Start();
         }
+
         /// <summary>
         /// A queue that holds the audio data that will be sent to the client.
         /// </summary>
@@ -117,7 +140,7 @@ namespace AudioStreamingServer
                                 {
                                     // Copy your data into the rented array
                                     buffer.AsSpan().CopyTo(rentedBuffer);
-                                    var bu = new ArraySegment<byte>(rentedBuffer, 0, buffer.Length);
+                                    var bu = new ArraySegment<byte>(buffer, 0, buffer.Length);
                                     // Use the rented array
                                     await webSocket.SendAsync(bu, WebSocketMessageType.Binary, true, CancellationToken.None);
                                 }
