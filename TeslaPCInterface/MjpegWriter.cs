@@ -30,46 +30,32 @@ namespace Streaming
             _context.Response.StatusCode = 200;
         }
 
-        public void Write(Image image)
-        {
-            var ms = BytesOf(image);
-            this.Write(ms);
-        }
-
+    
         public void Write(MemoryStream imageStream)
         {
-            StringBuilder sb = new StringBuilder();
+            // Write boundary
+            byte[] boundaryBytes = Encoding.ASCII.GetBytes(
+            "\r\n--" + _boundary
+            + "\r\nContent-Type: image/jpeg"
+            + "\r\nContent-Length: " + imageStream.Length + "\r\n"
+            + "\r\n");
+            _context.Response.OutputStream.Write(boundaryBytes, 0, boundaryBytes.Length);
 
-            sb.AppendLine();
-            sb.AppendLine(_boundary);
-            sb.AppendLine("Content-Type: image/jpeg");
-            sb.AppendLine("Content-Length: " + imageStream.Length.ToString());
-            sb.AppendLine();
 
-            Write(sb.ToString());
+
             imageStream.WriteTo(_context.Response.OutputStream);
-            Write("\r\n");
+          
+            _context.Response.OutputStream.Write(_endOfImageBytes, 0, _endOfImageBytes.Length);
 
-            _context.Response.OutputStream.Flush();
+            _context.Response.OutputStream.FlushAsync();
         }
+      
+        private static byte[] _endOfImageBytes = Encoding.ASCII.GetBytes("\r\n");
+      
 
-        private void Write(string text)
-        {
-            byte[] data = BytesOf(text);
-            _context.Response.OutputStream.Write(data, 0, data.Length);
-        }
+       
 
-        private static byte[] BytesOf(string text)
-        {
-            return Encoding.ASCII.GetBytes(text);
-        }
 
-        private static MemoryStream BytesOf(Image image)
-        {
-            var ms = new MemoryStream();
-            image.Save(ms, System.Drawing.Imaging.ImageFormat.Jpeg);
-            return ms;
-        }
 
         public void Dispose()
         {
