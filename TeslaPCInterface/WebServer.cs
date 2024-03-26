@@ -136,7 +136,7 @@ public class WebServer
 
             //replace all instances of the string "localhost:8081" with the actual IP address of the server
 
-
+            responseString = handleHTMLReplacements(responseString, request);
 
 
         }
@@ -167,6 +167,8 @@ public class WebServer
             html = html.Replace(":8080", ":8443");
             html = html.Replace(":8081", ":8444");
             html = html.Replace(":8082", ":8445");
+            html = html.Replace("ws://", "wss://");
+            html = html.Replace("http://", "https://");
         }
         return html;
     }

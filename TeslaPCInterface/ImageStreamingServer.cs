@@ -12,9 +12,6 @@ namespace Streaming
     /// </summary>
     public class ImageStreamingServer : IDisposable
     {
-
-
-
         private readonly CancellationTokenSource _cancellationTokenSource = new();
         private bool _disposed = false;
 

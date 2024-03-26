@@ -10,34 +10,38 @@
             background-color: #000000;
         }
 
-       
-    img {
-        max-width: 100%;
-        -webkit-user-drag: none;
-        -khtml-user-drag: none;
-        -moz-user-drag: none;
-        -o-user-drag: none;
-        user-drag: none;
-    }
-    .button {
-        background-color: #4CAF50; /* Green */
-        border: none;
-        color: white;
-        padding: 15px 32px;
-        text-align: center;
-        text-decoration: none;
-        display: inline-block;
-        font-size: 16px;
-        margin: 4px 2px;
-        cursor: pointer;
-    }
-</style>
+
+        img {
+            max-width: 100%;
+            -webkit-user-drag: none;
+            -khtml-user-drag: none;
+            -moz-user-drag: none;
+            -o-user-drag: none;
+            user-drag: none;
+        }
+
+        .button {
+            background-color: #4CAF50;
+            /* Green */
+            border: none;
+            color: white;
+            padding: 15px 32px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 4px 2px;
+            cursor: pointer;
+        }
+    </style>
 </head>
+
 <body>
 
     <img title="playback" style="width: 100%" src="http://LOCALHOST:8081" />
     <br />
-    <div style="margin: 10px;"> <button onclick="startAudioPlayback()" id="startPlayback" class="button"> Start playback</button> </div>
+    <div style="margin: 10px;"> <button onclick="startAudioPlayback()" id="startPlayback" class="button"> Start
+            playback</button> </div>
 
     <!-- Include the WebSocket JavaScript library -->
 
@@ -56,12 +60,12 @@
             }
             console.log('Before AudioContext start');
 
-            audioContext = new AudioContext({ sampleRate: 48000, channels: 2, latencyHint: 'interactive' });
+            audioContext = new AudioContext({ sampleRate: 48000, channels: 1, latencyHint: 'interactive' });
             console.log('After AudioContext start');
 
             await audioContext.audioWorklet.addModule('PCMPlayerProcessor.js');
             console.log("starting audioContext");
-            var pcmPlayerNode = new AudioWorkletNode(audioContext, 'pcm-player-processor');
+            var pcmPlayerNode = new AudioWorkletNode(audioContext, 'pcm-player-processor', { outputChannelCount: [1] });
             var audioSocket = new WebSocket('ws://LOCALHOST:8082/');
             audioSocket.binaryType = 'arraybuffer'
             pcmPlayerNode.connect(audioContext.destination);
@@ -74,13 +78,13 @@
             console.log('after AudioContext resume');
             var startPlaybackButton = document.getElementById('startPlayback');
             //change the button text
-startPlaybackButton.innerHTML = 'Restart playback';
+            startPlaybackButton.innerHTML = 'Restart playback';
 
 
 
         }
 
-   
+
         // Create a WebSocket connection
         var mouseSocket = new WebSocket('ws://LOCALHOST:8080/ws/');
 
@@ -185,4 +189,5 @@ startPlaybackButton.innerHTML = 'Restart playback';
 
     </script>
 </body>
+
 </html>
