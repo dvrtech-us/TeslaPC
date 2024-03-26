@@ -60,12 +60,12 @@
             }
             console.log('Before AudioContext start');
 
-            audioContext = new AudioContext({ sampleRate: 48000, channels: 1, latencyHint: 'interactive' });
+            audioContext = new AudioContext({ sampleRate: 48000, channels: 2, latencyHint: 'interactive' });
             console.log('After AudioContext start');
 
             await audioContext.audioWorklet.addModule('PCMPlayerProcessor.js');
             console.log("starting audioContext");
-            var pcmPlayerNode = new AudioWorkletNode(audioContext, 'pcm-player-processor', { outputChannelCount: [1] });
+            var pcmPlayerNode = new AudioWorkletNode(audioContext, 'pcm-player-processor', { outputChannelCount: [2] });
             var audioSocket = new WebSocket('ws://LOCALHOST:8082/');
             audioSocket.binaryType = 'arraybuffer'
             pcmPlayerNode.connect(audioContext.destination);
