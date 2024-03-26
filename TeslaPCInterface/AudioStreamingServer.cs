@@ -9,7 +9,7 @@ namespace AudioStreamingServer
 {
     public class AudioCapture : IDisposable
     {
-        private WaveInEvent? waveSource = null;
+        private WasapiLoopbackCapture? capture = null;
         private readonly CancellationTokenSource _cancellationTokenSource = new();
         private bool _disposed = false;
         /// <summary>
@@ -17,16 +17,16 @@ namespace AudioStreamingServer
         /// </summary>
         private void StartCapturing()
         {
-            waveSource = new WaveInEvent
+            capture = new WasapiLoopbackCapture()
             {
-                WaveFormat = new WaveFormat(44100, 2) // 44.1kHz mono PCM
+                WaveFormat = new WaveFormat(48000, 2) // 44.1kHz mono PCM
             };
 
-            waveSource.DataAvailable += waveSource_DataAvailable;
-            waveSource.RecordingStopped += waveSource_RecordingStopped;
+            capture.DataAvailable += waveSource_DataAvailable;
+            capture.RecordingStopped += waveSource_RecordingStopped;
 
 
-            waveSource.StartRecording();
+            capture.StartRecording();
         }
         /// <summary>
         /// A queue that holds the audio data that will be sent to the client.
