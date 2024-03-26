@@ -61,10 +61,10 @@ namespace AudioStreamingServer
 
         private void waveSource_RecordingStopped(object sender, StoppedEventArgs e)
         {
-            if (waveSource != null)
+            if (capture != null)
             {
-                waveSource.Dispose();
-                waveSource = null;
+                capture.Dispose();
+                capture = null;
             }
 
         }
@@ -152,7 +152,7 @@ namespace AudioStreamingServer
                 if (disposing)
                 {
                     // Dispose managed resources
-                    waveSource?.Dispose();
+                    capture?.Dispose();
                     _cancellationTokenSource?.Dispose();
                 }
 
