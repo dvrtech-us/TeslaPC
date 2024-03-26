@@ -8,6 +8,7 @@ using System.Runtime.InteropServices;
 using Streaming;
 using System.Reflection.Metadata;
 using System.Security.Policy;
+using AudioStreamingServer;
 
 namespace PrimaryProcess
 {
@@ -15,13 +16,14 @@ namespace PrimaryProcess
     {
         static async Task Main(string[] args)
         {
-       
+
             var webServer = new WebServer();
 
             var audioCapture = new AudioCapture();
+            var imageServer = new ImageStreamingServer(1280, 720);
+            _ = imageServer.Start(8081, 8444);
+            _ = webServer.StartWebServerAsync(8080, 8443);
 
-            _ = webServer.StartWebServerAsync(8080,8443);
-            _ = StartMJPEGStream(8081, 8444);
             _ = audioCapture.Start(8082, 8445);
 
 
@@ -36,13 +38,12 @@ namespace PrimaryProcess
             await webServer.StopAsync();
         }
 
-        public static async Task StartMJPEGStream(int PortNumber,int SSLPortNumber)
+        public static async Task StartMJPEGStream(int PortNumber, int SSLPortNumber)
         {
-       
-            ImageStreamingServer server = new ImageStreamingServer(1280, 720);
-            server.Start(PortNumber,SSLPortNumber);
-    
-           
+
+
+
+
         }
 
     }
@@ -50,7 +51,7 @@ namespace PrimaryProcess
 
 
 
-  
+
 
 
 }

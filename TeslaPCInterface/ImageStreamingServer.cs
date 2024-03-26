@@ -13,9 +13,10 @@ namespace Streaming
     public class ImageStreamingServer : IDisposable
     {
 
-        private List<Socket> _Clients;
-        private Thread? _Thread;
 
+
+        private readonly CancellationTokenSource _cancellationTokenSource = new();
+        private bool _disposed = false;
 
 
         /// <summary>
@@ -27,16 +28,10 @@ namespace Streaming
         public ImageStreamingServer(int width, int height)
         {
 
-            _Clients = new List<Socket>();
-            _Thread = null;
-
-
             this.ImagesSource = Screen.Snapshots(width, height, true);
-            this.Interval = 50;
-
+            this.Interval = 25;
 
         }
-
 
         /// <summary>
         /// Gets or sets the source of images that will be streamed to the 
@@ -46,34 +41,26 @@ namespace Streaming
 
         /// <summary>
         /// Gets or sets the interval in milliseconds (or the delay time) between 
-        /// the each image and the other of the stream (the default is . 
+        /// the each image and the other of the stream (the default is 500 milliseconds).
         /// </summary>
         public int Interval { get; set; }
 
         /// <summary>
-        /// Gets a collection of client sockets.
+        /// The listener that listens for any new connections.
         /// </summary>
-        public IEnumerable<Socket> Clients { get { return _Clients; } }
+        private HttpListener? _listener;
 
-        /// <summary>
-        /// Returns the status of the server. True means the server is currently 
-        /// running and ready to serve any client requests.
-        /// </summary>
-        public bool IsRunning { get { return (_Thread != null && _Thread.IsAlive); } }
-        private HttpListener _listener;
-
-        private List<HttpListenerContext> _clients = new List<HttpListenerContext>();
 
         /// <summary>
         /// Starts the server to accepts any new connections on the specified port.
         /// </summary>
         /// <param name="port"></param>
-        public void Start(int port, int sslPort)
+        public async Task Start(int port, int sslPort)
         {
             _listener = new HttpListener();
-            _listener.Prefixes.Add("http://*:" + port.ToString() + "/");
+            _listener.Prefixes.Add($"http://*:{port}/");
 
-            _listener.Prefixes.Add("https://*:" + sslPort.ToString() + "/");
+            _listener.Prefixes.Add($"https://*:{sslPort}/");
 
             Console.WriteLine($"Image Server started on: ");
             foreach (var prefix in _listener.Prefixes)
@@ -84,109 +71,108 @@ namespace Streaming
 
             _listener.Start();
 
-            ThreadPool.QueueUserWorkItem(o =>
+            _ = ThreadPool.QueueUserWorkItem(o =>
             {
                 try
                 {
-                    while (_listener.IsListening)
+                    while (_listener.IsListening && !_cancellationTokenSource.Token.IsCancellationRequested)
                     {
-                        ThreadPool.QueueUserWorkItem(c =>
+                        _ = ThreadPool.QueueUserWorkItem(c =>
                         {
                             var ctx = c as HttpListenerContext;
+                            writeJPEG(ctx);
 
-                            try
-                            {
-                                // Writes the response header to the client.
-                                MjpegWriter wr = new MjpegWriter(ctx, "--boundary");
-                                wr.WriteHeader();
-
-                                // Streams the images from the source to the client.
-                                foreach (var imgStream in Screen.Streams(this.ImagesSource))
-                                {
-                                    if (this.Interval > 0)
-                                        Thread.Sleep(this.Interval);
-
-                                    wr.Write(imgStream);
-                                }
-                            }
-                            catch (Exception e)
-                            {
-                                Console.WriteLine(e.Message);
-                            }
-                            finally
-                            {
-                                ctx.Response.OutputStream.Close();
-                            }
                         }, _listener.GetContext());
                     }
                 }
                 catch { } // suppress any exceptions
             });
         }
+        /// <summary>
+        /// Writes the images to the client as MJPEG.
+        /// </summary>
+        /// <param name="ctx"></param>
+        private void writeJPEG(HttpListenerContext ctx)
+        {
+
+            try
+            {
+                // Writes the response header to the client.
+                MjpegWriter wr = new(ctx, "--boundary");
+                wr.WriteHeader();
+
+                // Streams the images from the source to the client.
+                foreach (var imgStream in Screen.Streams(this.ImagesSource))
+                {
+                    if (this.Interval > 0)
+                        Thread.Sleep(this.Interval);
+
+                    wr.Write(imgStream);
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e.Message);
+            }
+            finally
+            {
+                ctx.Response.OutputStream.Close();
+            }
+        }
 
         public void Stop()
         {
 
-            if (this.IsRunning)
+
+            try
             {
-                try
+                _cancellationTokenSource.Cancel();
+            }
+            finally
+            {
+
+
+
+            }
+
+        }
+
+
+
+
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_disposed)
+            {
+                if (disposing)
                 {
-                    _Thread.Join();
-                    _Thread.Abort();
+                    // Dispose managed resources
+                    _cancellationTokenSource.Dispose();
+                    _listener?.Stop();
+                    _listener?.Close();
+
                 }
-                finally
-                {
 
-                    lock (_Clients)
-                    {
+                // Dispose unmanaged resources
 
-                        foreach (var s in _Clients)
-                        {
-                            try
-                            {
-                                s.Close();
-                            }
-                            catch { }
-                        }
-                        _Clients.Clear();
-
-                    }
-
-                    _Thread = null;
-                }
+                _disposed = true;
             }
         }
 
-
-
-        /// <summary>
-        /// Each client connection will be served by this thread.
-        /// </summary>
-        /// <param name="client"></param>
-
-
-
-        #region IDisposable Members
-
         public void Dispose()
         {
-            this.Stop();
+            Dispose(true);
+            GC.SuppressFinalize(this);
         }
 
-        #endregion
-    }
-
-    static class SocketExtensions
-    {
-
-        public static IEnumerable<Socket> IncommingConnectoins(this Socket server)
-        {
-            while (true)
-                yield return server.Accept();
-        }
 
     }
 
+
+    /// <summary>
+    /// Provides a way to capture the screen and stream it to the client.
+    /// </summary>
 
     static class Screen
     {
@@ -205,10 +191,10 @@ namespace Streaming
         public static IEnumerable<Image> Snapshots(int width, int height, bool showCursor)
         {
             SetDpiAwareness();
-            Size size = new Size(System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width, System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
+            Size size = new(System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width, System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
 
 
-            Bitmap srcImage = new Bitmap(size.Width, size.Height);
+            Bitmap srcImage = new(size.Width, size.Height);
             Graphics srcGraphics = Graphics.FromImage(srcImage);
 
             bool scaled = (width != size.Width || height != size.Height);
@@ -224,9 +210,9 @@ namespace Streaming
                 dstGraphics = Graphics.FromImage(dstImage);
             }
 
-            Rectangle src = new Rectangle(0, 0, size.Width, size.Height);
-            Rectangle dst = new Rectangle(0, 0, width, height);
-            Size curSize = new Size(32, 32);
+            Rectangle src = new(0, 0, size.Width, size.Height);
+            Rectangle dst = new(0, 0, width, height);
+            Size curSize = new(32, 32);
 
             while (true)
             {
@@ -284,5 +270,7 @@ namespace Streaming
 
         }
 
+
     }
+
 }
