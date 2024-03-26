@@ -9,6 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="CSCore" Version="1.2.1.2" />
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="System.Net.WebSockets" Version="4.3.0" />
   </ItemGroup>

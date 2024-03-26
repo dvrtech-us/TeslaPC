@@ -18,7 +18,7 @@ namespace AudioStreamingServer
         /// <summary>
         /// Starts capturing the audio from the default audio input device.
         /// </summary>
-        public void StartCapture()
+        public void StartCapturing()
         {
             capture = new WasapiLoopbackCapture();
             // initialize the soundIn instance
@@ -55,26 +55,7 @@ namespace AudioStreamingServer
         /// A queue that holds the audio data that will be sent to the client.
         /// </summary>
         private readonly ConcurrentQueue<byte[]> _audioDataQueue = new();
-        /// <summary>
-        /// This event is called when the audio data is available.
-        /// </summary>
-        /// <param name="sender"></param>
-        /// <param name="e"></param>
-        private void waveSource_DataAvailable(object sender, WaveInEventArgs e)
-        {
-            try
-            {
-                //put the data in a queue
-                _audioDataQueue.Enqueue(e.Buffer);
-
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("data available " + ex.Message);
-                // Handle the case where the client disconnects or an error occurs.
-
-            }
-        }
+      
 
         /// <summary>
         /// This event is called when the recording is stopped.
@@ -142,7 +123,7 @@ namespace AudioStreamingServer
                                     buffer.AsSpan().CopyTo(rentedBuffer);
                                     var bu = new ArraySegment<byte>(buffer, 0, buffer.Length);
                                     // Use the rented array
-                                    await webSocket.SendAsync(bu, WebSocketMessageType.Binary, true, CancellationToken.None);
+                                    await webSocket.SendAsync(buffer, WebSocketMessageType.Binary, true, CancellationToken.None);
                                 }
                                 finally
                                 {
