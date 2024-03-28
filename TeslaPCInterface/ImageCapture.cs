@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 static class Screen
 {
 
@@ -42,8 +44,7 @@ static class Screen
         {
             srcGraphics.CopyFromScreen(0, 0, 0, 0, size);
 
-            //if (showCursor)
-            //  Cursors.Default.Draw(srcGraphics, new Rectangle(Cursor.Position, curSize));
+
 
             if (scaled)
                 dstGraphics.DrawImage(srcImage, dst, src, GraphicsUnit.Pixel);

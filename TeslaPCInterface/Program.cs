@@ -9,7 +9,7 @@ using Streaming;
 using System.Reflection.Metadata;
 using System.Security.Policy;
 using AudioStreamingServer;
-using Screen = Streaming.Screen;
+
 
 namespace PrimaryProcess
 {
@@ -18,7 +18,7 @@ namespace PrimaryProcess
         static async Task Main(string[] args)
         {
 
-            Screen.SetDpiAwareness();
+          
             Size size = new(System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width, System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
 
             var webServer = new WebServer();
@@ -28,7 +28,7 @@ namespace PrimaryProcess
             //set resolution to the smaller of size or 1280x720
             var resolution = new Size(Math.Min(size.Width, 1280), Math.Min(size.Height, 720));
 
-            var imageServer = new ImageStreamingServer(resolution.Width, resolution.Height);
+            var imageServer = new ImageStreamingServer(resolution.Width, resolution.Height, 30);
             _ = imageServer.Start(8081, 8444);
             _ = webServer.StartWebServerAsync(8080, 8443);
 

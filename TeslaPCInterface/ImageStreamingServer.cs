@@ -1,4 +1,5 @@
 ﻿
+using System.Drawing.Imaging;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
@@ -22,11 +23,11 @@ namespace Streaming
         /// <param name="width"></param>
         /// <param name="height"></param>
 
-        public ImageStreamingServer(int width, int height)
+        public ImageStreamingServer(int width, int height, int fps)
         {
 
             this.ImagesSource = Screen.Snapshots(width, height, true);
-            this.Interval = 25;
+            this.Interval = 1000 / fps;
 
         }
 
@@ -94,17 +95,46 @@ namespace Streaming
 
             try
             {
+       
                 // Writes the response header to the client.
                 MjpegWriter wr = new(ctx, "--boundary");
                 wr.WriteHeader();
+                SetProcessDpiAwareness( ProcessDPIAwareness.ProcessPerMonitorDPIAware);
+   
+                Size size = new(System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width, System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
 
-                // Streams the images from the source to the client.
-                foreach (var imgStream in Screen.Streams(this.ImagesSource))
+
+                Bitmap srcImage = new(size.Width, size.Height);
+                Graphics srcGraphics = Graphics.FromImage(srcImage);
+
+              
+      
+
+        
+                var ms = new MemoryStream();
+                int lastStart = Environment.TickCount;
+                while (true)
                 {
-                    if (this.Interval > 0)
-                        Thread.Sleep(this.Interval);
+                    srcGraphics.CopyFromScreen(0, 0, 0, 0, size);
 
-                    wr.Write(imgStream);
+
+                    ms.SetLength(0);
+                    //set jpeg quality
+                    EncoderParameters encoderParameters = new(1);
+                    encoderParameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 60L);
+                    srcImage.Save(ms, System.Drawing.Imaging.ImageFormat.Jpeg);
+                   
+                    wr.Write(ms);
+                    if(_cancellationTokenSource.Token.IsCancellationRequested)
+                    {
+                        break;
+                    }
+                    //wait for the next frame
+                    int elapsed = Environment.TickCount - lastStart;
+                    lastStart = Environment.TickCount;
+                    if (elapsed < Interval)
+                    Thread.Sleep(Interval - elapsed );
+                   
                 }
             }
             catch (Exception e)
@@ -117,6 +147,7 @@ namespace Streaming
             }
         }
 
+      
         public void Stop()
         {
 
@@ -134,7 +165,15 @@ namespace Streaming
 
         }
 
+        private enum ProcessDPIAwareness
+        {
+            ProcessDPIUnaware = 0,
+            ProcessSystemDPIAware = 1,
+            ProcessPerMonitorDPIAware = 2
+        }
 
+        [DllImport("shcore.dll")]
+        private static extern int SetProcessDpiAwareness(ProcessDPIAwareness value);
 
 
 
