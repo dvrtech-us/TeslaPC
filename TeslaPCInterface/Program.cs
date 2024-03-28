@@ -46,13 +46,7 @@ namespace PrimaryProcess
             await webServer.StopAsync();
         }
 
-        public static async Task StartMJPEGStream(int PortNumber, int SSLPortNumber)
-        {
-
-
-
-
-        }
+       
 
     }
 
@@ -70,10 +64,14 @@ class MousePosition
     public int X { get; set; }
     public int Y { get; set; }
 
-    public DisplaySize DisplaySize { get; set; }
+    public DisplaySize? DisplaySize { get; set; }
 
     public MousePosition GetAdjusted()
     {
+        if(DisplaySize == null)
+        {
+            return this;
+        }
         var x = (int)((double)X / DisplaySize.width * System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width);
         var y = (int)((double)Y / DisplaySize.height * System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
         return new MousePosition { X = x, Y = y, Type = Type };

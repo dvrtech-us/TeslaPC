@@ -26,7 +26,7 @@ namespace Streaming
         public ImageStreamingServer(int width, int height, int fps)
         {
 
-            this.ImagesSource = Screen.Snapshots(width, height, true);
+      
             this.Interval = 1000 / fps;
 
         }
@@ -77,8 +77,8 @@ namespace Streaming
                     {
                         _ = ThreadPool.QueueUserWorkItem(c =>
                         {
-                            var ctx = c as HttpListenerContext;
-                            writeJPEG(ctx);
+                         
+                            writeJPEG((HttpListenerContext)c);
 
                         }, _listener.GetContext());
                     }

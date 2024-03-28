@@ -9,7 +9,7 @@ public class WebServer
 {
     private readonly HttpListener _Listener = new HttpListener();
     private readonly CancellationTokenSource _cancellationTokenSource = new CancellationTokenSource();
-    private readonly bool _disposed = false;
+  
     //serve the html file
 
 
