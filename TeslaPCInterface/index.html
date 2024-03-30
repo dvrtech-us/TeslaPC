@@ -36,11 +36,16 @@
             font-size: 16px;
             margin: 4px 2px;
             cursor: pointer;
+
         }
+        ::placeholder { /* Most modern browsers support this now. */
+            color: white;
+        }
+      
 
         .textBox {
             background-color: lightgray;
-            width: 80%;
+            width: 20px;
             bottom: 0;
             padding: 10px;
             text-align: center;
@@ -61,14 +66,14 @@
 
      Include the WebSocket JavaScript library -->
 
-    <div style="margin: 10px;  width: 100%">
+    <div style="margin: 10px; width: 100%">
 
-        <input type="text" id="fakeKeyboard" class="textBox" /> <button class="button" onclick="focus()">Close</button>
+        <input type="text" id="fakeKeyboard" class="button" placeholder="Open Keyboard" /> <button class="button" onclick="focus()">Close Keyboard</button>
     </div>
 
 
     <script>
-
+     
         let audioContext = null
         let audioSocket = null;
         var audioSource = null;
@@ -218,7 +223,7 @@
         });
         //Add event for mouse up
         img.addEventListener('mouseup', function (event) {
-       
+
             // Get the click coordinates relative to the image
             var rect = img.getBoundingClientRect();
             var x = event.clientX - rect.left;
