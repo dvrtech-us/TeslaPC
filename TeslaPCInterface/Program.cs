@@ -26,14 +26,15 @@ namespace PrimaryProcess
 
 
 
-            await webServer.StopAsync();
+            
         }
-        var webServer = new WebServer();
-        var audioCapture = new AudioCapture();
+   
 
         static async Task startServers()
         {
 
+            var webServer = new WebServer();
+            var audioCapture = new AudioCapture();
             Size size = new(System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width, System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
 
 
@@ -46,12 +47,10 @@ namespace PrimaryProcess
             var imageServer = new ImageStreamingServer(resolution.Width, resolution.Height, 30);
             while (true)
             {
-                _ = imageServer.Start(8081, 8444);
-                _ = webServer.StartWebServerAsync(8080, 8443);
-                _ = audioCapture.Start(8082, 8445);
-
+               
                 // Wait for all tasks to complete
-                Task.WaitAll(imageServer.Task, webServer.Task, audioCapture.Task);
+                Task.WaitAll(imageServer.Start(8081, 8444), webServer.StartWebServerAsync(8080, 8443),
+                 audioCapture.Start(8082, 8445));
 
                 // If any of the tasks is completed, the loop will restart them
             }
