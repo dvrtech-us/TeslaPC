@@ -248,7 +248,7 @@ public class WebServer
 
 
 
-                if (message.contains("key"))
+                if (message.Contains("key"))
                 {
                     var inputData = JsonSerializer.Deserialize<KeyData>(message);
                     handleKey(inputData);
@@ -283,7 +283,7 @@ public class WebServer
         }
     }
 
-    private void handleKey(InputData inputData)
+    private void handleKey(KeyData inputData)
     {
         var key = inputData.Key;
         var keyCode = inputData.KeyCode;

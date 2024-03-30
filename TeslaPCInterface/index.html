@@ -316,7 +316,7 @@
             sendOrReopenAndSend(JSON.stringify({
                 Type: 'key',
                 Key: event.key,
-                KeyCode: event.keyCode
+                KeyCode: event.code 
             }));
             //prevent default behavior
             event.preventDefault();
