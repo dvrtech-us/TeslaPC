@@ -281,7 +281,7 @@ public class WebServer
         }
     }
 
-    private function void handleKey(InputData inputData)
+    private  void handleKey(InputData inputData)
     {
         var key = inputData.Key;
         var keyCode = inputData.KeyCode;
