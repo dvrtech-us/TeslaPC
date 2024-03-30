@@ -19,31 +19,41 @@ namespace PrimaryProcess
         {
 
 
-            Size size = new(System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width, System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
 
-            var webServer = new WebServer();
-
-            var audioCapture = new AudioCapture();
-
-            //set resolution to the smaller of size or 1280x720
-            var resolution = new Size(Math.Min(size.Width, 1280), Math.Min(size.Height, 720));
-
-            var imageServer = new ImageStreamingServer(resolution.Width, resolution.Height, 30);
-            _ = imageServer.Start(8081, 8444);
-            _ = webServer.StartWebServerAsync(8080, 8443);
-
-            _ = audioCapture.Start(8082, 8445);
-
-
-
-
-
+            _ = startServers();
             Console.WriteLine("WebSocket server started. Press any key to stop.");
             Console.ReadKey();
 
 
 
             await webServer.StopAsync();
+        }
+
+        static async Task startServers()
+        {
+
+            Size size = new(System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width, System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
+
+
+
+            //set resolution to the smaller of size or 1280x720
+            var resolution = new Size(Math.Min(size.Width, 1280), Math.Min(size.Height, 720));
+
+            var webServer = new WebServer();
+
+            var audioCapture = new AudioCapture();
+            var imageServer = new ImageStreamingServer(resolution.Width, resolution.Height, 30);
+            while (true)
+            {
+                _ = imageServer.Start(8081, 8444);
+                _ = webServer.StartWebServerAsync(8080, 8443);
+                _ = audioCapture.Start(8082, 8445);
+
+                // Wait for all tasks to complete
+                Task.WaitAll(imageServer.Task, webServer.Task, audioCapture.Task);
+
+                // If any of the tasks is completed, the loop will restart them
+            }
         }
 
 

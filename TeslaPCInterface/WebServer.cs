@@ -295,6 +295,21 @@ public class WebServer
         var keyCode = inputData.KeyCode;
 
         //send the key
+        if (key == "Backspace")
+        {
+            key = "{BACKSPACE}";
+
+        }
+        else if (key == "Enter")
+        {
+            key = "{ENTER}";
+        }
+        else if (key == "Tab")
+        {
+            key = "{TAB}";
+        }
+
+
         SendKeys.SendWait(key);
 
 
