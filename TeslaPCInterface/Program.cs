@@ -62,9 +62,9 @@ class InputData
     //{"Type":"click","X":820,"Y":45,"DisplaySize":{"width":1280,"height":720}}
     public string Type { get; set; }
 
-    public string key { get; set; }
+    public string Key { get; set; }
 
-    public string keyCode { get; set; }
+    public string KeyCode { get; set; }
     public int X { get; set; }
     public int Y { get; set; }
 
