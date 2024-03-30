@@ -295,7 +295,7 @@ public class WebServer
         var keyCode = inputData.KeyCode;
 
         //send the key
-        SendKeys.Send(key);
+        SendKeys.SendWait(key);
 
 
 
@@ -310,4 +310,6 @@ public class WebServer
         _Listener.Stop();
 
     }
+
+
 }
