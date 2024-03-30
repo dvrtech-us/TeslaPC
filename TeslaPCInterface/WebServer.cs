@@ -245,15 +245,17 @@ public class WebServer
 
                 //decode the message
                 var message = Encoding.UTF8.GetString(buffer, 0, receiveResult.Count);
-                var inputData = JsonSerializer.Deserialize<InputData>(message);
 
-                if (inputData.Type == "key")
+
+
+                if (message.contains("key"))
                 {
-
+                    var inputData = JsonSerializer.Deserialize<KeyData>(message);
                     handleKey(inputData);
                 }
                 else
                 {
+                    var inputData = JsonSerializer.Deserialize<InputData>(message);
                     Console.WriteLine($"Mouse position: {inputData.X}, {inputData.Y}");
                     //move the mouse
                     inputData = inputData.GetAdjusted();
@@ -281,7 +283,7 @@ public class WebServer
         }
     }
 
-    private  void handleKey(InputData inputData)
+    private void handleKey(InputData inputData)
     {
         var key = inputData.Key;
         var keyCode = inputData.KeyCode;
