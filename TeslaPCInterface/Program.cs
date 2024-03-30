@@ -28,6 +28,8 @@ namespace PrimaryProcess
 
             await webServer.StopAsync();
         }
+        var webServer = new WebServer();
+        var audioCapture = new AudioCapture();
 
         static async Task startServers()
         {
@@ -39,9 +41,8 @@ namespace PrimaryProcess
             //set resolution to the smaller of size or 1280x720
             var resolution = new Size(Math.Min(size.Width, 1280), Math.Min(size.Height, 720));
 
-            var webServer = new WebServer();
 
-            var audioCapture = new AudioCapture();
+
             var imageServer = new ImageStreamingServer(resolution.Width, resolution.Height, 30);
             while (true)
             {
