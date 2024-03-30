@@ -281,7 +281,7 @@ index.html:137 {"Type":"key","Key":"A","Code":"KeyA"}*/
                             SendKeys.SendWait("+");
                         }
                     }
-                    elseif(inputData.key == "Control")
+                    else if (inputData.key == "Control")
                     {
                         if (inputData.keyCode == "ControlLeft")
                         {
@@ -292,37 +292,38 @@ index.html:137 {"Type":"key","Key":"A","Code":"KeyA"}*/
                             SendKeys.SendWait("^");
                         }
                     }
-                        else
+                    else
                     {
 
                         //handle escaping the keys that are not supported by sendkeys
                         if (inputData.key == "Escape")
                         {
-                            SendKeys.SendKeys("{ESC}");
+                            SendKeys.Send("{ESC}");
                         }
 
-                        elseif(inputData.key == "Enter")
+                        else if (inputData.key == "Enter")
                         {
-                            SendKeys.SendKeys("{ENTER}");
+                            SendKeys.Send("{ENTER}");
                         }
-                        elseif(inputData.key == "Backspace")
+                        else if (inputData.key == "Backspace")
                         {
-                            SendKeys.SendKeys("{BACKSPACE}");
+                            SendKeys.Send("{BACKSPACE}");
                         }
-                        elseif(inputData.key == "Tab")
+                        else if (inputData.key == "Tab")
                         {
-                            SendKeys.SendKeys("{TAB}");
+                            SendKeys.Send("{TAB}");
                         }
-                        elseif(inputData.key == "CapsLock")
+                        else if (inputData.key == "CapsLock")
                         {
-                            SendKeys.SendKeys("{CAPSLOCK}");
+                            SendKeys.Send("{CAPSLOCK}");
                         }
-                        elseif(inputData.key == "Space")
+                        else if (inputData.key == "Space")
                         {
-                            SendKeys.SendKeys(" ");
-                        }else
+                            SendKeys.Send(" ");
+                        }
+                        else
                         {
-                            SendKeys.SendKeys(inputData.key);
+                            SendKeys.Send(inputData.key);
                         }
 
 
@@ -330,10 +331,11 @@ index.html:137 {"Type":"key","Key":"A","Code":"KeyA"}*/
 
 
                     }
-
-
-
                 }
+            }
+
+
+
             catch (WebSocketException e)
             {
                 Console.WriteLine($"WebSocket error: {e.Message}");
