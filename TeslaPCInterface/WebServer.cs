@@ -283,56 +283,59 @@ public class WebServer
 
     private function void handleKey(InputData inputData)
     {
-        if (inputData.key == "Shift")
+        var key = inputData.Key;
+        var keyCode = inputData.KeyCode;
+
+        if (key == "Shift")
         {
-            if (inputData.keyCode == "ShiftLeft")
+            if (keyCode == "ShiftLeft")
             {
                 SendKeys.SendWait("+");
             }
-            if (inputData.keyCode == "ShiftRight")
+            if (keyCode == "ShiftRight")
             {
                 SendKeys.SendWait("+");
             }
         }
-        else if (inputData.key == "Control")
+        else if (key == "Control")
         {
-            if (inputData.keyCode == "ControlLeft")
+            if (keyCode == "ControlLeft")
             {
                 SendKeys.SendWait("^");
             }
-            if (inputData.keyCode == "ControlRight")
+            if (keyCode == "ControlRight")
             {
                 SendKeys.SendWait("^");
             }
         }
-        else if (inputData.key == "Escape")
+        else if (key == "Escape")
         {
             SendKeys.Send("{ESC}");
         }
 
-        else if (inputData.key == "Enter")
+        else if (key == "Enter")
         {
             SendKeys.Send("{ENTER}");
         }
-        else if (inputData.key == "Backspace")
+        else if (key == "Backspace")
         {
             SendKeys.Send("{BACKSPACE}");
         }
-        else if (inputData.key == "Tab")
+        else if (key == "Tab")
         {
             SendKeys.Send("{TAB}");
         }
-        else if (inputData.key == "CapsLock")
+        else if (key == "CapsLock")
         {
             SendKeys.Send("{CAPSLOCK}");
         }
-        else if (inputData.key == "Space")
+        else if (key == "Space")
         {
             SendKeys.Send(" ");
         }
         else
         {
-            SendKeys.Send(inputData.key);
+            SendKeys.Send(key);
         }
     }
 
