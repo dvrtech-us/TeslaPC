@@ -246,31 +246,36 @@ public class WebServer
                 //decode the message
                 var message = Encoding.UTF8.GetString(buffer, 0, receiveResult.Count);
 
-
-
-                if (message.Contains("key"))
+                try
                 {
-                    var inputData = JsonSerializer.Deserialize<KeyData>(message);
-                    handleKey(inputData);
-                }
-                else
+
+                    if (message.Contains("key"))
+                    {
+                        var inputData = JsonSerializer.Deserialize<KeyData>(message);
+                        handleKey(inputData);
+                    }
+                    else
+                    {
+                        var inputData = JsonSerializer.Deserialize<InputData>(message);
+                        Console.WriteLine($"Mouse position: {inputData.X}, {inputData.Y}");
+                        //move the mouse
+                        inputData = inputData.GetAdjusted();
+                        Console.WriteLine($"Adjusted Mouse position: {inputData.X}, {inputData.Y}");
+
+                        Win32.SetCursorPos(inputData.X, inputData.Y);
+                        if (inputData.Type == "down")
+                        {
+                            Win32.mouse_event(Win32.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+                        }
+
+                        if (inputData.Type == "up")
+                        {
+                            Win32.mouse_event(Win32.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+                        }
+                    }
+                catch (Exception e)
                 {
-                    var inputData = JsonSerializer.Deserialize<InputData>(message);
-                    Console.WriteLine($"Mouse position: {inputData.X}, {inputData.Y}");
-                    //move the mouse
-                    inputData = inputData.GetAdjusted();
-                    Console.WriteLine($"Adjusted Mouse position: {inputData.X}, {inputData.Y}");
-
-                    Win32.SetCursorPos(inputData.X, inputData.Y);
-                    if (inputData.Type == "down")
-                    {
-                        Win32.mouse_event(Win32.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
-                    }
-
-                    if (inputData.Type == "up")
-                    {
-                        Win32.mouse_event(Win32.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
-                    }
+                    Console.WriteLine("Error: " + e.Message);
                 }
             }
 
