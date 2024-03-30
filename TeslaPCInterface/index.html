@@ -61,7 +61,7 @@
 
      Include the WebSocket JavaScript library -->
 
-    <div style="margin: 10px;  position: fixed;bottom: 0;width: 100%">
+    <div style="margin: 10px;  width: 100%">
 
         <input type="text" id="fakeKeyboard" class="textBox" /> <button class="button" onclick="focus()">Close</button>
     </div>
@@ -194,6 +194,7 @@
         });
         //Add event for mouse down
         img.addEventListener('mousedown', function (event) {
+            return;
             // Get the click coordinates relative to the image
             var rect = img.getBoundingClientRect();
             var x = event.clientX - rect.left;
@@ -217,6 +218,7 @@
         });
         //Add event for mouse up
         img.addEventListener('mouseup', function (event) {
+       
             // Get the click coordinates relative to the image
             var rect = img.getBoundingClientRect();
             var x = event.clientX - rect.left;
@@ -310,13 +312,25 @@
         });
 
         //handle keyboard events
-        document.getElementById('fakeKeyboard').addEventListener('keydown', function (event) {
+        document.getElementById('fakeKeyboard').addEventListener('keyup', function (event) {
             // Send these coordinates over the WebSocket connection
             console.log(event);
             sendOrReopenAndSend(JSON.stringify({
                 Type: 'key',
                 Key: event.key,
-                KeyCode: event.code 
+                KeyCode: event.code
+            }));
+            //prevent default behavior
+            event.preventDefault();
+
+        });
+        document.getElementById('fakeKeyboard').addEventListener('keypress', function (event) {
+            // Send these coordinates over the WebSocket connection
+            console.log(event);
+            sendOrReopenAndSend(JSON.stringify({
+                Type: 'key',
+                Key: event.key,
+                KeyCode: event.code
             }));
             //prevent default behavior
             event.preventDefault();
