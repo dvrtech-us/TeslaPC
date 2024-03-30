@@ -273,6 +273,7 @@ public class WebServer
                             Win32.mouse_event(Win32.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
                         }
                     }
+                }
                 catch (Exception e)
                 {
                     Console.WriteLine("Error: " + e.Message);
