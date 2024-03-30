@@ -18,7 +18,7 @@ namespace PrimaryProcess
         static async Task Main(string[] args)
         {
 
-          
+
             Size size = new(System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width, System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
 
             var webServer = new WebServer();
@@ -46,7 +46,7 @@ namespace PrimaryProcess
             await webServer.StopAsync();
         }
 
-       
+
 
     }
 
@@ -57,24 +57,28 @@ namespace PrimaryProcess
 
 
 }
-class MousePosition
+class InputData
 {
     //{"Type":"click","X":820,"Y":45,"DisplaySize":{"width":1280,"height":720}}
     public string Type { get; set; }
+
+    public string key { get; set; }
+
+    public string keyCode { get; set; }
     public int X { get; set; }
     public int Y { get; set; }
 
     public DisplaySize? DisplaySize { get; set; }
 
-    public MousePosition GetAdjusted()
+    public InputData GetAdjusted()
     {
-        if(DisplaySize == null)
+        if (DisplaySize == null)
         {
             return this;
         }
         var x = (int)((double)X / DisplaySize.width * System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width);
         var y = (int)((double)Y / DisplaySize.height * System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
-        return new MousePosition { X = x, Y = y, Type = Type };
+        return new InputData { X = x, Y = y, Type = Type };
     }
 }
 class DisplaySize

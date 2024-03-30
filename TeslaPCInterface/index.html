@@ -2,6 +2,9 @@
 
 <head>
     <title>Remote Desktop</title>
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
     <style>
         body {
             margin: 0;
@@ -21,7 +24,7 @@
         }
 
         .button {
-            background-color: #4CAF50;
+            background-color: #2c4d2d;
             /* Green */
             border: none;
             color: white;
@@ -33,6 +36,18 @@
             margin: 4px 2px;
             cursor: pointer;
         }
+
+        .textBox {
+            background-color: lightgray;
+            width: 80%;
+            bottom: 0;
+            padding: 10px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+
+        }
     </style>
 </head>
 
@@ -40,12 +55,15 @@
 
     <img title="playback" style="width: 100%" src="http://LOCALHOST:8081" />
     <br />
-    <div style="margin: 10px;"> <button onclick="startAudioPlayback()" id="startPlayback" class="button"> Start
+    <!-- <div style="margin: 10px;"> <button onclick="startAudioPlayback()" id="startPlayback" class="button"> Start
             playback</button> </div>
 
-    <!-- Include the WebSocket JavaScript library -->
+     Include the WebSocket JavaScript library -->
 
+    <div style="margin: 10px;  position: fixed;bottom: 0;width: 100%">
 
+        <input type="text" id="fakeKeyboard" class="textBox" /> <button class="button" onclick="focus()">Close</button>
+    </div>
 
 
     <script>
@@ -111,6 +129,20 @@
         // Get the image element
         var img = document.querySelector('img');
 
+        function sendOrReopenAndSend(data) {
+            if (mouseSocket.readyState === WebSocket.OPEN) {
+                mouseSocket.send(data);
+            } else {
+                console.log('Reopening socket');
+                console.log(data);
+                mouseSocket = new WebSocket('ws://LOCALHOST:8080/ws/');
+                mouseSocket.onopen = function () {
+
+                    mouseSocket.send(data);
+                };
+            }
+        }
+
         // Add an event listener for the 'click' event
         img.addEventListener('click', function (event) {
             // Get the click coordinates relative to the image
@@ -123,7 +155,7 @@
             y = parseInt(y);
 
             // Send these coordinates over the WebSocket connection
-            mouseSocket.send(JSON.stringify({
+            sendOrReopenAndSend(JSON.stringify({
                 Type: 'click',
                 X: x,
                 Y: y,
@@ -148,7 +180,7 @@
             y = parseInt(y);
 
             // Send these coordinates over the WebSocket connection
-            mouseSocket.send(JSON.stringify({
+            sendOrReopenAndSend(JSON.stringify({
                 Type: 'move',
                 X: x,
                 Y: y,
@@ -171,7 +203,7 @@
             y = parseInt(y);
 
             // Send these coordinates over the WebSocket connection
-            mouseSocket.send(JSON.stringify({
+            sendOrReopenAndSend(JSON.stringify({
                 Type: 'down',
                 X: x,
                 Y: y,
@@ -194,7 +226,7 @@
             y = parseInt(y);
 
             // Send these coordinates over the WebSocket connection
-            mouseSocket.send(JSON.stringify({
+            sendOrReopenAndSend(JSON.stringify({
                 Type: 'up',
                 X: x,
                 Y: y,
@@ -205,6 +237,91 @@
             }));
 
         });
+
+        //handle touch events
+        img.addEventListener('touchstart', function (event) {
+            // Get the click coordinates relative to the image
+            var rect = img.getBoundingClientRect();
+            var x = event.touches[0].clientX - rect.left;
+            var y = event.touches[0].clientY - rect.top;
+            //take into account the image size vs the actual size
+            //convert to integer
+            x = parseInt(x);
+            y = parseInt(y);
+
+            // Send these coordinates over the WebSocket connection
+            sendOrReopenAndSend(JSON.stringify({
+                Type: 'down',
+                X: x,
+                Y: y,
+                DisplaySize: {
+                    width: img.width,
+                    height: img.height
+                }
+            }));
+
+        });
+
+        img.addEventListener('touchend', function (event) {
+            // Get the click coordinates relative to the image
+            var rect = img.getBoundingClientRect();
+            var x = event.changedTouches[0].clientX - rect.left;
+            var y = event.changedTouches[0].clientY - rect.top;
+            //take into account the image size vs the actual size
+            //convert to integer
+            x = parseInt(x);
+            y = parseInt(y);
+
+            // Send these coordinates over the WebSocket connection
+            sendOrReopenAndSend(JSON.stringify({
+                Type: 'up',
+                X: x,
+                Y: y,
+                DisplaySize: {
+                    width: img.width,
+                    height: img.height
+                }
+            }));
+
+        });
+
+        img.addEventListener('touchmove', function (event) {
+            // Get the click coordinates relative to the image
+            var rect = img.getBoundingClientRect();
+            var x = event.touches[0].clientX - rect.left;
+            var y = event.touches[0].clientY - rect.top;
+            //take into account the image size vs the actual size
+            //convert to integer
+            x = parseInt(x);
+            y = parseInt(y);
+
+            // Send these coordinates over the WebSocket connection
+            sendOrReopenAndSend(JSON.stringify({
+                Type: 'move',
+                X: x,
+                Y: y,
+                DisplaySize: {
+                    width: img.width,
+                    height: img.height
+                }
+            }));
+
+        });
+
+        //handle keyboard events
+        document.getElementById('fakeKeyboard').addEventListener('keydown', function (event) {
+            // Send these coordinates over the WebSocket connection
+            sendOrReopenAndSend(JSON.stringify({
+                Type: 'key',
+                Key: event.key,
+                Code: event.code
+            }));
+            //prevent default behavior
+            event.preventDefault();
+
+        });
+
+
 
 
     </script>

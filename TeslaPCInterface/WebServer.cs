@@ -9,7 +9,7 @@ public class WebServer
 {
     private readonly HttpListener _Listener = new HttpListener();
     private readonly CancellationTokenSource _cancellationTokenSource = new CancellationTokenSource();
-  
+
     //serve the html file
 
 
@@ -245,26 +245,95 @@ public class WebServer
                 //Received message: {"x":513,"y":369}
                 //decode the message
                 var message = Encoding.UTF8.GetString(buffer, 0, receiveResult.Count);
-                var mousePosition = JsonSerializer.Deserialize<MousePosition>(message);
-                Console.WriteLine($"Mouse position: {mousePosition.X}, {mousePosition.Y}");
+                var inputData = JsonSerializer.Deserialize<InputData>(message);
+                Console.WriteLine($"Mouse position: {inputData.X}, {inputData.Y}");
                 //move the mouse
-                mousePosition = mousePosition.GetAdjusted();
-                Console.WriteLine($"Adjusted Mouse position: {mousePosition.X}, {mousePosition.Y}");
+                inputData = inputData.GetAdjusted();
+                Console.WriteLine($"Adjusted Mouse position: {inputData.X}, {inputData.Y}");
 
-                Win32.SetCursorPos(mousePosition.X, mousePosition.Y);
-                if (mousePosition.Type == "down")
+                Win32.SetCursorPos(inputData.X, inputData.Y);
+                if (inputData.Type == "down")
                 {
                     Win32.mouse_event(Win32.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
                 }
 
-                if (mousePosition.Type == "up")
+                if (inputData.Type == "up")
                 {
                     Win32.mouse_event(Win32.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
                 }
+                if (inputData.Type == "key")
+                {
+
+                    /*{"Type":"key","Key":"Shift","Code":"ShiftLeft"}
+index.html:136 Reopening socket
+index.html:137 {"Type":"key","Key":"A","Code":"KeyA"}*/
+
+                    //use sendkeys to send the key
+                    //handle the shift key
+                    if (inputData.key == "Shift")
+                    {
+                        if (inputData.keyCode == "ShiftLeft")
+                        {
+                            SendKeys.SendWait("+");
+                        }
+                        if (inputData.keyCode == "ShiftRight")
+                        {
+                            SendKeys.SendWait("+");
+                        }
+                    }
+                    elseif(inputData.key == "Control")
+                    {
+                        if (inputData.keyCode == "ControlLeft")
+                        {
+                            SendKeys.SendWait("^");
+                        }
+                        if (inputData.keyCode == "ControlRight")
+                        {
+                            SendKeys.SendWait("^");
+                        }
+                    }
+                        else
+                    {
+
+                        //handle escaping the keys that are not supported by sendkeys
+                        if (inputData.key == "Escape")
+                        {
+                            SendKeys.SendKeys("{ESC}");
+                        }
+
+                        elseif(inputData.key == "Enter")
+                        {
+                            SendKeys.SendKeys("{ENTER}");
+                        }
+                        elseif(inputData.key == "Backspace")
+                        {
+                            SendKeys.SendKeys("{BACKSPACE}");
+                        }
+                        elseif(inputData.key == "Tab")
+                        {
+                            SendKeys.SendKeys("{TAB}");
+                        }
+                        elseif(inputData.key == "CapsLock")
+                        {
+                            SendKeys.SendKeys("{CAPSLOCK}");
+                        }
+                        elseif(inputData.key == "Space")
+                        {
+                            SendKeys.SendKeys(" ");
+                        }else
+                        {
+                            SendKeys.SendKeys(inputData.key);
+                        }
 
 
 
-            }
+
+
+                    }
+
+
+
+                }
             catch (WebSocketException e)
             {
                 Console.WriteLine($"WebSocket error: {e.Message}");
