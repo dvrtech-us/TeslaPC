@@ -293,57 +293,12 @@ public class WebServer
         var key = inputData.Key;
         var keyCode = inputData.KeyCode;
 
-        if (key == "Shift")
-        {
-            if (keyCode == "ShiftLeft")
-            {
-                SendKeys.SendWait("+");
-            }
-            if (keyCode == "ShiftRight")
-            {
-                SendKeys.SendWait("+");
-            }
-        }
-        else if (key == "Control")
-        {
-            if (keyCode == "ControlLeft")
-            {
-                SendKeys.SendWait("^");
-            }
-            if (keyCode == "ControlRight")
-            {
-                SendKeys.SendWait("^");
-            }
-        }
-        else if (key == "Escape")
-        {
-            SendKeys.Send("{ESC}");
-        }
+        //send the key
+        SendKeys.Send(key);
 
-        else if (key == "Enter")
-        {
-            SendKeys.Send("{ENTER}");
-        }
-        else if (key == "Backspace")
-        {
-            SendKeys.Send("{BACKSPACE}");
-        }
-        else if (key == "Tab")
-        {
-            SendKeys.Send("{TAB}");
-        }
-        else if (key == "CapsLock")
-        {
-            SendKeys.Send("{CAPSLOCK}");
-        }
-        else if (key == "Space")
-        {
-            SendKeys.Send(" ");
-        }
-        else
-        {
-            SendKeys.Send(key);
-        }
+
+
+
     }
 
 
