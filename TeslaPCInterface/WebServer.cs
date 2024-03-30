@@ -242,94 +242,32 @@ public class WebServer
                 }
 
                 Console.WriteLine($"Received message: {Encoding.UTF8.GetString(buffer, 0, receiveResult.Count)}");
-                //Received message: {"x":513,"y":369}
+
                 //decode the message
                 var message = Encoding.UTF8.GetString(buffer, 0, receiveResult.Count);
                 var inputData = JsonSerializer.Deserialize<InputData>(message);
-                Console.WriteLine($"Mouse position: {inputData.X}, {inputData.Y}");
-                //move the mouse
-                inputData = inputData.GetAdjusted();
-                Console.WriteLine($"Adjusted Mouse position: {inputData.X}, {inputData.Y}");
 
-                Win32.SetCursorPos(inputData.X, inputData.Y);
-                if (inputData.Type == "down")
-                {
-                    Win32.mouse_event(Win32.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
-                }
-
-                if (inputData.Type == "up")
-                {
-                    Win32.mouse_event(Win32.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
-                }
                 if (inputData.Type == "key")
                 {
 
-                    /*{"Type":"key","Key":"Shift","Code":"ShiftLeft"}
-index.html:136 Reopening socket
-index.html:137 {"Type":"key","Key":"A","Code":"KeyA"}*/
+                    handleKey(inputData);
+                }
+                else
+                {
+                    Console.WriteLine($"Mouse position: {inputData.X}, {inputData.Y}");
+                    //move the mouse
+                    inputData = inputData.GetAdjusted();
+                    Console.WriteLine($"Adjusted Mouse position: {inputData.X}, {inputData.Y}");
 
-                    //use sendkeys to send the key
-                    //handle the shift key
-                    if (inputData.key == "Shift")
+                    Win32.SetCursorPos(inputData.X, inputData.Y);
+                    if (inputData.Type == "down")
                     {
-                        if (inputData.keyCode == "ShiftLeft")
-                        {
-                            SendKeys.SendWait("+");
-                        }
-                        if (inputData.keyCode == "ShiftRight")
-                        {
-                            SendKeys.SendWait("+");
-                        }
+                        Win32.mouse_event(Win32.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
                     }
-                    else if (inputData.key == "Control")
+
+                    if (inputData.Type == "up")
                     {
-                        if (inputData.keyCode == "ControlLeft")
-                        {
-                            SendKeys.SendWait("^");
-                        }
-                        if (inputData.keyCode == "ControlRight")
-                        {
-                            SendKeys.SendWait("^");
-                        }
-                    }
-                    else
-                    {
-
-                        //handle escaping the keys that are not supported by sendkeys
-                        if (inputData.key == "Escape")
-                        {
-                            SendKeys.Send("{ESC}");
-                        }
-
-                        else if (inputData.key == "Enter")
-                        {
-                            SendKeys.Send("{ENTER}");
-                        }
-                        else if (inputData.key == "Backspace")
-                        {
-                            SendKeys.Send("{BACKSPACE}");
-                        }
-                        else if (inputData.key == "Tab")
-                        {
-                            SendKeys.Send("{TAB}");
-                        }
-                        else if (inputData.key == "CapsLock")
-                        {
-                            SendKeys.Send("{CAPSLOCK}");
-                        }
-                        else if (inputData.key == "Space")
-                        {
-                            SendKeys.Send(" ");
-                        }
-                        else
-                        {
-                            SendKeys.Send(inputData.key);
-                        }
-
-
-
-
-
+                        Win32.mouse_event(Win32.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
                     }
                 }
             }
@@ -343,7 +281,60 @@ index.html:137 {"Type":"key","Key":"A","Code":"KeyA"}*/
         }
     }
 
+    private function void handleKey(InputData inputData)
+    {
+        if (inputData.key == "Shift")
+        {
+            if (inputData.keyCode == "ShiftLeft")
+            {
+                SendKeys.SendWait("+");
+            }
+            if (inputData.keyCode == "ShiftRight")
+            {
+                SendKeys.SendWait("+");
+            }
+        }
+        else if (inputData.key == "Control")
+        {
+            if (inputData.keyCode == "ControlLeft")
+            {
+                SendKeys.SendWait("^");
+            }
+            if (inputData.keyCode == "ControlRight")
+            {
+                SendKeys.SendWait("^");
+            }
+        }
+        else if (inputData.key == "Escape")
+        {
+            SendKeys.Send("{ESC}");
+        }
 
+        else if (inputData.key == "Enter")
+        {
+            SendKeys.Send("{ENTER}");
+        }
+        else if (inputData.key == "Backspace")
+        {
+            SendKeys.Send("{BACKSPACE}");
+        }
+        else if (inputData.key == "Tab")
+        {
+            SendKeys.Send("{TAB}");
+        }
+        else if (inputData.key == "CapsLock")
+        {
+            SendKeys.Send("{CAPSLOCK}");
+        }
+        else if (inputData.key == "Space")
+        {
+            SendKeys.Send(" ");
+        }
+        else
+        {
+            SendKeys.Send(inputData.key);
+        }
+    }
 
 
 

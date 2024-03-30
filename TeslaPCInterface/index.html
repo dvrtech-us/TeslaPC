@@ -21,6 +21,7 @@
             -moz-user-drag: none;
             -o-user-drag: none;
             user-drag: none;
+            max-height: calc(100vh - 50px);
         }
 
         .button {
@@ -311,10 +312,11 @@
         //handle keyboard events
         document.getElementById('fakeKeyboard').addEventListener('keydown', function (event) {
             // Send these coordinates over the WebSocket connection
+            console.log(event);
             sendOrReopenAndSend(JSON.stringify({
                 Type: 'key',
                 Key: event.key,
-                Code: event.code
+                Code: event.keyCode
             }));
             //prevent default behavior
             event.preventDefault();
