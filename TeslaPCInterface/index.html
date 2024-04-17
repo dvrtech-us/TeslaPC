@@ -318,7 +318,7 @@
 
         //handle keyboard events
         document.getElementById('fakeKeyboard').addEventListener('keyup', function (event) {
-            // Send these coordinates over the WebSocket connection
+            // Send numeric and chars
             console.log(event);
             sendOrReopenAndSend(JSON.stringify({
                 Type: 'key',
@@ -330,8 +330,9 @@
 
         });
         document.getElementById('fakeKeyboard').addEventListener('keypress', function (event) {
-            // Send these coordinates over the WebSocket connection
+            // Send non-numeric
             console.log(event);
+
             sendOrReopenAndSend(JSON.stringify({
                 Type: 'key',
                 Key: event.key,
