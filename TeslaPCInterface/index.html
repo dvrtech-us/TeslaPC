@@ -38,10 +38,12 @@
             cursor: pointer;
 
         }
-        ::placeholder { /* Most modern browsers support this now. */
+
+        ::placeholder {
+            /* Most modern browsers support this now. */
             color: white;
         }
-      
+
 
         .textBox {
             background-color: lightgray;
@@ -68,12 +70,13 @@
 
     <div style="margin: 10px; width: 100%">
 
-        <input type="text" id="fakeKeyboard" class="button" placeholder="Open Keyboard" /> <button class="button" onclick="focus()">Close Keyboard</button>
+        <input type="text" id="fakeKeyboard" class="button" placeholder="Open Keyboard" /> <button class="button"
+            onclick="focus()">Close Keyboard</button>
     </div>
 
 
     <script>
-     
+
         let audioContext = null
         let audioSocket = null;
         var audioSource = null;
@@ -319,9 +322,10 @@
         //handle keyboard events
         document.getElementById('fakeKeyboard').addEventListener('keyup', function (event) {
             // Send numeric and chars
+            console.log('Key up event');
             console.log(event);
             sendOrReopenAndSend(JSON.stringify({
-                Type: 'key',
+                Type: 'keyup',
                 Key: event.key,
                 KeyCode: event.code
             }));
@@ -331,10 +335,11 @@
         });
         document.getElementById('fakeKeyboard').addEventListener('keypress', function (event) {
             // Send non-numeric
+            console.log('keypress');
             console.log(event);
 
             sendOrReopenAndSend(JSON.stringify({
-                Type: 'key',
+                Type: 'keypress',
                 Key: event.key,
                 KeyCode: event.code
             }));

@@ -289,10 +289,27 @@ public class WebServer
         }
     }
 
+    private KeyData lastInputData = new( );
+    private DateTime lastInputTime = DateTime.Now;
+    
     private void handleKey(KeyData inputData)
     {
         var key = inputData.Key;
         var keyCode = inputData.KeyCode;
+        var type = inputData.Type;
+
+        //if the key is the same as the last key and the time between the last key and this key is less than 100ms, ignore the key
+        if (lastInputData.Key == key && (DateTime.Now - lastInputTime).TotalMilliseconds < 100)
+        {
+            Console.WriteLine("Ignoring key: " + key);
+            return;
+        }
+        else
+        {
+            lastInputData = inputData;
+            lastInputTime = DateTime.Now;
+        }
+
 
         //send the key
         if (key == "Backspace")
@@ -308,6 +325,120 @@ public class WebServer
         {
             key = "{TAB}";
         }
+        //escape ( and )
+        else if (key == "(")
+        {
+            key = "{(}";
+        }
+        else if (key == ")")
+        {
+            key = "{)}";
+        }
+        else if (key == "{")
+        {
+            key = "{{}";
+        }
+        else if (key == "}")
+        {
+            key = "{}}";
+        }
+        else if (key == "+")
+        {
+            key = "{+}";
+        }
+        else if (key == "^")
+        {
+            key = "{^}";
+        }
+        else if (key == "%")
+        {
+            key = "{%}";
+        }
+        else if (key == "~")
+        {
+            key = "{~}";
+        }
+        else if (key == "[")
+        {
+            key = "{[}";
+        }
+        else if (key == "]")
+        {
+            key = "{]}";
+        }
+        else if (key == ":")
+        {
+            key = "{:}";
+        }
+        else if (key == "\"")
+        {
+            key = "{\"}";
+        }
+        else if (key == "'")
+        {
+            key = "{'}";
+        }
+        else if (key == "<")
+        {
+            key = "{<}";
+        }
+        else if (key == ">")
+        {
+            key = "{>}";
+        }
+        else if (key == ",")
+        {
+            key = "{,}";
+        }
+        else if (key == ".")
+        {
+            key = "{.}";
+        }
+        else if (key == "?")
+        {
+            key = "{?}";
+        }
+        else if (key == "/")
+        {
+            key = "{/}";
+        }
+        else if (key == "\\")
+        {
+            key = "{\\}";
+        }
+        else if (key == "|")
+        {
+            key = "{|}";
+        }
+        else if (key == "=")
+        {
+            key = "{=}";
+        }
+        else if (key == "-")
+        {
+            key = "{-}";
+        }
+        else if (key == "_")
+        {
+            key = "{_}";
+        }
+        else if (key == "+")
+        {
+            key = "{+}";
+        }
+        else if (key == "*")
+        {
+            key = "{*}";
+        }
+        else if (key == "&")
+        {
+            key = "{&}";
+        }
+        else if (key == "^")
+        {
+            key = "{^}";
+        }
+
 
 
         SendKeys.SendWait(key);
