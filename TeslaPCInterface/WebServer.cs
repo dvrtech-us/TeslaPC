@@ -4,6 +4,7 @@ using System.Net;
 using System.Text.Json;
 using System.Text;
 using System;
+using System.Web;
 
 public class WebServer
 {
@@ -109,6 +110,24 @@ public class WebServer
         else
         {
             PathToHtml = Path.Combine(rootPath, request.Url.LocalPath.TrimStart('/'));
+            var QueryParameters = HttpUtility.ParseQueryString(request.Url.Query);
+            string? requestFilePath = QueryParameters.Get("FILENAME");
+            if (requestFilePath == null) { }
+            else
+            {
+                //kill all running copies of the vlc
+                System.Diagnostics.Process.Start("taskkill", "/F /IM vlc.exe");
+                //start the vlc with the file
+                String path = """"-vvv "FILEPATH" :sout="#transcode{vcodec=MJPG,vb=auto,scale=Auto,width=800,height=auto,scodec=none}:duplicate{dst=http{mux=mpjpeg,dst=:8088/video.mpjpeg},dst=display}" :no-sout-all :sout-keep"""";
+                //replace the FILEPATH with the actual file path
+                path = path.Replace("FILEPATH", requestFilePath).Trim();
+                System.Threading.Thread.Sleep(2000);
+                var happened = System.Diagnostics.Process.Start("C:\\Program Files\\VideoLAN\\VLC\\vlc.exe", path);
+                Console.WriteLine("Starting VLC: " + happened);
+            }
+
+
+
         }
         //if the file does not exist, return a 404 error
         if (!File.Exists(PathToHtml))
@@ -132,7 +151,24 @@ public class WebServer
         if (response.ContentType == "text/html")
         {
 
+            if (request.Url.LocalPath == "/list.html")
+            {
+                string guts = "";
+                //get path from the query string
+                var QueryParameters = HttpUtility.ParseQueryString(request.Url.Query);
+                string? path = QueryParameters.Get("path");
+                if (path == null)
+                {
+                    guts = returnAllFilesAsHtmlLinks("E:\\");
+                }
+                else
+                {
+                    guts = returnAllFilesAsHtmlLinks(path);
+                }
 
+                responseString = responseString.Replace("{{GUTS}}", guts);
+
+            }
 
             //replace all instances of the string "localhost:8081" with the actual IP address of the server
 
@@ -194,6 +230,31 @@ public class WebServer
         host = host.Split(':')[0];
 
         return host;
+    }
+
+    private string returnAllFilesAsHtmlLinks(string path)
+    {
+        string html = @"";
+        string[] files = Directory.GetFiles(path);
+        html += "<h1>Files in " + path + " </h1>";
+        foreach (string file in files)
+        {
+            String displayName = file.Replace(path, "").Replace("\\", "").Replace(".", " ");
+            //remove the file extension
+            displayName = displayName.Substring(0, displayName.LastIndexOf(" "));
+            html += "<a href='/play.html?FILENAME=" + file + "'>" + displayName + "</a><br>";
+        }
+        html += "<h1>Folders</h1>";
+        string[] directories = Directory.GetDirectories(path);
+        foreach (string directory in directories)
+        {
+            html += "<a href='/list.html?path=" + directory + "'>" + directory + "</a><br>";
+        }
+
+        html += "<a href='/list.html'>Back</a><br>";
+
+   
+        return html;
     }
 
     private string getContentType(string path)
@@ -289,9 +350,9 @@ public class WebServer
         }
     }
 
-    private KeyData lastInputData = new( );
+    private KeyData lastInputData = new();
     private DateTime lastInputTime = DateTime.Now;
-    
+
     private void handleKey(KeyData inputData)
     {
         var key = inputData.Key;
