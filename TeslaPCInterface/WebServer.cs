@@ -118,7 +118,9 @@ public class WebServer
                 //kill all running copies of the vlc
                 System.Diagnostics.Process.Start("taskkill", "/F /IM vlc.exe");
                 //start the vlc with the file
-                String path = """"-vvv "FILEPATH" :sout="#transcode{vcodec=MJPG,vb=auto,scale=Auto,width=800,height=auto,scodec=none}:duplicate{dst=http{mux=mpjpeg,dst=:8088/video.mpjpeg},dst=display}" :no-sout-all :sout-keep"""";
+                //    String path = """"-vvv "FILEPATH" :sout="#transcode{vcodec=MJPG,vb=auto,scale=Auto,width=800,height=auto,scodec=none}:duplicate{dst=http{mux=mpjpeg,dst=:8088/video.mpjpeg},dst=display}" :no-sout-all :sout-keep"""";
+                String path = """" -vvv "FILEPATH" --fullscreen """";
+
                 //replace the FILEPATH with the actual file path
                 path = path.Replace("FILEPATH", requestFilePath).Trim();
                 System.Threading.Thread.Sleep(2000);
