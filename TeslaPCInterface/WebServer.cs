@@ -159,7 +159,7 @@ public class WebServer
                 string? path = QueryParameters.Get("path");
                 if (path == null)
                 {
-                    guts = returnAllFilesAsHtmlLinks("E:\\");
+                    guts = returnAllFilesAsHtmlLinks("C:\\video\\");
                 }
                 else
                 {
