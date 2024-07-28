@@ -4,59 +4,7 @@
     <title>Remote Desktop</title>
 
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-    <style>
-        body {
-            margin: 0;
-            padding: 0;
-            overflow: hidden;
-            background-color: #000000;
-        }
-
-
-        img {
-            max-width: 100%;
-            -webkit-user-drag: none;
-            -khtml-user-drag: none;
-            -moz-user-drag: none;
-            -o-user-drag: none;
-            user-drag: none;
-            max-height: calc(100vh - 50px);
-        }
-
-        .button {
-            background-color: #2c4d2d;
-            /* Green */
-            border: none;
-            color: white;
-            padding: 15px 32px;
-            text-align: center;
-            text-decoration: none;
-            display: inline-block;
-            font-size: 16px;
-            margin: 4px 2px;
-            cursor: pointer;
-
-        }
-
-        ::placeholder {
-            /* Most modern browsers support this now. */
-            color: white;
-        }
-
-
-        .textBox {
-            background-color: lightgray;
-            width: 20px;
-            bottom: 0;
-            padding: 10px;
-            text-align: center;
-            text-decoration: none;
-            display: inline-block;
-            font-size: 16px;
-
-        }
-    </style>
+    <link rel="stylesheet" type="text/css" href="/style.css" />
 </head>
 
 <body>
@@ -76,7 +24,7 @@
         </button>
 
 
-        <button class="button"
+        <button class="button pad"
                 onclick="window.location.assign('http://LOCALHOST:8080/list.html')">
            Play Video
         </button>

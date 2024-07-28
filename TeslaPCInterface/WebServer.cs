@@ -110,23 +110,8 @@ public class WebServer
         else
         {
             PathToHtml = Path.Combine(rootPath, request.Url.LocalPath.TrimStart('/'));
-            var QueryParameters = HttpUtility.ParseQueryString(request.Url.Query);
-            string? requestFilePath = QueryParameters.Get("FILENAME");
-            if (requestFilePath == null) { }
-            else
-            {
-                //kill all running copies of the vlc
-                System.Diagnostics.Process.Start("taskkill", "/F /IM vlc.exe");
-                //start the vlc with the file
-                //    String path = """"-vvv "FILEPATH" :sout="#transcode{vcodec=MJPG,vb=auto,scale=Auto,width=800,height=auto,scodec=none}:duplicate{dst=http{mux=mpjpeg,dst=:8088/video.mpjpeg},dst=display}" :no-sout-all :sout-keep"""";
-                String path = """" -vvv "FILEPATH" --fullscreen """";
-
-                //replace the FILEPATH with the actual file path
-                path = path.Replace("FILEPATH", requestFilePath).Trim();
-                System.Threading.Thread.Sleep(2000);
-                var happened = System.Diagnostics.Process.Start("C:\\Program Files\\VideoLAN\\VLC\\vlc.exe", path);
-                Console.WriteLine("Starting VLC: " + happened);
-            }
+     
+     
 
 
 
@@ -152,12 +137,12 @@ public class WebServer
         response.ContentType = getContentType(PathToHtml);
         if (response.ContentType == "text/html")
         {
-
+            var QueryParameters = HttpUtility.ParseQueryString(request.Url.Query);
             if (request.Url.LocalPath == "/list.html")
             {
                 string guts = "";
                 //get path from the query string
-                var QueryParameters = HttpUtility.ParseQueryString(request.Url.Query);
+      
                 string? path = QueryParameters.Get("path");
                 if (path == null)
                 {
@@ -171,6 +156,30 @@ public class WebServer
                 responseString = responseString.Replace("{{GUTS}}", guts);
 
             }
+
+            if (request.Url.LocalPath == "/play.html")
+            {
+                string? requestFilePath = QueryParameters.Get("FILENAME");
+                if (requestFilePath == null)
+                {
+                    responseString = responseString.Replace("{{VIDEO}}", "No video file specified");
+                }
+                else
+                {
+                    //kill all running copies of the vlc
+                    System.Diagnostics.Process.Start("taskkill", "/F /IM vlc.exe");
+                    //start the vlc with the file
+                    //    String path = """"-vvv "FILEPATH" :sout="#transcode{vcodec=MJPG,vb=auto,scale=Auto,width=800,height=auto,scodec=none}:duplicate{dst=http{mux=mpjpeg,dst=:8088/video.mpjpeg},dst=display}" :no-sout-all :sout-keep"""";
+                    String path = """" -vvv "FILEPATH" --fullscreen """";
+
+                    //replace the FILEPATH with the actual file path
+                    path = path.Replace("FILEPATH", requestFilePath).Trim();
+                    System.Threading.Thread.Sleep(2000);
+                    var happened = System.Diagnostics.Process.Start("C:\\Program Files\\VideoLAN\\VLC\\vlc.exe", path);
+                    Console.WriteLine("Starting VLC: " + happened);
+                    responseString = responseString.Replace("{{VIDEO}}", "Playing video " + happened);
+                }
+            }   
 
             //replace all instances of the string "localhost:8081" with the actual IP address of the server
 
@@ -244,16 +253,27 @@ public class WebServer
             String displayName = file.Replace(path, "").Replace("\\", "").Replace(".", " ");
             //remove the file extension
             displayName = displayName.Substring(0, displayName.LastIndexOf(" "));
-            html += "<a href='/play.html?FILENAME=" + file + "'>" + displayName + "</a><br>";
+            html += "<a class=\"button pad\" href='/play.html?FILENAME=" + file + "'>" + displayName + "</a><br>";
         }
         html += "<h1>Folders</h1>";
         string[] directories = Directory.GetDirectories(path);
         foreach (string directory in directories)
         {
-            html += "<a href='/list.html?path=" + directory + "'>" + directory + "</a><br>";
+            html += "<a class=\"button pad\" href='/list.html?path=" + directory + "'>" + directory + "</a><br>";
+        }
+        //detect if the path is the root path
+        if (path != @"C:\video\" && path != @"C:\video")
+        {
+            String parentPath = Path.GetDirectoryName(path);
+            html += """<a class="button pad" href="/list.html?path=""" + parentPath + @""">    Up to " + parentPath + " </a><br>";
+        }
+        else
+        {
+            html += """<a class="button pad" href="/">Back to Screen</a><br>""";
         }
 
-        html += "<a href='/list.html'>Back</a><br>";
+
+    
 
    
         return html;
