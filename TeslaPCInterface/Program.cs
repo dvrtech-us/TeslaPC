@@ -1,4 +1,4 @@
-﻿// See https://aka.ms/new-console-template for more information
+// See https://aka.ms/new-console-template for more information
 using System.Net.WebSockets;
 using System.Net;
 using System.Text;
@@ -18,40 +18,33 @@ namespace PrimaryProcess
         static async Task Main(string[] args)
         {
 
-          
+
             Size size = new(System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width, System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
-
-            var webServer = new WebServer();
-
-            var audioCapture = new AudioCapture();
 
             //set resolution to the smaller of size or 1280x720
             var resolution = new Size(Math.Min(size.Width, 1280), Math.Min(size.Height, 720));
 
             var imageServer = new ImageStreamingServer(resolution.Width, resolution.Height, 30);
-            _ = imageServer.Start(8081, 8444);
+            var audioCapture = new AudioCapture();
+            audioCapture.StartCapturing();
+
+            // Single unified server handles all routes:
+            //   /          → web UI (index.html)
+            //   /stream    → MJPEG video stream
+            //   /ws/input  → mouse/keyboard WebSocket
+            //   /ws/audio  → audio WebSocket
+            var webServer = new WebServer(imageServer, audioCapture);
             _ = webServer.StartWebServerAsync(8080, 8443);
 
-            _ = audioCapture.Start(8082, 8445);
-
-
-
-
-
-            Console.WriteLine("WebSocket server started. Press any key to stop.");
+            Console.WriteLine("Unified server started on port 8080 (HTTP) / 8443 (HTTPS). Press any key to stop.");
             Console.ReadKey();
-
-
 
             await webServer.StopAsync();
         }
 
-       
+
 
     }
-
-
-
 
 
 

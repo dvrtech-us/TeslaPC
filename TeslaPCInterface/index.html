@@ -38,7 +38,8 @@
 
 <body>
 
-    <img title="playback" style="width: 100%" src="http://LOCALHOST:8081" />
+    <!-- MJPEG stream now served from same origin at /stream -->
+    <img title="playback" style="width: 100%" src="/stream" />
     <br />
     <div style="margin: 10px;"> <button onclick="startAudioPlayback()" id="startPlayback" class="button"> Start
             playback</button> </div>
@@ -50,10 +51,18 @@
 
     <script>
 
+        // Build same-origin WebSocket URL
+        function getWsUrl(path) {
+            var protocol = (location.protocol === 'https:') ? 'wss://' : 'ws://';
+            return protocol + location.host + path;
+        }
+
         let audioContext = null;
         let audioSocket = null;
         let pcmPlayerNode = null;
         let audioFormat = null;
+        let useWorklet = true; // will be set to false if AudioWorklet fails
+        let scheduledTime = 0; // for fallback buffer scheduling
 
         async function startAudioPlayback() {
             if (audioContext != null) {
@@ -64,9 +73,11 @@
                 audioSocket = null;
                 pcmPlayerNode = null;
                 audioFormat = null;
+                useWorklet = true;
+                scheduledTime = 0;
             }
 
-            audioSocket = new WebSocket('ws://LOCALHOST:8082/');
+            audioSocket = new WebSocket(getWsUrl('/ws/audio'));
             audioSocket.binaryType = 'arraybuffer';
 
             audioSocket.onmessage = async function (event) {
@@ -81,15 +92,25 @@
                         latencyHint: 'interactive'
                     });
 
-                    await audioContext.audioWorklet.addModule('PCMPlayerProcessor.js');
-                    pcmPlayerNode = new AudioWorkletNode(audioContext, 'pcm-player-processor', {
-                        outputChannelCount: [audioFormat.channels],
-                        processorOptions: {
-                            channels: audioFormat.channels,
-                            bitsPerSample: audioFormat.bitsPerSample
-                        }
-                    });
-                    pcmPlayerNode.connect(audioContext.destination);
+                    // Try AudioWorklet first, fall back to buffer scheduling
+                    try {
+                        await audioContext.audioWorklet.addModule('PCMPlayerProcessor.js');
+                        pcmPlayerNode = new AudioWorkletNode(audioContext, 'pcm-player-processor', {
+                            outputChannelCount: [audioFormat.channels],
+                            processorOptions: {
+                                channels: audioFormat.channels,
+                                bitsPerSample: audioFormat.bitsPerSample
+                            }
+                        });
+                        pcmPlayerNode.connect(audioContext.destination);
+                        useWorklet = true;
+                        console.log('Audio: using AudioWorklet');
+                    } catch (e) {
+                        console.warn('AudioWorklet not available, using fallback:', e);
+                        useWorklet = false;
+                        scheduledTime = 0;
+                    }
+
                     await audioContext.resume();
 
                     var startPlaybackButton = document.getElementById('startPlayback');
@@ -99,8 +120,14 @@
                 }
 
                 // Subsequent messages are binary audio data
-                if (pcmPlayerNode && audioFormat) {
+                if (!audioFormat || !audioContext) return;
+
+                if (useWorklet && pcmPlayerNode) {
+                    // Primary path: AudioWorklet
                     pcmPlayerNode.port.postMessage(event.data);
+                } else {
+                    // Fallback path: decode PCM and schedule AudioBufferSourceNodes
+                    playPcmChunkFallback(event.data);
                 }
             };
 
@@ -109,27 +136,70 @@
             };
         }
 
+        /**
+         * Fallback audio playback: manually decode PCM data into AudioBuffers
+         * and schedule them for gapless playback. Works on any browser with
+         * Web Audio API (no AudioWorklet needed).
+         */
+        function playPcmChunkFallback(rawData) {
+            var arrayBuffer = rawData instanceof ArrayBuffer ? rawData : rawData.buffer;
+            var channels = audioFormat.channels;
+            var bitsPerSample = audioFormat.bitsPerSample;
 
-        // Create a WebSocket connection
-        var mouseSocket = new WebSocket('ws://LOCALHOST:8080/ws/');
+            // Decode raw PCM to Float32 samples
+            var floatSamples;
+            if (bitsPerSample === 32) {
+                floatSamples = new Float32Array(arrayBuffer);
+            } else if (bitsPerSample === 16) {
+                var int16 = new Int16Array(arrayBuffer);
+                floatSamples = new Float32Array(int16.length);
+                for (var i = 0; i < int16.length; i++) {
+                    floatSamples[i] = int16[i] / 32768.0;
+                }
+            } else {
+                floatSamples = new Float32Array(arrayBuffer);
+            }
+
+            var framesCount = Math.floor(floatSamples.length / channels);
+            if (framesCount === 0) return;
+
+            // Create an AudioBuffer and deinterleave channels
+            var audioBuffer = audioContext.createBuffer(channels, framesCount, audioFormat.sampleRate);
+            for (var ch = 0; ch < channels; ch++) {
+                var channelData = audioBuffer.getChannelData(ch);
+                for (var frame = 0; frame < framesCount; frame++) {
+                    channelData[frame] = floatSamples[frame * channels + ch];
+                }
+            }
+
+            // Schedule for gapless playback
+            var source = audioContext.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(audioContext.destination);
+
+            var currentTime = audioContext.currentTime;
+            if (scheduledTime < currentTime) {
+                // We've fallen behind — schedule slightly in the future to avoid glitches
+                scheduledTime = currentTime + 0.02;
+            }
+            source.start(scheduledTime);
+            scheduledTime += audioBuffer.duration;
+        }
+
+
+        // Input WebSocket — same origin
+        var mouseSocket = new WebSocket(getWsUrl('/ws/input'));
 
         // Get the image element
         var img = document.querySelector('img');
 
-        // Add an event listener for the 'click' event
-        img.addEventListener('click', function (event) {
-            // Get the click coordinates relative to the image
+        function sendMouseEvent(type, event) {
             var rect = img.getBoundingClientRect();
-            var x = event.clientX - rect.left;
-            var y = event.clientY - rect.top;
-            //take into account the image size vs the actual size
-            //convert to integer
-            x = parseInt(x);
-            y = parseInt(y);
+            var x = parseInt(event.clientX - rect.left);
+            var y = parseInt(event.clientY - rect.top);
 
-            // Send these coordinates over the WebSocket connection
             mouseSocket.send(JSON.stringify({
-                Type: 'click',
+                Type: type,
                 X: x,
                 Y: y,
                 DisplaySize: {
@@ -137,79 +207,12 @@
                     height: img.height
                 }
             }));
+        }
 
-        });
-
-        //add an event listener for the 'mousemove' event
-        img.addEventListener('mousemove', function (event) {
-
-            // Get the click coordinates relative to the image
-            var rect = img.getBoundingClientRect();
-            var x = event.clientX - rect.left;
-            var y = event.clientY - rect.top;
-            //take into account the image size vs the actual size
-            //convert to integer
-            x = parseInt(x);
-            y = parseInt(y);
-
-            // Send these coordinates over the WebSocket connection
-            mouseSocket.send(JSON.stringify({
-                Type: 'move',
-                X: x,
-                Y: y,
-                DisplaySize: {
-                    width: img.width,
-                    height: img.height
-                }
-            }));
-
-        });
-        //Add event for mouse down
-        img.addEventListener('mousedown', function (event) {
-            // Get the click coordinates relative to the image
-            var rect = img.getBoundingClientRect();
-            var x = event.clientX - rect.left;
-            var y = event.clientY - rect.top;
-            //take into account the image size vs the actual size
-            //convert to integer
-            x = parseInt(x);
-            y = parseInt(y);
-
-            // Send these coordinates over the WebSocket connection
-            mouseSocket.send(JSON.stringify({
-                Type: 'down',
-                X: x,
-                Y: y,
-                DisplaySize: {
-                    width: img.width,
-                    height: img.height
-                }
-            }));
-
-        });
-        //Add event for mouse up
-        img.addEventListener('mouseup', function (event) {
-            // Get the click coordinates relative to the image
-            var rect = img.getBoundingClientRect();
-            var x = event.clientX - rect.left;
-            var y = event.clientY - rect.top;
-            //take into account the image size vs the actual size
-            //convert to integer
-            x = parseInt(x);
-            y = parseInt(y);
-
-            // Send these coordinates over the WebSocket connection
-            mouseSocket.send(JSON.stringify({
-                Type: 'up',
-                X: x,
-                Y: y,
-                DisplaySize: {
-                    width: img.width,
-                    height: img.height
-                }
-            }));
-
-        });
+        img.addEventListener('click', function (event) { sendMouseEvent('click', event); });
+        img.addEventListener('mousemove', function (event) { sendMouseEvent('move', event); });
+        img.addEventListener('mousedown', function (event) { sendMouseEvent('down', event); });
+        img.addEventListener('mouseup', function (event) { sendMouseEvent('up', event); });
 
 
     </script>

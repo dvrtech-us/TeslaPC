@@ -1,4 +1,5 @@
 using Streaming;
+using AudioStreamingServer;
 using System.Net.WebSockets;
 using System.Net;
 using System.Text.Json;
@@ -9,16 +10,22 @@ public class WebServer
 {
     private readonly HttpListener _Listener = new HttpListener();
     private readonly CancellationTokenSource _cancellationTokenSource = new CancellationTokenSource();
-  
-    //serve the html file
 
+    private readonly ImageStreamingServer _imageStreamer;
+    private readonly AudioCapture _audioCapture;
+
+    public WebServer(ImageStreamingServer imageStreamer, AudioCapture audioCapture)
+    {
+        _imageStreamer = imageStreamer;
+        _audioCapture = audioCapture;
+    }
 
     public async Task StartWebServerAsync(int port, int sslPort)
     {
 
         _Listener.Prefixes.Add("http://*:" + port + "/");
         _Listener.Prefixes.Add("https://*:" + sslPort + "/");
-        Console.WriteLine("Listening for WebSocket connections on: ");
+        Console.WriteLine("Unified server listening on: ");
         foreach (var prefix in _Listener.Prefixes)
         {
             Console.WriteLine("\t" + prefix);
@@ -30,19 +37,16 @@ public class WebServer
         {
             try
             {
-
-
                 var context = await _Listener.GetContextAsync();
                 _ = Task.Run(async () =>
                 {
-                    if (context.Request.IsWebSocketRequest)
+                    try
                     {
-                        AcceptWebSocketAsync(context);
+                        await HandleRequest(context);
                     }
-                    else
+                    catch (Exception e)
                     {
-
-                        HandleHttpAsync(context);
+                        Console.WriteLine($"Request handler error: {e.Message}");
                     }
                 });
             }
@@ -63,6 +67,38 @@ public class WebServer
         _ = StartWebServerAsync(port, sslPort);
     }
 
+    /// <summary>
+    /// Routes all incoming requests by path:
+    ///   /stream       → MJPEG video stream
+    ///   /ws/audio     → Audio WebSocket
+    ///   /ws/* or WS   → Input WebSocket (mouse/keyboard)
+    ///   everything else → static file serving
+    /// </summary>
+    private async Task HandleRequest(HttpListenerContext context)
+    {
+        string path = context.Request.Url?.LocalPath ?? "/";
+
+        if (context.Request.IsWebSocketRequest)
+        {
+            if (path.StartsWith("/ws/audio", StringComparison.OrdinalIgnoreCase))
+            {
+                await _audioCapture.HandleClientAsync(context);
+            }
+            else
+            {
+                await AcceptWebSocketAsync(context);
+            }
+        }
+        else if (path.Equals("/stream", StringComparison.OrdinalIgnoreCase))
+        {
+            _imageStreamer.HandleStreamRequest(context);
+        }
+        else
+        {
+            HandleHttpAsync(context);
+        }
+    }
+
     private void HandleHttpAsync(HttpListenerContext context)
     {
         HttpListenerRequest request = context.Request;
@@ -72,16 +108,6 @@ public class WebServer
         var runningInDebugMode = false;
 
         string requestPath = request.Url.LocalPath.TrimStart('/');
-
-        if (requestPath == "stream.jpg")
-        {
-            // Writes the response header to the client.
-            MjpegWriter wr = new MjpegWriter(context, "--boundary");
-            wr.WriteHeader();
-
-
-        }
-
 
         //detect if visual studio is running in debug mode
         if (System.Diagnostics.Debugger.IsAttached)
@@ -129,23 +155,6 @@ public class WebServer
         response.StatusCode = 200;
         //serve the right content type
         response.ContentType = getContentType(PathToHtml);
-        if (response.ContentType == "text/html")
-        {
-
-
-
-            //replace all instances of the string "localhost:8081" with the actual IP address of the server
-
-            responseString = handleHTMLReplacements(responseString, request);
-
-
-        }
-
-
-
-
-
-
 
 
         byte[] buffer = Encoding.UTF8.GetBytes(responseString);
@@ -155,45 +164,6 @@ public class WebServer
         output.Close();
         response.Close();
         return;
-    }
-
-    private string handleHTMLReplacements(string html, HttpListenerRequest request)
-    {
-        html = html.Replace("//LOCALHOST", "//" + getRequestHost(request));
-        //check if the request is on port 8443
-
-        if (request.Url.Port == 8443)
-        {
-            html = html.Replace(":8080", ":8443");
-            html = html.Replace(":8081", ":8444");
-            html = html.Replace(":8082", ":8445");
-            html = html.Replace("ws://", "wss://");
-            html = html.Replace("http://", "https://");
-        }
-        return html;
-    }
-
-    private string getClientIp(HttpListenerRequest request)
-    {
-        string ip = request.Headers["X-Forwarded-For"];
-        if (string.IsNullOrEmpty(ip))
-        {
-            ip = request.RemoteEndPoint.Address.ToString();
-        }
-        return ip;
-    }
-
-    private string getRequestHost(HttpListenerRequest request)
-    {
-        string host = request.Headers["Host"];
-        if (string.IsNullOrEmpty(host))
-        {
-            host = request.RemoteEndPoint.Address.ToString();
-        }
-        //remove the port number
-        host = host.Split(':')[0];
-
-        return host;
     }
 
     private string getContentType(string path)
@@ -271,10 +241,6 @@ public class WebServer
             }
         }
     }
-
-
-
-
 
     public async Task StopAsync()
     {

@@ -52,6 +52,9 @@ namespace AudioStreamingServer
             };
 
             capture.Start();
+
+            // Start a background task that broadcasts audio to all connected clients
+            _ = Task.Run(() => BroadcastAudioAsync(_cancellationTokenSource.Token));
         }
 
         /// <summary>
@@ -69,48 +72,10 @@ namespace AudioStreamingServer
         }
 
         /// <summary>
-        /// Starts the WebSocket server and accepts connections.
-        /// Each client is handled concurrently.
+        /// Handles a single WebSocket client from the unified server.
+        /// Sends format metadata, then keeps alive until disconnect.
         /// </summary>
-        public async Task Start(int port, int sslPort)
-        {
-            HttpListener listener = new HttpListener();
-            listener.Prefixes.Add($"http://*:{port}/");
-            listener.Prefixes.Add($"https://*:{sslPort}/");
-            listener.Start();
-
-            Console.WriteLine($"Audio Server started on: ");
-            foreach (var prefix in listener.Prefixes)
-            {
-                Console.WriteLine("\t" + prefix);
-            }
-
-            StartCapturing();
-
-            // Start a background task that broadcasts audio to all connected clients
-            _ = Task.Run(() => BroadcastAudioAsync(_cancellationTokenSource.Token));
-
-            while (!_cancellationTokenSource.IsCancellationRequested)
-            {
-                HttpListenerContext listenerContext = await listener.GetContextAsync();
-
-                if (listenerContext.Request.IsWebSocketRequest)
-                {
-                    // Handle each client in its own task
-                    _ = Task.Run(() => HandleClientAsync(listenerContext));
-                }
-                else
-                {
-                    listenerContext.Response.StatusCode = 400;
-                    listenerContext.Response.Close();
-                }
-            }
-        }
-
-        /// <summary>
-        /// Handles a single WebSocket client: sends format metadata, then keeps alive until disconnect.
-        /// </summary>
-        private async Task HandleClientAsync(HttpListenerContext listenerContext)
+        public async Task HandleClientAsync(HttpListenerContext listenerContext)
         {
             WebSocket webSocket;
             string clientId = Guid.NewGuid().ToString();
