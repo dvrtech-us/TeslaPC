@@ -9,6 +9,7 @@ using Streaming;
 using System.Reflection.Metadata;
 using System.Security.Policy;
 using AudioStreamingServer;
+using TeslaBrowserBypass;
 
 
 namespace PrimaryProcess
@@ -17,7 +18,8 @@ namespace PrimaryProcess
     {
         static async Task Main(string[] args)
         {
-
+            const int httpPort = 8080;
+            const int httpsPort = 8443;
 
             Size size = new(System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width, System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
 
@@ -28,17 +30,40 @@ namespace PrimaryProcess
             var audioCapture = new AudioCapture();
             audioCapture.StartCapturing();
 
+            // Set up Tesla browser bypass (adds non-RFC1918 IP to hotspot adapter)
+            TeslaBrowserBypass.TeslaBrowserBypass? bypass = null;
+            bool bypassEnabled = !args.Contains("--no-tesla-bypass");
+            if (bypassEnabled)
+            {
+                bypass = new TeslaBrowserBypass.TeslaBrowserBypass();
+                if (bypass.Setup(httpPort, httpsPort))
+                {
+                    TeslaBrowserBypass.TeslaBrowserBypass.AddFirewallRule(httpPort, httpsPort);
+                }
+                else
+                {
+                    bypass.Dispose();
+                    bypass = null;
+                }
+            }
+
             // Single unified server handles all routes:
             //   /          → web UI (index.html)
             //   /stream    → MJPEG video stream
             //   /ws/input  → mouse/keyboard WebSocket
             //   /ws/audio  → audio WebSocket
             var webServer = new WebServer(imageServer, audioCapture);
-            _ = webServer.StartWebServerAsync(8080, 8443);
+            _ = webServer.StartWebServerAsync(httpPort, httpsPort);
 
-            Console.WriteLine("Unified server started on port 8080 (HTTP) / 8443 (HTTPS). Press any key to stop.");
+            Console.WriteLine($"Unified server started on port {httpPort} (HTTP) / {httpsPort} (HTTPS).");
+            if (bypass != null)
+            {
+                Console.WriteLine($"Tesla browser access: http://{TeslaBrowserBypass.TeslaBrowserBypass.BypassIP}:{httpPort}");
+            }
+            Console.WriteLine("Press any key to stop.");
             Console.ReadKey();
 
+            bypass?.Dispose();
             await webServer.StopAsync();
         }
 
