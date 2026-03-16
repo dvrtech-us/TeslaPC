@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Drawing;
 using System.IO;
 using System.Net;
@@ -9,7 +9,7 @@ namespace Streaming
 {
 
     /// <summary>
-    /// Provides a stream writer that can be used to write images as MJPEG 
+    /// Provides a stream writer that can be used to write images as MJPEG
     /// or (Motion JPEG) to any stream.
     /// </summary>
     public class MjpegWriter : IDisposable
@@ -30,30 +30,27 @@ namespace Streaming
             _context.Response.StatusCode = 200;
         }
 
-    
-        public void Write(MemoryStream imageStream)
+
+        public void Write(byte[] jpegData)
         {
             // Write boundary
             byte[] boundaryBytes = Encoding.ASCII.GetBytes(
             "\r\n--" + _boundary
             + "\r\nContent-Type: image/jpeg"
-            + "\r\nContent-Length: " + imageStream.Length + "\r\n"
+            + "\r\nContent-Length: " + jpegData.Length + "\r\n"
             + "\r\n");
             _context.Response.OutputStream.Write(boundaryBytes, 0, boundaryBytes.Length);
 
+            _context.Response.OutputStream.Write(jpegData, 0, jpegData.Length);
 
-
-            imageStream.WriteTo(_context.Response.OutputStream);
-          
             _context.Response.OutputStream.Write(_endOfImageBytes, 0, _endOfImageBytes.Length);
 
-            _context.Response.OutputStream.FlushAsync();
+            _context.Response.OutputStream.Flush();
         }
-      
-        private static byte[] _endOfImageBytes = Encoding.ASCII.GetBytes("\r\n");
-      
 
-       
+        private static readonly byte[] _endOfImageBytes = Encoding.ASCII.GetBytes("\r\n");
+
+
 
 
 
