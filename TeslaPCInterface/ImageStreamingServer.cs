@@ -14,6 +14,8 @@ namespace Streaming
     public class ImageStreamingServer : IDisposable
     {
         private readonly CancellationTokenSource _cancellationTokenSource = new();
+        private readonly int _maxWidth;
+        private readonly int _maxHeight;
         private bool _disposed = false;
 
 
@@ -25,7 +27,8 @@ namespace Streaming
 
         public ImageStreamingServer(int width, int height, int fps)
         {
-
+            _maxWidth = width;
+            _maxHeight = height;
 
             this.Interval = 1000 / fps;
 
@@ -56,6 +59,16 @@ namespace Streaming
         /// Writes the images to the client as MJPEG.
         /// </summary>
         /// <param name="ctx"></param>
+        private static ImageCodecInfo GetJpegCodec()
+        {
+            foreach (var codec in ImageCodecInfo.GetImageEncoders())
+            {
+                if (codec.MimeType == "image/jpeg")
+                    return codec;
+            }
+            throw new InvalidOperationException("JPEG codec not found");
+        }
+
         private void writeJPEG(HttpListenerContext ctx)
         {
 
@@ -67,28 +80,42 @@ namespace Streaming
                 wr.WriteHeader();
                 SetProcessDpiAwareness( ProcessDPIAwareness.ProcessPerMonitorDPIAware);
 
-                Size size = new(System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width, System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
+                Size screenSize = new(System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width, System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
 
+                // Cap output resolution to the configured maximum
+                int outWidth = Math.Min(screenSize.Width, _maxWidth);
+                int outHeight = Math.Min(screenSize.Height, _maxHeight);
+                bool needsResize = outWidth != screenSize.Width || outHeight != screenSize.Height;
 
-                Bitmap srcImage = new(size.Width, size.Height);
-                Graphics srcGraphics = Graphics.FromImage(srcImage);
+                using Bitmap srcImage = new(screenSize.Width, screenSize.Height);
+                using Graphics srcGraphics = Graphics.FromImage(srcImage);
 
+                // Only allocate a scaled bitmap if we actually need to resize
+                Bitmap? scaledImage = needsResize ? new Bitmap(outWidth, outHeight) : null;
+                Graphics? scaledGraphics = needsResize ? Graphics.FromImage(scaledImage!) : null;
 
-
-
+                // Set up JPEG encoder once outside the loop
+                var jpegCodec = GetJpegCodec();
+                using EncoderParameters encoderParameters = new(1);
+                encoderParameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 60L);
 
                 var ms = new MemoryStream();
                 int lastStart = Environment.TickCount;
                 while (true)
                 {
-                    srcGraphics.CopyFromScreen(0, 0, 0, 0, size);
-
+                    srcGraphics.CopyFromScreen(0, 0, 0, 0, screenSize);
 
                     ms.SetLength(0);
-                    //set jpeg quality
-                    EncoderParameters encoderParameters = new(1);
-                    encoderParameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 60L);
-                    srcImage.Save(ms, System.Drawing.Imaging.ImageFormat.Jpeg);
+
+                    if (needsResize)
+                    {
+                        scaledGraphics!.DrawImage(srcImage, 0, 0, outWidth, outHeight);
+                        scaledImage!.Save(ms, jpegCodec, encoderParameters);
+                    }
+                    else
+                    {
+                        srcImage.Save(ms, jpegCodec, encoderParameters);
+                    }
 
                     wr.Write(ms);
                     if(_cancellationTokenSource.Token.IsCancellationRequested)
