@@ -50,58 +50,63 @@
 
     <script>
 
-        let audioContext = null
+        let audioContext = null;
         let audioSocket = null;
-        var audioSource = null;
         let pcmPlayerNode = null;
+        let audioFormat = null;
 
-        async function startAudioPlaybackold() {
-            if (audioContext != null) {
-                return;
-            }
-            console.log('Before AudioContext start');
-
-            audioContext = new AudioContext({ sampleRate: 48000, channels: 2, latencyHint: 'interactive' });
-            console.log('After AudioContext start');
-
-            await audioContext.audioWorklet.addModule('PCMPlayerProcessor.js');
-            console.log("starting audioContext");
-            var pcmPlayerNode = new AudioWorkletNode(audioContext, 'pcm-player-processor', { outputChannelCount: [2] });
-            var audioSocket = new WebSocket('ws://LOCALHOST:8082/');
-            audioSocket.binaryType = 'arraybuffer'
-            pcmPlayerNode.connect(audioContext.destination);
-            audioSocket.onmessage = function (event) {
-
-
-                pcmPlayerNode.port.postMessage(event.data);
-            };
-            audioContext.resume();
-            console.log('after AudioContext resume');
-            var startPlaybackButton = document.getElementById('startPlayback');
-            //change the button text
-            startPlaybackButton.innerHTML = 'Restart playback';
-
-
-
-        }
-        var totalDuration = 0;
         async function startAudioPlayback() {
-            if (audioContext == null) {
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                audioSource = audioContext.createBufferSource();
-                audioSocket = new WebSocket('ws://LOCALHOST:8082/');
-                audioSocket.binaryType = 'arraybuffer';
-                audioSocket.onmessage = function (event) {
-                    var audioData = new Float32Array(event.data);
-                    var buffer = audioContext.createBuffer(1, audioData.length, audioContext.sampleRate);
-                    buffer.copyToChannel(audioData, 0);
-                    var source = audioContext.createBufferSource();
-                    source.buffer = buffer;
-                    source.connect(audioContext.destination);
-                    source.start(totalDuration); // Schedule to play after previous buffer
-                    totalDuration += buffer.duration; // Update total duration
-                };
+            if (audioContext != null) {
+                // Already running — close and restart
+                if (audioSocket) audioSocket.close();
+                if (audioContext) audioContext.close();
+                audioContext = null;
+                audioSocket = null;
+                pcmPlayerNode = null;
+                audioFormat = null;
             }
+
+            audioSocket = new WebSocket('ws://LOCALHOST:8082/');
+            audioSocket.binaryType = 'arraybuffer';
+
+            audioSocket.onmessage = async function (event) {
+                // First message is text with format metadata
+                if (typeof event.data === 'string') {
+                    audioFormat = JSON.parse(event.data);
+                    console.log('Audio format:', audioFormat);
+
+                    // Create AudioContext matching the server's sample rate
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                        sampleRate: audioFormat.sampleRate,
+                        latencyHint: 'interactive'
+                    });
+
+                    await audioContext.audioWorklet.addModule('PCMPlayerProcessor.js');
+                    pcmPlayerNode = new AudioWorkletNode(audioContext, 'pcm-player-processor', {
+                        outputChannelCount: [audioFormat.channels],
+                        processorOptions: {
+                            channels: audioFormat.channels,
+                            bitsPerSample: audioFormat.bitsPerSample
+                        }
+                    });
+                    pcmPlayerNode.connect(audioContext.destination);
+                    await audioContext.resume();
+
+                    var startPlaybackButton = document.getElementById('startPlayback');
+                    startPlaybackButton.innerHTML = 'Restart playback';
+                    console.log('Audio playback started');
+                    return;
+                }
+
+                // Subsequent messages are binary audio data
+                if (pcmPlayerNode && audioFormat) {
+                    pcmPlayerNode.port.postMessage(event.data);
+                }
+            };
+
+            audioSocket.onerror = function (event) {
+                console.error('Audio WebSocket error:', event);
+            };
         }
 
 
