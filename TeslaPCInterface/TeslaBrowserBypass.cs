@@ -53,8 +53,19 @@ namespace TeslaBrowserBypass
             _ipAdded = true;
 
             // Set up port forwarding: bypass IP -> localhost
-            AddPortProxy(httpPort, httpPort);
-            AddPortProxy(httpsPort, httpsPort);
+            if (!AddPortProxy(httpPort, httpPort) || !AddPortProxy(httpsPort, httpsPort))
+            {
+                Console.WriteLine("[TeslaBrowserBypass] Failed to set up port forwarding. Are you running as administrator?");
+                Cleanup();
+                return false;
+            }
+
+            if (!AddFirewallRule(httpPort, httpsPort))
+            {
+                Console.WriteLine("[TeslaBrowserBypass] Failed to add firewall rule. Are you running as administrator?");
+                Cleanup();
+                return false;
+            }
 
             Console.WriteLine($"[TeslaBrowserBypass] Tesla browser bypass active!");
             Console.WriteLine($"[TeslaBrowserBypass] Access from Tesla: http://{BypassIP}:{httpPort}");
@@ -102,17 +113,22 @@ namespace TeslaBrowserBypass
         /// </summary>
         private static bool AddSecondaryIP(string adapterName)
         {
-            // First check if the IP is already assigned
             foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
             {
                 var ipProps = nic.GetIPProperties();
                 foreach (var addr in ipProps.UnicastAddresses)
                 {
-                    if (addr.Address.ToString() == BypassIP)
+                    if (addr.Address.ToString() != BypassIP)
+                        continue;
+
+                    if (nic.Name == adapterName)
                     {
-                        Console.WriteLine($"[TeslaBrowserBypass] IP {BypassIP} already assigned to {nic.Name}");
+                        Console.WriteLine($"[TeslaBrowserBypass] IP {BypassIP} already assigned to {adapterName}");
                         return true;
                     }
+
+                    Console.WriteLine($"[TeslaBrowserBypass] IP {BypassIP} is assigned to {nic.Name}, not {adapterName}");
+                    return false;
                 }
             }
 
@@ -146,7 +162,7 @@ namespace TeslaBrowserBypass
         /// <summary>
         /// Adds a netsh portproxy rule to forward from the bypass IP to localhost.
         /// </summary>
-        private void AddPortProxy(int listenPort, int connectPort)
+        private bool AddPortProxy(int listenPort, int connectPort)
         {
             var result = RunNetsh(
                 $"interface portproxy add v4tov4 listenaddress={BypassIP} listenport={listenPort} connectaddress=127.0.0.1 connectport={connectPort}");
@@ -155,11 +171,11 @@ namespace TeslaBrowserBypass
             {
                 _proxyRules.Add((listenPort, connectPort));
                 Console.WriteLine($"[TeslaBrowserBypass] Port proxy: {BypassIP}:{listenPort} -> 127.0.0.1:{connectPort}");
+                return true;
             }
-            else
-            {
-                Console.WriteLine($"[TeslaBrowserBypass] Port proxy failed (exit {result.exitCode}): {result.output}");
-            }
+
+            Console.WriteLine($"[TeslaBrowserBypass] Port proxy failed (exit {result.exitCode}): {result.output}");
+            return false;
         }
 
         /// <summary>
@@ -173,9 +189,14 @@ namespace TeslaBrowserBypass
         /// <summary>
         /// Adds a Windows Firewall rule to allow inbound traffic on the bypass IP.
         /// </summary>
-        public static void AddFirewallRule(int httpPort, int httpsPort)
+        public static bool AddFirewallRule(int httpPort, int httpsPort)
         {
-            RunNetsh($"advfirewall firewall add rule name=\"TeslaPC Bypass\" dir=in action=allow protocol=TCP localip={BypassIP} localport={httpPort},{httpsPort}");
+            var result = RunNetsh($"advfirewall firewall add rule name=\"TeslaPC Bypass\" dir=in action=allow protocol=TCP localip={BypassIP} localport={httpPort},{httpsPort}");
+            if (result.exitCode == 0)
+                return true;
+
+            Console.WriteLine($"[TeslaBrowserBypass] Firewall rule failed (exit {result.exitCode}): {result.output}");
+            return false;
         }
 
         /// <summary>

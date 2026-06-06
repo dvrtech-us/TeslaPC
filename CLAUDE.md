@@ -6,28 +6,32 @@
 
 ## Architecture
 
-The application runs three concurrent servers:
+The application runs a single unified HTTP/HTTPS server on ports 8080 (HTTP) and 8443 (HTTPS). All services are routed by path:
 
-| Server | HTTP Port | HTTPS Port | Protocol | Purpose |
-|--------|-----------|------------|----------|---------|
-| WebServer | 8080 | 8443 | WebSocket | Mouse & keyboard input |
-| ImageStreamingServer | 8081 | 8444 | MJPEG over HTTP | Screen capture streaming |
-| AudioStreamingServer | 8082 | 8445 | WebSocket | System audio streaming (WASAPI loopback) |
+| Route | Protocol | Purpose |
+|-------|----------|---------|
+| `/` | HTTP | Web UI (`index.html`, JS, CSS) |
+| `/stream` | HTTP | MJPEG screen capture streaming |
+| `/ws/input` | WebSocket | Mouse & keyboard input |
+| `/ws/audio` | WebSocket | System audio streaming (WASAPI loopback) |
+
+`TeslaBrowserBypass.cs` optionally adds a CGNAT secondary IP (`100.64.0.1`) to the Windows Mobile Hotspot adapter with port forwarding so the Tesla in-car browser can connect (it blocks RFC 1918 private IPs).
 
 ### Source Files
 
 ```
 TeslaPCInterface/
-├── Program.cs                 # Entry point - initializes all three servers
-├── WebServer.cs               # WebSocket server for mouse/keyboard control (P/Invoke to user32.dll)
+├── Program.cs                 # Entry point - initializes unified server and optional Tesla bypass
+├── WebServer.cs               # Unified HTTP/HTTPS server with path-based routing
 ├── ImageStreamingServer.cs    # MJPEG screen capture (30 FPS, max 1280x720)
 ├── AudioStreamingServer.cs    # WASAPI loopback audio capture via CSCore
+├── TeslaBrowserBypass.cs      # Tesla in-car browser hotspot bypass (CGNAT IP + portproxy)
 ├── MjpegWriter.cs             # MJPEG multipart boundary encoder
 ├── index.html                 # Single-page web UI (vanilla JS, Canvas, Web Audio API)
 ├── PCMPlayerProcessor.js      # AudioWorklet processor for PCM audio playback
 ├── TeslaPCInterface.csproj    # Project file (.NET 6.0, WinForms)
 ├── TeslaPCInterface.sln       # Visual Studio solution
-└── bindSSLCert.bat            # Binds SSL certs to HTTPS ports (requires admin)
+└── bindSSLCert.bat            # Binds SSL cert to HTTPS port 8443 (requires admin)
 ```
 
 ## Build & Run
@@ -42,7 +46,7 @@ dotnet build TeslaPCInterface.sln
 dotnet run --project TeslaPCInterface/TeslaPCInterface.csproj
 ```
 
-For HTTPS support, run `bindSSLCert.bat` as administrator first.
+For HTTPS support, run `bindSSLCert.bat` as administrator first. Tesla browser bypass requires administrator privileges.
 
 ## Key Dependencies (NuGet)
 
@@ -56,7 +60,7 @@ For HTTPS support, run `bindSSLCert.bat` as administrator first.
 - **Naming**: PascalCase for classes, methods, and properties (standard C# conventions)
 - **Platform**: Windows-only (P/Invoke to `user32.dll` for `SetCursorPos`, `mouse_event`, `keybd_event`)
 - **Frontend**: Vanilla JavaScript with no frameworks - HTML5 Canvas, Web Audio API, WebSockets
-- **Ports**: Hardcoded in source (8080-8082 HTTP, 8443-8445 HTTPS)
+- **Ports**: Hardcoded in source (8080 HTTP, 8443 HTTPS)
 - **No formal linting or formatting configuration**
 
 ## Testing

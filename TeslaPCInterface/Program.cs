@@ -36,11 +36,7 @@ namespace PrimaryProcess
             if (bypassEnabled)
             {
                 bypass = new TeslaBrowserBypass.TeslaBrowserBypass();
-                if (bypass.Setup(httpPort, httpsPort))
-                {
-                    TeslaBrowserBypass.TeslaBrowserBypass.AddFirewallRule(httpPort, httpsPort);
-                }
-                else
+                if (!bypass.Setup(httpPort, httpsPort))
                 {
                     bypass.Dispose();
                     bypass = null;
@@ -52,19 +48,64 @@ namespace PrimaryProcess
             //   /stream    → MJPEG video stream
             //   /ws/input  → mouse/keyboard WebSocket
             //   /ws/audio  → audio WebSocket
-            var webServer = new WebServer(imageServer, audioCapture);
-            _ = webServer.StartWebServerAsync(httpPort, httpsPort);
+            bool localhostOnly = args.Contains("--localhost");
+            bool enableHttps = false;
+            if (!localhostOnly)
+            {
+                FirewallBootstrap.TryEnsureFirewallOpen(httpPort, httpsPort);
+                enableHttps = SslCertificateBootstrap.TryEnsureHttpsReady(httpsPort, httpPort);
+            }
 
-            Console.WriteLine($"Unified server started on port {httpPort} (HTTP) / {httpsPort} (HTTPS).");
+            var webServer = new WebServer(imageServer, audioCapture);
+            var serverTask = webServer.StartWebServerAsync(httpPort, httpsPort, localhostOnly, enableHttps);
+            _ = serverTask.ContinueWith(t =>
+            {
+                if (t.IsFaulted && t.Exception != null)
+                    Console.WriteLine($"Server error: {t.Exception.GetBaseException().Message}");
+            }, TaskScheduler.Default);
+
+            if (localhostOnly)
+            {
+                Console.WriteLine($"Unified server started on http://127.0.0.1:{httpPort} (localhost only).");
+            }
+            else if (enableHttps)
+            {
+                Console.WriteLine($"Unified server started on port {httpPort} (HTTP) / {httpsPort} (HTTPS).");
+                Console.WriteLine($"Secure UI: https://localhost:{httpsPort}/");
+            }
+            else
+            {
+                Console.WriteLine($"Unified server started on port {httpPort} (HTTP only).");
+            }
             if (bypass != null)
             {
                 Console.WriteLine($"Tesla browser access: http://{TeslaBrowserBypass.TeslaBrowserBypass.BypassIP}:{httpPort}");
             }
-            Console.WriteLine("Press any key to stop.");
-            Console.ReadKey();
+            Console.WriteLine("Press Ctrl+C to stop.");
+            using var shutdown = new ManualResetEventSlim(false);
+            Console.CancelKeyPress += (_, e) =>
+            {
+                e.Cancel = true;
+                shutdown.Set();
+            };
+
+            if (!Console.IsInputRedirected)
+            {
+                Console.WriteLine("Or press any key to stop.");
+                _ = Task.Run(() =>
+                {
+                    Console.ReadKey(intercept: true);
+                    shutdown.Set();
+                });
+            }
+
+            shutdown.Wait();
 
             bypass?.Dispose();
             await webServer.StopAsync();
+            imageServer.Stop();
+            imageServer.Dispose();
+            audioCapture.Dispose();
         }
 
 

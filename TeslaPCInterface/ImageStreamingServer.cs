@@ -149,6 +149,14 @@ namespace Streaming
             {
                 Console.WriteLine($"Capture loop error: {e.Message}");
             }
+            finally
+            {
+                lock (_frameLock)
+                {
+                    _captureThread = null;
+                    Monitor.PulseAll(_frameLock);
+                }
+            }
         }
 
         /// <summary>
@@ -169,8 +177,16 @@ namespace Streaming
                     {
                         while (_frameNumber == lastFrame)
                         {
+                            if (_captureThread == null || !_captureThread.IsAlive)
+                                return;
+
                             if (!Monitor.Wait(_frameLock, 1000))
-                                continue; // timeout, check cancellation
+                            {
+                                if (_captureThread == null || !_captureThread.IsAlive)
+                                    return;
+                                continue;
+                            }
+
                             if (_cancellationTokenSource.Token.IsCancellationRequested)
                                 return;
                         }
@@ -227,12 +243,9 @@ namespace Streaming
             {
                 if (disposing)
                 {
-                    // Dispose managed resources
+                    Stop();
                     _cancellationTokenSource.Dispose();
-
                 }
-
-                // Dispose unmanaged resources
 
                 _disposed = true;
             }

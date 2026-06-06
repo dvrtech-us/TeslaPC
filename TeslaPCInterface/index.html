@@ -33,6 +33,11 @@
             margin: 4px 2px;
             cursor: pointer;
         }
+
+        .button:disabled {
+            background-color: #6f8f71;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 
@@ -63,10 +68,27 @@
         let audioFormat = null;
         let useWorklet = true; // will be set to false if AudioWorklet fails
         let scheduledTime = 0; // for fallback buffer scheduling
+        let audioConnecting = false;
+
+        function setPlaybackButtonState(connecting, label) {
+            var button = document.getElementById('startPlayback');
+            button.disabled = connecting;
+            if (label) {
+                button.innerHTML = label;
+            }
+        }
+
+        function resetAudioConnection() {
+            audioConnecting = false;
+            setPlaybackButtonState(false, audioContext ? 'Restart playback' : 'Start playback');
+        }
 
         async function startAudioPlayback() {
+            if (audioConnecting) {
+                return;
+            }
+
             if (audioContext != null) {
-                // Already running — close and restart
                 if (audioSocket) audioSocket.close();
                 if (audioContext) audioContext.close();
                 audioContext = null;
@@ -77,8 +99,20 @@
                 scheduledTime = 0;
             }
 
+            audioConnecting = true;
+            setPlaybackButtonState(true, 'Connecting...');
+
             audioSocket = new WebSocket(getWsUrl('/ws/audio'));
             audioSocket.binaryType = 'arraybuffer';
+
+            audioSocket.onclose = function () {
+                resetAudioConnection();
+            };
+
+            audioSocket.onerror = function (event) {
+                console.error('Audio WebSocket error:', event);
+                resetAudioConnection();
+            };
 
             audioSocket.onmessage = async function (event) {
                 // First message is text with format metadata
@@ -86,20 +120,27 @@
                     audioFormat = JSON.parse(event.data);
                     console.log('Audio format:', audioFormat);
 
-                    // Create AudioContext matching the server's sample rate
                     audioContext = new (window.AudioContext || window.webkitAudioContext)({
                         sampleRate: audioFormat.sampleRate,
                         latencyHint: 'interactive'
                     });
 
-                    // Try AudioWorklet first, fall back to buffer scheduling
+                    if (audioContext.sampleRate !== audioFormat.sampleRate) {
+                        console.warn(
+                            'Browser audio rate is ' + audioContext.sampleRate +
+                            'Hz, server rate is ' + audioFormat.sampleRate + 'Hz; resampling enabled'
+                        );
+                    }
+
                     try {
                         await audioContext.audioWorklet.addModule('PCMPlayerProcessor.js');
                         pcmPlayerNode = new AudioWorkletNode(audioContext, 'pcm-player-processor', {
                             outputChannelCount: [audioFormat.channels],
                             processorOptions: {
                                 channels: audioFormat.channels,
-                                bitsPerSample: audioFormat.bitsPerSample
+                                bitsPerSample: audioFormat.bitsPerSample,
+                                sampleFormat: audioFormat.sampleFormat || (audioFormat.bitsPerSample === 16 ? 'pcm16' : 'float'),
+                                sourceSampleRate: audioFormat.sampleRate
                             }
                         });
                         pcmPlayerNode.connect(audioContext.destination);
@@ -113,8 +154,8 @@
 
                     await audioContext.resume();
 
-                    var startPlaybackButton = document.getElementById('startPlayback');
-                    startPlaybackButton.innerHTML = 'Restart playback';
+                    audioConnecting = false;
+                    setPlaybackButtonState(false, 'Restart playback');
                     console.log('Audio playback started');
                     return;
                 }
@@ -131,9 +172,78 @@
                 }
             };
 
-            audioSocket.onerror = function (event) {
-                console.error('Audio WebSocket error:', event);
-            };
+        }
+
+        function decodePcmToFloat32(arrayBuffer, format) {
+            var sampleFormat = format.sampleFormat || (format.bitsPerSample === 16 ? 'pcm16' : 'float');
+
+            if (sampleFormat === 'float') {
+                return new Float32Array(arrayBuffer);
+            }
+
+            if (sampleFormat === 'pcm16') {
+                var int16 = new Int16Array(arrayBuffer);
+                var pcm16 = new Float32Array(int16.length);
+                for (var i = 0; i < int16.length; i++) {
+                    pcm16[i] = int16[i] / 32768.0;
+                }
+                return pcm16;
+            }
+
+            if (sampleFormat === 'pcm24') {
+                var bytes = new Uint8Array(arrayBuffer);
+                var sampleCount = Math.floor(bytes.length / 3);
+                var pcm24 = new Float32Array(sampleCount);
+                for (var j = 0; j < sampleCount; j++) {
+                    var val = bytes[j * 3] | (bytes[j * 3 + 1] << 8) | (bytes[j * 3 + 2] << 16);
+                    if (val & 0x800000) {
+                        val |= 0xFF000000;
+                    }
+                    pcm24[j] = val / 8388608.0;
+                }
+                return pcm24;
+            }
+
+            if (sampleFormat === 'pcm32') {
+                var int32 = new Int32Array(arrayBuffer);
+                var pcm32 = new Float32Array(int32.length);
+                for (var k = 0; k < int32.length; k++) {
+                    pcm32[k] = int32[k] / 2147483648.0;
+                }
+                return pcm32;
+            }
+
+            return new Float32Array(arrayBuffer);
+        }
+
+        function resampleFloat32(floatSamples, channels, sourceRate, targetRate) {
+            if (sourceRate === targetRate) {
+                return floatSamples;
+            }
+
+            var sourceFrames = Math.floor(floatSamples.length / channels);
+            if (sourceFrames === 0) {
+                return floatSamples;
+            }
+
+            var targetFrames = Math.max(1, Math.floor(sourceFrames * targetRate / sourceRate));
+            var result = new Float32Array(targetFrames * channels);
+            var ratio = sourceRate / targetRate;
+
+            for (var outFrame = 0; outFrame < targetFrames; outFrame++) {
+                var srcPos = outFrame * ratio;
+                var srcFrame = Math.floor(srcPos);
+                var frac = srcPos - srcFrame;
+                var nextFrame = Math.min(srcFrame + 1, sourceFrames - 1);
+
+                for (var ch = 0; ch < channels; ch++) {
+                    var s0 = floatSamples[srcFrame * channels + ch];
+                    var s1 = floatSamples[nextFrame * channels + ch];
+                    result[outFrame * channels + ch] = s0 + (s1 - s0) * frac;
+                }
+            }
+
+            return result;
         }
 
         /**
@@ -144,27 +254,16 @@
         function playPcmChunkFallback(rawData) {
             var arrayBuffer = rawData instanceof ArrayBuffer ? rawData : rawData.buffer;
             var channels = audioFormat.channels;
-            var bitsPerSample = audioFormat.bitsPerSample;
+            var sourceRate = audioFormat.sampleRate;
+            var playbackRate = audioContext.sampleRate;
 
-            // Decode raw PCM to Float32 samples
-            var floatSamples;
-            if (bitsPerSample === 32) {
-                floatSamples = new Float32Array(arrayBuffer);
-            } else if (bitsPerSample === 16) {
-                var int16 = new Int16Array(arrayBuffer);
-                floatSamples = new Float32Array(int16.length);
-                for (var i = 0; i < int16.length; i++) {
-                    floatSamples[i] = int16[i] / 32768.0;
-                }
-            } else {
-                floatSamples = new Float32Array(arrayBuffer);
-            }
+            var floatSamples = decodePcmToFloat32(arrayBuffer, audioFormat);
+            floatSamples = resampleFloat32(floatSamples, channels, sourceRate, playbackRate);
 
             var framesCount = Math.floor(floatSamples.length / channels);
             if (framesCount === 0) return;
 
-            // Create an AudioBuffer and deinterleave channels
-            var audioBuffer = audioContext.createBuffer(channels, framesCount, audioFormat.sampleRate);
+            var audioBuffer = audioContext.createBuffer(channels, framesCount, playbackRate);
             for (var ch = 0; ch < channels; ch++) {
                 var channelData = audioBuffer.getChannelData(ch);
                 for (var frame = 0; frame < framesCount; frame++) {

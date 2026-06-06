@@ -13,6 +13,8 @@ namespace AudioStreamingServer
         private WasapiLoopbackCapture? capture = null;
         private readonly CancellationTokenSource _cancellationTokenSource = new();
         private bool _disposed = false;
+        private bool _capturing = false;
+        private Task? _broadcastTask;
 
         private readonly ConcurrentQueue<byte[]> _audioDataQueue = new();
         private readonly SemaphoreSlim _audioDataSignal = new(0);
@@ -21,6 +23,7 @@ namespace AudioStreamingServer
         private int _sampleRate;
         private int _bitsPerSample;
         private int _channels;
+        private string _sampleFormat = "float";
 
         /// <summary>
         /// Starts capturing audio from the default loopback device (system audio).
@@ -28,6 +31,9 @@ namespace AudioStreamingServer
         /// </summary>
         public void StartCapturing()
         {
+            if (_capturing)
+                return;
+
             capture = new WasapiLoopbackCapture();
             capture.Initialize();
 
@@ -36,12 +42,13 @@ namespace AudioStreamingServer
             _sampleRate = waveFormat.SampleRate;
             _bitsPerSample = waveFormat.BitsPerSample;
             _channels = waveFormat.Channels;
+            _sampleFormat = ResolveSampleFormat(waveFormat);
 
-            Console.WriteLine($"Audio capture format: {_sampleRate}Hz, {_bitsPerSample}-bit, {_channels}ch");
+            Console.WriteLine($"Audio capture format: {_sampleRate}Hz, {_sampleFormat}, {_channels}ch");
 
             capture.DataAvailable += (s, e) =>
             {
-                if (e.ByteCount > 0)
+                if (e.ByteCount > 0 && !_clients.IsEmpty)
                 {
                     // Copy the raw PCM data (no WaveWriter/WAV header)
                     byte[] buffer = new byte[e.ByteCount];
@@ -52,9 +59,10 @@ namespace AudioStreamingServer
             };
 
             capture.Start();
+            _capturing = true;
 
             // Start a background task that broadcasts audio to all connected clients
-            _ = Task.Run(() => BroadcastAudioAsync(_cancellationTokenSource.Token));
+            _broadcastTask = Task.Run(() => BroadcastAudioAsync(_cancellationTokenSource.Token));
         }
 
         /// <summary>
@@ -67,8 +75,40 @@ namespace AudioStreamingServer
                 type = "format",
                 sampleRate = _sampleRate,
                 bitsPerSample = _bitsPerSample,
-                channels = _channels
+                channels = _channels,
+                sampleFormat = _sampleFormat
             });
+        }
+
+        private static string ResolveSampleFormat(WaveFormat waveFormat)
+        {
+            if (waveFormat.WaveFormatTag == AudioEncoding.IeeeFloat)
+                return "float";
+
+            if (waveFormat.WaveFormatTag == AudioEncoding.Pcm)
+                return PcmFormatName(waveFormat.BitsPerSample);
+
+            if (waveFormat.WaveFormatTag == AudioEncoding.Extensible && waveFormat is WaveFormatExtensible extensible)
+            {
+                if (extensible.SubFormat == AudioSubTypes.IeeeFloat)
+                    return "float";
+                if (extensible.SubFormat == AudioSubTypes.Pcm)
+                    return PcmFormatName(waveFormat.BitsPerSample);
+            }
+
+            Console.WriteLine($"Unknown audio encoding tag {waveFormat.WaveFormatTag}, inferring from bit depth");
+            return waveFormat.BitsPerSample == 32 ? "float" : PcmFormatName(waveFormat.BitsPerSample);
+        }
+
+        private static string PcmFormatName(int bitsPerSample)
+        {
+            return bitsPerSample switch
+            {
+                16 => "pcm16",
+                24 => "pcm24",
+                32 => "pcm32",
+                _ => $"pcm{bitsPerSample}"
+            };
         }
 
         /// <summary>
@@ -100,7 +140,7 @@ namespace AudioStreamingServer
                     new ArraySegment<byte>(formatBytes),
                     WebSocketMessageType.Text,
                     true,
-                    CancellationToken.None);
+                    _cancellationTokenSource.Token);
 
                 // Register this client for broadcasting
                 _clients.TryAdd(clientId, webSocket);
@@ -111,7 +151,7 @@ namespace AudioStreamingServer
                 while (webSocket.State == WebSocketState.Open)
                 {
                     var result = await webSocket.ReceiveAsync(
-                        new ArraySegment<byte>(recvBuffer), CancellationToken.None);
+                        new ArraySegment<byte>(recvBuffer), _cancellationTokenSource.Token);
                     if (result.MessageType == WebSocketMessageType.Close)
                     {
                         break;
@@ -150,24 +190,32 @@ namespace AudioStreamingServer
 
                 if (_audioDataQueue.TryDequeue(out var buffer))
                 {
-                    var segment = new ArraySegment<byte>(buffer);
-
-                    foreach (var kvp in _clients)
+                    var sendTasks = new List<Task>(_clients.Count);
+                    foreach (var ws in _clients.Values)
                     {
-                        var ws = kvp.Value;
                         if (ws.State == WebSocketState.Open)
-                        {
-                            try
-                            {
-                                await ws.SendAsync(segment, WebSocketMessageType.Binary, true, CancellationToken.None);
-                            }
-                            catch
-                            {
-                                // Client will be cleaned up in HandleClientAsync
-                            }
-                        }
+                            sendTasks.Add(SendAudioAsync(ws, buffer));
                     }
+
+                    if (sendTasks.Count > 0)
+                        await Task.WhenAll(sendTasks);
                 }
+            }
+        }
+
+        private static async Task SendAudioAsync(WebSocket ws, byte[] buffer)
+        {
+            try
+            {
+                await ws.SendAsync(
+                    new ArraySegment<byte>(buffer),
+                    WebSocketMessageType.Binary,
+                    true,
+                    CancellationToken.None);
+            }
+            catch
+            {
+                // Client will be cleaned up in HandleClientAsync
             }
         }
 
@@ -178,10 +226,41 @@ namespace AudioStreamingServer
                 if (disposing)
                 {
                     _cancellationTokenSource.Cancel();
+
+                    foreach (var ws in _clients.Values)
+                    {
+                        if (ws.State == WebSocketState.Open || ws.State == WebSocketState.CloseReceived)
+                        {
+                            try
+                            {
+                                ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None)
+                                    .GetAwaiter().GetResult();
+                            }
+                            catch { }
+                        }
+                        ws.Dispose();
+                    }
+                    _clients.Clear();
+
                     capture?.Stop();
                     capture?.Dispose();
-                    _cancellationTokenSource?.Dispose();
-                    _audioDataSignal?.Dispose();
+                    capture = null;
+                    _capturing = false;
+
+                    if (_broadcastTask != null)
+                    {
+                        try
+                        {
+                            _broadcastTask.Wait(TimeSpan.FromSeconds(2));
+                        }
+                        catch (AggregateException)
+                        {
+                            // Task was cancelled
+                        }
+                    }
+
+                    _cancellationTokenSource.Dispose();
+                    _audioDataSignal.Dispose();
                 }
                 _disposed = true;
             }

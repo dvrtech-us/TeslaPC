@@ -20,51 +20,83 @@ public class WebServer
         _audioCapture = audioCapture;
     }
 
-    public async Task StartWebServerAsync(int port, int sslPort)
+    public async Task StartWebServerAsync(int port, int sslPort, bool localhostOnly = false, bool enableHttps = true)
     {
+        if (localhostOnly)
+        {
+            _Listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        }
+        else
+        {
+            _Listener.Prefixes.Add("http://*:" + port + "/");
+            if (enableHttps)
+                _Listener.Prefixes.Add("https://*:" + sslPort + "/");
+        }
 
-        _Listener.Prefixes.Add("http://*:" + port + "/");
-        _Listener.Prefixes.Add("https://*:" + sslPort + "/");
         Console.WriteLine("Unified server listening on: ");
         foreach (var prefix in _Listener.Prefixes)
         {
             Console.WriteLine("\t" + prefix);
         }
 
-        _Listener.Start();
+        try
+        {
+            _Listener.Start();
+        }
+        catch (HttpListenerException ex)
+        {
+            Console.WriteLine($"Failed to start HTTP listener (exit {ex.ErrorCode}): {ex.Message}");
+            if (!localhostOnly)
+            {
+                Console.WriteLine("Binding to all interfaces requires administrator privileges or a URL ACL reservation.");
+                Console.WriteLine("Run as administrator, or reserve the URL with:");
+                Console.WriteLine($"  netsh http add urlacl url=http://+:{port}/ user=Everyone");
+                Console.WriteLine($"  netsh http add urlacl url=https://+:{sslPort}/ user=Everyone");
+                Console.WriteLine("For local testing only, pass --localhost.");
+            }
+            throw;
+        }
 
-        while (!_cancellationTokenSource.IsCancellationRequested)
+        try
+        {
+            while (!_cancellationTokenSource.IsCancellationRequested)
+            {
+                try
+                {
+                    var context = await _Listener.GetContextAsync();
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await HandleRequest(context);
+                        }
+                        catch (Exception e)
+                        {
+                            Console.WriteLine($"Request handler error: {e.Message}");
+                        }
+                    });
+                }
+                catch (HttpListenerException) when (_cancellationTokenSource.IsCancellationRequested)
+                {
+                    // Expected when Stop() is called during GetContextAsync
+                    break;
+                }
+                catch (HttpListenerException e)
+                {
+                    Console.WriteLine("StartWebServer Async While: " + e.Message);
+                    break;
+                }
+            }
+        }
+        finally
         {
             try
             {
-                var context = await _Listener.GetContextAsync();
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await HandleRequest(context);
-                    }
-                    catch (Exception e)
-                    {
-                        Console.WriteLine($"Request handler error: {e.Message}");
-                    }
-                });
+                _Listener.Stop();
+                _Listener.Close();
             }
-            catch (HttpListenerException e)
-            {
-                Console.WriteLine("StartWebServer Async While: " + e.Message);
-            }
+            catch { }
         }
-
-        //restart the server
-        try
-        {
-            _Listener.Stop();
-            _Listener.Close();
-        }
-        catch { }
-
-        _ = StartWebServerAsync(port, sslPort);
     }
 
     /// <summary>
@@ -114,19 +146,23 @@ public class WebServer
         {
             runningInDebugMode = true;
         }
-        //if running in debug mode, serve the html file from the project directory
-        if (!runningInDebugMode)
+        if (runningInDebugMode)
         {
-            rootPath = "";
+            var location = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+            if (!string.IsNullOrEmpty(location) && location.Contains("bin"))
+            {
+                rootPath = location.Substring(0, location.LastIndexOf("bin"));
+            }
+            else
+            {
+                rootPath = location ?? AppContext.BaseDirectory;
+            }
+            Console.WriteLine("Path to html: " + rootPath);
         }
         else
         {
-            rootPath = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
-            //get the location of bin in the path
-            rootPath = rootPath.Substring(0, rootPath.LastIndexOf("bin"));
-            Console.WriteLine("Path to html: " + rootPath);
+            rootPath = AppContext.BaseDirectory;
         }
-        //if not running in debug mode, serve the html file from the directory where the executable is located
         //see if the request is for the html file
         if (request.Url.LocalPath == "/")
         {
@@ -242,10 +278,17 @@ public class WebServer
         }
     }
 
-    public async Task StopAsync()
+    public Task StopAsync()
     {
         _cancellationTokenSource.Cancel();
-        _Listener.Stop();
-
+        try
+        {
+            _Listener.Stop();
+        }
+        catch (HttpListenerException)
+        {
+            // Listener may already be stopped
+        }
+        return Task.CompletedTask;
     }
 }
