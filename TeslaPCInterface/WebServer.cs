@@ -366,7 +366,11 @@ public class WebServer
         sb.Append("</div>");
 
         string[] directories = Directory.GetDirectories(path);
-        string[] files = Directory.GetFiles(path);
+        var videoExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            { ".mp4", ".mkv", ".avi", ".mov", ".m4v", ".wmv", ".flv", ".webm", ".mpg", ".mpeg", ".ts", ".m2ts" };
+        string[] files = Directory.GetFiles(path)
+            .Where(f => videoExts.Contains(Path.GetExtension(f)))
+            .ToArray();
 
         sb.Append("<div class=\"grid\">");
 
