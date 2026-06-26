@@ -249,29 +249,36 @@ internal static class SslCertificateBootstrap
 
     private static string? TryGetPrivateKeyFilePath(X509Certificate2 certificate)
     {
+        string? uniqueName = null;
         try
         {
-            if (certificate.GetRSAPrivateKey() is RSACryptoServiceProvider csp)
+            using var rsa = certificate.GetRSAPrivateKey();
+            uniqueName = rsa switch
             {
-                return Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                    "Microsoft", "Crypto", "RSA", "MachineKeys",
-                    csp.CspKeyContainerInfo.UniqueKeyContainerName);
-            }
-
-            if (certificate.GetRSAPrivateKey() is RSACng cng)
-            {
-                return Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                    "Microsoft", "Crypto", "Keys",
-                    cng.Key.UniqueName);
-            }
+                RSACng cng => cng.Key.UniqueName,
+                RSACryptoServiceProvider csp => csp.CspKeyContainerInfo.UniqueKeyContainerName,
+                _ => null
+            };
         }
         catch (CryptographicException)
         {
+            return null;
         }
 
-        return null;
+        if (string.IsNullOrEmpty(uniqueName))
+            return null;
+
+        // A key surfaced as RSACng may still physically live in the legacy CAPI
+        // MachineKeys folder (and vice versa), so probe both locations and return
+        // whichever file actually exists.
+        string commonAppData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+        string[] candidates =
+        {
+            Path.Combine(commonAppData, "Microsoft", "Crypto", "Keys", uniqueName),
+            Path.Combine(commonAppData, "Microsoft", "Crypto", "RSA", "MachineKeys", uniqueName),
+        };
+
+        return Array.Find(candidates, File.Exists);
     }
 
     private static void RemoveCertificate(string thumbprint)
