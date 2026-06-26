@@ -1,5 +1,10 @@
 # CLAUDE.md
 
+> **Read [`AGENTS.md`](AGENTS.md) first.** It is the primary operating guide for this repo
+> (build/run, runtime flags, conventions, and the documentation discipline). Feature-level
+> reference docs live under [`documentation/`](documentation/README.md) and **must be kept up
+> to date** when you change behavior — see the documentation system rules in `AGENTS.md`.
+
 ## Project Overview
 
 **TeslaPC** is a Windows remote desktop streaming application built with .NET 6.0 and C#. It streams screen content, system audio, and accepts mouse/keyboard input through a web-based interface accessible via any browser.

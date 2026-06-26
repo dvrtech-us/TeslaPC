@@ -1,0 +1,29 @@
+# HTTPS Bootstrap — Behavior Baseline
+
+Known-good invariants. Update only when intended behavior changes.
+
+## Invariants
+
+- The http.sys AppId is exactly `{A253521A-C31E-457C-AADD-C0E42A87EA0F}` and is identical in `SslCertificateBootstrap.cs` and `bindSSLCert.bat` — the two paths are interchangeable.
+- `TeslaPC Dev Cert` is the **sole** lookup key for finding, reusing, and cleaning up certificates; changing it orphans existing certs.
+- `RemoveBrokenCertificates()` always runs **before** `GetOrCreateCertificate()` — certs with inaccessible private keys are pruned before reuse is attempted.
+- A cert is reused only if it satisfies all of: friendly name matches, `NotAfter > UtcNow`, `HasPrivateKey`, and `GetRSAPrivateKey() != null`.
+- `IsCertificateBound()` is checked before binding; if the bound hash already matches, no rebind occurs and it returns `true`.
+- The binding is always to `0.0.0.0:8443`.
+- Private-key ACLs **must** grant Read to `NETWORK SERVICE`, `SYSTEM`, and `LOCAL SERVICE`; http.sys runs as `NETWORK SERVICE` and cannot load the cert otherwise.
+- On bind failure, the cert is removed, regenerated, and the prepare+bind sequence is retried once.
+
+## Certificate Defaults
+
+- Subject `CN=TeslaPC`; SANs `localhost`, `TeslaPC`; store `LocalMachine\My`; 5-year validity; `Exportable` key.
+- Generated via `New-SelfSignedCertificate` in PowerShell (`-EncodedCommand`), 30 000 ms timeout; thumbprint matched with `(?i)\b([0-9A-F]{40})\b`.
+
+## Enablement / Privilege
+
+- Runs only when `--localhost` is **not** set and the process is elevated.
+- Non-admin returns `false`; the server then runs HTTP-only (no HTTPS prefix bound).
+
+## Known Divergence (documented, not a bug)
+
+- `bindSSLCert.bat` cleans bindings on ports `8443`, `8444`, `8445`; the C# path cleans only `8443` (the extra ports are historical).
+- The batch file omits an explicit `-Subject`; the C# path sets `-Subject 'CN=TeslaPC'`.
