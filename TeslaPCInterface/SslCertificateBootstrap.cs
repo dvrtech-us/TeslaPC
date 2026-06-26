@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.AccessControl;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Security.Principal;
 using System.Text.RegularExpressions;
@@ -27,6 +29,8 @@ internal static class SslCertificateBootstrap
         EnsureUrlReservation($"http://+:{httpPort}/");
         EnsureUrlReservation($"https://+:{httpsPort}/");
 
+        RemoveBrokenCertificates();
+
         var cert = GetOrCreateCertificate();
         if (cert == null)
         {
@@ -38,18 +42,24 @@ internal static class SslCertificateBootstrap
         if (IsCertificateBound(httpsPort, thumbprint))
         {
             Console.WriteLine($"[SSL] HTTPS already configured on port {httpsPort}.");
+            cert.Dispose();
             return true;
         }
 
+        PrepareCertificateForHttpSys(cert, thumbprint);
         RemoveSslBinding(httpsPort);
+
         if (TryBindCertificate(httpsPort, thumbprint))
         {
             LogHttpsReady(httpsPort, thumbprint);
+            cert.Dispose();
             return true;
         }
 
-        Console.WriteLine("[SSL] Certificate bind failed; recreating certificate with http.sys-compatible key...");
+        Console.WriteLine("[SSL] Certificate bind failed; recreating development certificate...");
         RemoveCertificate(thumbprint);
+        cert.Dispose();
+
         cert = CreateSelfSignedCertificate();
         if (cert == null)
         {
@@ -58,16 +68,18 @@ internal static class SslCertificateBootstrap
         }
 
         thumbprint = NormalizeThumbprint(cert.Thumbprint);
-        GrantHttpSysPrivateKeyAccess(thumbprint);
+        PrepareCertificateForHttpSys(cert, thumbprint);
         RemoveSslBinding(httpsPort);
 
         if (!TryBindCertificate(httpsPort, thumbprint))
         {
             Console.WriteLine($"[SSL] Failed to bind certificate to port {httpsPort}.");
+            cert.Dispose();
             return false;
         }
 
         LogHttpsReady(httpsPort, thumbprint);
+        cert.Dispose();
         return true;
     }
 
@@ -84,6 +96,31 @@ internal static class SslCertificateBootstrap
         return principal.IsInRole(WindowsBuiltInRole.Administrator);
     }
 
+    private static void RemoveBrokenCertificates()
+    {
+        try
+        {
+            using var store = new X509Store(StoreName.My, StoreLocation.LocalMachine);
+            store.Open(OpenFlags.ReadWrite);
+
+            foreach (var candidate in store.Certificates)
+            {
+                if (candidate.FriendlyName != CertFriendlyName)
+                    continue;
+
+                if (!HasAccessiblePrivateKey(candidate))
+                {
+                    Console.WriteLine($"[SSL] Removing broken certificate {NormalizeThumbprint(candidate.Thumbprint)}.");
+                    store.Remove(candidate);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[SSL] Warning: certificate cleanup failed: {ex.Message}");
+        }
+    }
+
     private static X509Certificate2? GetOrCreateCertificate()
     {
         try
@@ -91,16 +128,18 @@ internal static class SslCertificateBootstrap
             using var store = new X509Store(StoreName.My, StoreLocation.LocalMachine);
             store.Open(OpenFlags.ReadWrite);
 
-            foreach (var candidate in store.Certificates.Find(X509FindType.FindBySubjectName, "TeslaPC", validOnly: false))
+            foreach (var candidate in store.Certificates)
             {
-                if (candidate.FriendlyName == CertFriendlyName
-                    && candidate.NotAfter > DateTime.UtcNow
-                    && candidate.HasPrivateKey)
+                if (candidate.FriendlyName != CertFriendlyName
+                    || candidate.NotAfter <= DateTime.UtcNow
+                    || !candidate.HasPrivateKey
+                    || !HasAccessiblePrivateKey(candidate))
                 {
-                    Console.WriteLine("[SSL] Reusing existing TeslaPC development certificate.");
-                    GrantHttpSysPrivateKeyAccess(NormalizeThumbprint(candidate.Thumbprint));
-                    return candidate;
+                    continue;
                 }
+
+                Console.WriteLine("[SSL] Reusing existing TeslaPC development certificate.");
+                return new X509Certificate2(candidate);
             }
 
             return CreateSelfSignedCertificate();
@@ -112,22 +151,18 @@ internal static class SslCertificateBootstrap
         }
     }
 
-    /// <summary>
-    /// Uses PowerShell's New-SelfSignedCertificate so the private key is created in a form
-    /// http.sys can access. CertificateRequest + MachineKeySet alone still fails with error 1312
-    /// on many Windows installs.
-    /// </summary>
     private static X509Certificate2? CreateSelfSignedCertificate()
     {
-        var result = RunPowerShell(
+        var result = RunPowerShellScript(
+            "$ErrorActionPreference = 'Stop'; " +
             "$cert = New-SelfSignedCertificate " +
+            "-Subject 'CN=TeslaPC' " +
             "-DnsName 'localhost','TeslaPC' " +
             "-CertStoreLocation 'Cert:\\LocalMachine\\My' " +
             "-NotAfter (Get-Date).AddYears(5) " +
             $"-FriendlyName '{CertFriendlyName}' " +
-            "-KeyExportPolicy Exportable " +
-            "-KeySpec KeyExchange; " +
-            "$cert.Thumbprint");
+            "-KeyExportPolicy Exportable; " +
+            "Write-Output $cert.Thumbprint");
 
         if (result.exitCode != 0 || string.IsNullOrWhiteSpace(result.output))
         {
@@ -135,42 +170,108 @@ internal static class SslCertificateBootstrap
             return null;
         }
 
-        string thumbprint = NormalizeThumbprint(result.output.Trim());
-        GrantHttpSysPrivateKeyAccess(thumbprint);
+        string? thumbprint = TryParseThumbprint(result.output);
+        if (thumbprint == null)
+        {
+            Console.WriteLine($"[SSL] Certificate generation returned an invalid thumbprint: {result.output}");
+            return null;
+        }
 
-        using var store = new X509Store(StoreName.My, StoreLocation.LocalMachine);
-        store.Open(OpenFlags.ReadOnly);
-        var matches = store.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, validOnly: false);
-        if (matches.Count == 0)
+        var loaded = TryLoadCertificate(thumbprint);
+        if (loaded == null)
         {
             Console.WriteLine("[SSL] Certificate was created but could not be loaded from the store.");
             return null;
         }
 
         Console.WriteLine("[SSL] Generated new self-signed development certificate.");
-        return matches[0];
+        return loaded;
     }
 
-    private static void GrantHttpSysPrivateKeyAccess(string thumbprint)
+    private static void PrepareCertificateForHttpSys(X509Certificate2 certificate, string thumbprint)
     {
-        var result = RunPowerShell(
-            "$cert = Get-ChildItem -Path ('Cert:\\LocalMachine\\My\\' + '" + thumbprint + "') -ErrorAction SilentlyContinue; " +
-            "if (-not $cert) { exit 1 }; " +
-            "$rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert); " +
-            "if ($null -eq $rsa) { exit 1 }; " +
-            "if ($rsa -is [System.Security.Cryptography.RSACryptoServiceProvider]) { " +
-            "  $path = Join-Path $env:ProgramData ('Microsoft\\Crypto\\RSA\\MachineKeys\\' + $rsa.CspKeyContainerInfo.UniqueKeyContainerName); " +
-            "} elseif ($rsa -is [System.Security.Cryptography.RSACng]) { " +
-            "  $path = Join-Path $env:ProgramData ('Microsoft\\Crypto\\Keys\\' + $rsa.Key.UniqueName); " +
-            "} else { exit 0 }; " +
-            "if (Test-Path $path) { " +
-            "  icacls $path /grant 'NETWORK SERVICE:R' 'NT AUTHORITY\\SYSTEM:R' | Out-Null; " +
-            "  exit $LASTEXITCODE " +
-            "}; " +
-            "exit 0");
+        var repair = RunProcess("certutil", $"-repairstore my {thumbprint}");
+        if (repair.exitCode != 0)
+            Console.WriteLine($"[SSL] Warning: certutil repairstore failed (exit {repair.exitCode}): {repair.output}");
 
-        if (result.exitCode != 0)
-            Console.WriteLine($"[SSL] Warning: could not grant http.sys access to the certificate private key: {result.output}");
+        GrantHttpSysPrivateKeyAccess(certificate);
+    }
+
+    private static bool HasAccessiblePrivateKey(X509Certificate2 certificate)
+    {
+        try
+        {
+            return certificate.GetRSAPrivateKey() != null;
+        }
+        catch (CryptographicException)
+        {
+            return false;
+        }
+    }
+
+    private static void GrantHttpSysPrivateKeyAccess(X509Certificate2 certificate)
+    {
+        string? keyPath = TryGetPrivateKeyFilePath(certificate);
+        if (keyPath == null || !File.Exists(keyPath))
+        {
+            Console.WriteLine("[SSL] Warning: could not locate the certificate private key file.");
+            return;
+        }
+
+        try
+        {
+            var fileInfo = new FileInfo(keyPath);
+            var security = fileInfo.GetAccessControl();
+            GrantReadAccess(security, WellKnownSidType.NetworkServiceSid);
+            GrantReadAccess(security, WellKnownSidType.LocalSystemSid);
+            GrantReadAccess(security, WellKnownSidType.LocalServiceSid);
+            fileInfo.SetAccessControl(security);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[SSL] Warning: Set-Acl failed, falling back to icacls: {ex.Message}");
+            var result = RunProcess(
+                "icacls",
+                $"\"{keyPath}\" /grant \"NETWORK SERVICE:R\" \"NT AUTHORITY\\SYSTEM:R\" \"NT AUTHORITY\\LOCAL SERVICE:R\"");
+            if (result.exitCode != 0)
+                Console.WriteLine($"[SSL] Warning: could not grant http.sys access to the private key: {result.output}");
+        }
+    }
+
+    private static void GrantReadAccess(FileSecurity security, WellKnownSidType sidType)
+    {
+        var sid = new SecurityIdentifier(sidType, null);
+        security.AddAccessRule(new FileSystemAccessRule(
+            sid,
+            FileSystemRights.Read,
+            AccessControlType.Allow));
+    }
+
+    private static string? TryGetPrivateKeyFilePath(X509Certificate2 certificate)
+    {
+        try
+        {
+            if (certificate.GetRSAPrivateKey() is RSACryptoServiceProvider csp)
+            {
+                return Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                    "Microsoft", "Crypto", "RSA", "MachineKeys",
+                    csp.CspKeyContainerInfo.UniqueKeyContainerName);
+            }
+
+            if (certificate.GetRSAPrivateKey() is RSACng cng)
+            {
+                return Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                    "Microsoft", "Crypto", "Keys",
+                    cng.Key.UniqueName);
+            }
+        }
+        catch (CryptographicException)
+        {
+        }
+
+        return null;
     }
 
     private static void RemoveCertificate(string thumbprint)
@@ -226,14 +327,43 @@ internal static class SslCertificateBootstrap
     private static string NormalizeThumbprint(string thumbprint) =>
         thumbprint.Replace(" ", string.Empty, StringComparison.Ordinal).ToUpperInvariant();
 
-    private static (int exitCode, string output) RunPowerShell(string script)
+    private static string? TryParseThumbprint(string output)
+    {
+        var match = Regex.Match(output, @"(?i)\b([0-9A-F]{40})\b");
+        return match.Success ? NormalizeThumbprint(match.Groups[1].Value) : null;
+    }
+
+    private static X509Certificate2? TryLoadCertificate(string thumbprint)
+    {
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            using var store = new X509Store(StoreName.My, StoreLocation.LocalMachine);
+            store.Open(OpenFlags.ReadOnly);
+
+            var matches = store.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, validOnly: false);
+            if (matches.Count > 0)
+                return new X509Certificate2(matches[0]);
+
+            foreach (var candidate in store.Certificates)
+            {
+                if (candidate.FriendlyName == CertFriendlyName && HasAccessiblePrivateKey(candidate))
+                    return new X509Certificate2(candidate);
+            }
+
+            Thread.Sleep(200);
+        }
+
+        return null;
+    }
+
+    private static (int exitCode, string output) RunPowerShellScript(string script)
     {
         try
         {
             string encoded = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script));
             var psi = new ProcessStartInfo
             {
-                FileName = "powershell",
+                FileName = "powershell.exe",
                 Arguments = $"-NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded}",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -258,13 +388,13 @@ internal static class SslCertificateBootstrap
         }
     }
 
-    private static (int exitCode, string output) RunNetsh(string arguments)
+    private static (int exitCode, string output) RunProcess(string fileName, string arguments)
     {
         try
         {
             var psi = new ProcessStartInfo
             {
-                FileName = "netsh",
+                FileName = fileName,
                 Arguments = arguments,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -274,11 +404,11 @@ internal static class SslCertificateBootstrap
 
             using var process = Process.Start(psi);
             if (process == null)
-                return (-1, "Failed to start netsh process");
+                return (-1, $"Failed to start {fileName}");
 
             string output = process.StandardOutput.ReadToEnd();
             string error = process.StandardError.ReadToEnd();
-            process.WaitForExit(10000);
+            process.WaitForExit(30000);
 
             string combined = string.IsNullOrEmpty(error) ? output.Trim() : $"{output.Trim()} | {error.Trim()}";
             return (process.ExitCode, combined);
@@ -288,4 +418,7 @@ internal static class SslCertificateBootstrap
             return (-1, ex.Message);
         }
     }
+
+    private static (int exitCode, string output) RunNetsh(string arguments) =>
+        RunProcess("netsh", arguments);
 }
