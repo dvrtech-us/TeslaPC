@@ -18,10 +18,11 @@ Each feature has its own directory under `features/<module>/<feature-name>/` con
 | Module | Feature | Summary | Primary source |
 |--------|---------|---------|----------------|
 | server | [web-server](features/server/web-server/web-server.md) | Unified HTTP/HTTPS listener with path-based routing and startup orchestration | `WebServer.cs`, `Program.cs` |
-| server | [input-control](features/server/input-control/input-control.md) | Mouse input over the `/ws/input` WebSocket via Win32 P/Invoke | `WebServer.cs`, `Program.cs` |
+| server | [input-control](features/server/input-control/input-control.md) | Mouse (Win32 P/Invoke) and keyboard (SendKeys) over the `/ws/input` WebSocket | `WebServer.cs`, `Program.cs` |
 | streaming | [screen-capture](features/streaming/screen-capture/screen-capture.md) | MJPEG screen streaming with DXGI Desktop Duplication and GDI fallback | `ImageStreamingServer.cs`, `DxgiScreenCapture.cs`, `MjpegWriter.cs` |
 | streaming | [audio-capture](features/streaming/audio-capture/audio-capture.md) | WASAPI loopback system-audio streaming over `/ws/audio` | `AudioStreamingServer.cs`, `PCMPlayerProcessor.js` |
 | client | [web-ui](features/client/web-ui/web-ui.md) | Single-page browser client (video, audio, input) | `index.html`, `PCMPlayerProcessor.js` |
+| media | [file-browser-vlc](features/media/file-browser-vlc/file-browser-vlc.md) | Host file browser that launches videos in VLC full-screen | `WebServer.cs`, `list.html`, `play.html` |
 | infrastructure | [tesla-browser-bypass](features/infrastructure/tesla-browser-bypass/tesla-browser-bypass.md) | CGNAT secondary IP + portproxy so the Tesla in-car browser can connect | `TeslaBrowserBypass.cs` |
 | infrastructure | [firewall-bootstrap](features/infrastructure/firewall-bootstrap/firewall-bootstrap.md) | Idempotent Windows Firewall inbound rule for ports 8080/8443 | `FirewallBootstrap.cs` |
 | infrastructure | [https-bootstrap](features/infrastructure/https-bootstrap/https-bootstrap.md) | Self-signed cert generation, key ACLs, URL ACLs, and SSL binding to port 8443 | `SslCertificateBootstrap.cs`, `bindSSLCert.bat` |
