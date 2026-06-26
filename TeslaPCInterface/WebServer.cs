@@ -146,10 +146,10 @@ public class WebServer
 
     /// <summary>
     /// Routes all incoming requests by path:
-    ///   /stream       â†’ MJPEG video stream
-    ///   /ws/audio     â†’ Audio WebSocket
-    ///   /ws/* or WS   â†’ Input WebSocket (mouse/keyboard)
-    ///   everything else â†’ static file serving
+    ///   /stream       Ã¢â€ â€™ MJPEG video stream
+    ///   /ws/audio     Ã¢â€ â€™ Audio WebSocket
+    ///   /ws/* or WS   Ã¢â€ â€™ Input WebSocket (mouse/keyboard)
+    ///   everything else Ã¢â€ â€™ static file serving
     /// </summary>
     private async Task HandleRequest(HttpListenerContext context)
     {
@@ -484,160 +484,87 @@ public class WebServer
     private void handleKey(KeyData inputData)
     {
         var key = inputData.Key;
-        var keyCode = inputData.KeyCode;
-        var type = inputData.Type;
+        if (string.IsNullOrEmpty(key))
+            return;
 
-        //if the key is the same as the last key and the time between the last key and this key is less than 100ms, ignore the key
-        if (lastInputData.Key == key && (DateTime.Now - lastInputTime).TotalMilliseconds < 100)
+        // Ignore standalone modifier / lock / non-text keys so we never type their
+        // names (e.g. pressing Shift must not type "Shift"). Shifted characters
+        // already arrive composed (e.g. "A", "!").
+        switch (key)
         {
-            Console.WriteLine("Ignoring key: " + key);
+            case "Shift":
+            case "Control":
+            case "Alt":
+            case "Meta":
+            case "OS":
+            case "AltGraph":
+            case "CapsLock":
+            case "NumLock":
+            case "ScrollLock":
+            case "ContextMenu":
+            case "Fn":
+            case "FnLock":
+            case "Hyper":
+            case "Super":
+            case "Symbol":
+            case "Dead":
+            case "Process":
+            case "Unidentified":
+                return;
+        }
+
+        // Debounce repeats of the same key within 100ms.
+        if (lastInputData.Key == key && (DateTime.Now - lastInputTime).TotalMilliseconds < 100)
+            return;
+        lastInputData = inputData;
+        lastInputTime = DateTime.Now;
+
+        if (key.Length > 1)
+        {
+            // Named keys -> SendKeys tokens. Unknown named keys are ignored so we
+            // never type a literal name like "ArrowLeft".
+            string? token = key switch
+            {
+                "Backspace" => "{BACKSPACE}",
+                "Enter" => "{ENTER}",
+                "Tab" => "{TAB}",
+                "Escape" => "{ESC}",
+                "Delete" => "{DELETE}",
+                "Insert" => "{INSERT}",
+                "Home" => "{HOME}",
+                "End" => "{END}",
+                "PageUp" => "{PGUP}",
+                "PageDown" => "{PGDN}",
+                "ArrowLeft" => "{LEFT}",
+                "ArrowRight" => "{RIGHT}",
+                "ArrowUp" => "{UP}",
+                "ArrowDown" => "{DOWN}",
+                "F1" => "{F1}",
+                "F2" => "{F2}",
+                "F3" => "{F3}",
+                "F4" => "{F4}",
+                "F5" => "{F5}",
+                "F6" => "{F6}",
+                "F7" => "{F7}",
+                "F8" => "{F8}",
+                "F9" => "{F9}",
+                "F10" => "{F10}",
+                "F11" => "{F11}",
+                "F12" => "{F12}",
+                _ => null
+            };
+
+            if (token != null)
+                SendKeys.SendWait(token);
             return;
         }
-        else
-        {
-            lastInputData = inputData;
-            lastInputTime = DateTime.Now;
-        }
 
-
-        //send the key
-        if (key == "Backspace")
-        {
-            key = "{BACKSPACE}";
-
-        }
-        else if (key == "Enter")
-        {
-            key = "{ENTER}";
-        }
-        else if (key == "Tab")
-        {
-            key = "{TAB}";
-        }
-        //escape ( and )
-        else if (key == "(")
-        {
-            key = "{(}";
-        }
-        else if (key == ")")
-        {
-            key = "{)}";
-        }
-        else if (key == "{")
-        {
-            key = "{{}";
-        }
-        else if (key == "}")
-        {
-            key = "{}}";
-        }
-        else if (key == "+")
-        {
-            key = "{+}";
-        }
-        else if (key == "^")
-        {
-            key = "{^}";
-        }
-        else if (key == "%")
-        {
-            key = "{%}";
-        }
-        else if (key == "~")
-        {
-            key = "{~}";
-        }
-        else if (key == "[")
-        {
-            key = "{[}";
-        }
-        else if (key == "]")
-        {
-            key = "{]}";
-        }
-        else if (key == ":")
-        {
-            key = "{:}";
-        }
-        else if (key == "\"")
-        {
-            key = "{\"}";
-        }
-        else if (key == "'")
-        {
-            key = "{'}";
-        }
-        else if (key == "<")
-        {
-            key = "{<}";
-        }
-        else if (key == ">")
-        {
-            key = "{>}";
-        }
-        else if (key == ",")
-        {
-            key = "{,}";
-        }
-        else if (key == ".")
-        {
-            key = "{.}";
-        }
-        else if (key == "?")
-        {
-            key = "{?}";
-        }
-        else if (key == "/")
-        {
-            key = "{/}";
-        }
-        else if (key == "\\")
-        {
-            key = "{\\}";
-        }
-        else if (key == "|")
-        {
-            key = "{|}";
-        }
-        else if (key == "=")
-        {
-            key = "{=}";
-        }
-        else if (key == "-")
-        {
-            key = "{-}";
-        }
-        else if (key == "_")
-        {
-            key = "{_}";
-        }
-        else if (key == "+")
-        {
-            key = "{+}";
-        }
-        else if (key == "*")
-        {
-            key = "{*}";
-        }
-        else if (key == "&")
-        {
-            key = "{&}";
-        }
-        else if (key == "^")
-        {
-            key = "{^}";
-        }
-
-
+        // Single character: escape the characters SendKeys treats as special.
+        if ("+^%~(){}[]".Contains(key))
+            key = "{" + key + "}";
 
         SendKeys.SendWait(key);
-
-
-
-
     }
-
-
 
     public Task StopAsync()
     {

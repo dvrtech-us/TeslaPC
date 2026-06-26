@@ -23,8 +23,13 @@ Known-good invariants for remote input. Update only when intended behavior chang
 ## Keyboard
 
 - Messages containing `"key"` (`Type` = `"keyup"`/`"keypress"`) are replayed via
-  `SendKeys.SendWait` in `WebServer.handleKey`, with 100 ms same-key debounce and special-key
-  token mapping. The `keybd_event` P/Invoke is declared but not used for this.
+  `SendKeys.SendWait` in `WebServer.handleKey`, with 100 ms same-key debounce. The `keybd_event`
+  P/Invoke is declared but not used for this.
+- **Standalone modifier/lock keys (`Shift`, `Control`, `Alt`, `Meta`, `CapsLock`, etc.) are
+  never typed** — they return early. Shifted characters arrive pre-composed.
+- Named keys map to `SendKeys` tokens (arrows, Delete, Home/End, PageUp/Down, Insert, F1–F12,
+  Backspace/Enter/Tab/Escape). An unknown named key (length > 1) is dropped, never typed
+  literally. Single characters are escaped only for `+ ^ % ~ ( ) { } [ ]`.
 
 ## Not Implemented (intentional current state)
 

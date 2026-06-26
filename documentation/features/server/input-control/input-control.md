@@ -51,9 +51,19 @@ No handling exists for `"click"`, `"move"` (beyond the cursor move), right-click
 
 Messages whose JSON contains `"key"` (the client sends `Type` of `"keyup"`/`"keypress"`) are
 deserialized as `KeyData { Type, Key, KeyCode }` and replayed with `SendKeys.SendWait`.
-`handleKey` debounces repeats of the same `Key` within 100 ms, and maps special keys to
-`SendKeys` tokens (e.g. `Backspace` → `{BACKSPACE}`, `Enter` → `{ENTER}`, `Tab` → `{TAB}`, and
-escaping for `+ ^ % ~ ( ) { } [ ]` etc.).
+`handleKey` debounces repeats of the same `Key` within 100 ms. Key handling:
+
+- **Modifier / lock / non-text keys are ignored** — `Shift`, `Control`, `Alt`, `Meta`, `OS`,
+  `AltGraph`, `CapsLock`, `NumLock`, `ScrollLock`, `ContextMenu`, `Dead`, `Unidentified`, etc.
+  return without typing anything (so pressing Shift never types "Shift"). Shifted characters
+  already arrive composed (e.g. `A`, `!`).
+- **Named keys (length > 1)** map to `SendKeys` tokens: `Backspace`→`{BACKSPACE}`,
+  `Enter`→`{ENTER}`, `Tab`→`{TAB}`, `Escape`→`{ESC}`, `Delete`→`{DELETE}`, `Insert`→`{INSERT}`,
+  `Home`/`End`→`{HOME}`/`{END}`, `PageUp`/`PageDown`→`{PGUP}`/`{PGDN}`,
+  `ArrowLeft/Right/Up/Down`→`{LEFT}`/`{RIGHT}`/`{UP}`/`{DOWN}`, `F1`–`F12`→`{F1}`…`{F12}`.
+  An **unknown named key is dropped** (never typed as its literal name).
+- **Single characters** are sent as-is, except the SendKeys metacharacters `+ ^ % ~ ( ) { } [ ]`,
+  which are wrapped in `{}`.
 
 ## Key Classes
 
