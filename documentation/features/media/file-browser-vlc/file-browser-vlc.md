@@ -20,11 +20,12 @@ helpers in `WebServer.cs`.
 ### `/list.html` (file browser)
 
 - Query: `?path=<folder>` (defaults to `C:\video\` when absent).
-- `returnAllFilesAsHtmlLinks(path)` builds the markup:
-  - each file → `<a href="/play.html?FILENAME=<fullpath>">`
-  - each subfolder → `<a href="/list.html?path=<folder>">`
-  - an **Up** link to the parent (unless already at `C:\video\`), else a **Back to Screen** link.
-- The result is substituted into the `{{GUTS}}` placeholder in `list.html`.
+- `returnAllFilesAsHtmlLinks(path)` builds touch markup:
+  - a sticky `.topbar` with **Screen** (`/`), **Up** (parent, omitted at the `C:\video\` root), and the current path.
+  - a `.grid` of `.tile` cards — **folders first** (`📁`, link to `/list.html?path=<folder>`), then files (`🎬`, link to `/play.html?FILENAME=<fullpath>`, with an extension badge).
+  - an empty folder shows a `.empty` message.
+- Display names are HTML-encoded (`HttpUtility.HtmlEncode`) and query values URL-encoded (`HttpUtility.UrlEncode`), so filenames with spaces/special characters work.
+- The result is substituted into the `{{GUTS}}` placeholder in `list.html`. Styling is in the shared `style.css`.
 
 ### `/play.html` (VLC launcher)
 

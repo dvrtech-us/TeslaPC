@@ -29,7 +29,7 @@ dispatching by request path. `Program.cs` orchestrates startup of every subsyste
 | 8 | `new WebServer(imageServer, audioCapture)` | `Program.cs:59` |
 | 9 | Start `StartWebServerAsync(...)` as a background task with a `TaskCompletionSource<bool>` start signal | `Program.cs:60-61` |
 | 10 | Await the start signal with a 10-second timeout; dispose everything and exit on timeout | `Program.cs:63-74` |
-| 11 | Print listening URLs; block until `Ctrl+C` or keypress; then dispose all subsystems | `Program.cs:76-123` |
+| 11 | Print a connection banner — every usable URL (localhost, each LAN IPv4 via `GetLocalIPv4Addresses`, and the Tesla bypass IP) for HTTP and HTTPS; block until `Ctrl+C` or keypress; then dispose all subsystems | `Program.cs` |
 
 ### Listener setup (`WebServer.StartWebServerAsync`, `WebServer.cs:23`)
 
