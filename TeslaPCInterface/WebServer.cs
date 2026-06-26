@@ -497,9 +497,6 @@ public class WebServer
         }
     }
 
-    private KeyData lastInputData = new();
-    private DateTime lastInputTime = DateTime.Now;
-
     private void handleKey(KeyData inputData)
     {
         var key = inputData.Key;
@@ -531,12 +528,6 @@ public class WebServer
             case "Unidentified":
                 return;
         }
-
-        // Debounce repeats of the same key within 100ms.
-        if (lastInputData.Key == key && (DateTime.Now - lastInputTime).TotalMilliseconds < 100)
-            return;
-        lastInputData = inputData;
-        lastInputTime = DateTime.Now;
 
         if (key.Length > 1)
         {

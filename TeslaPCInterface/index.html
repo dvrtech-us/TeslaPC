@@ -285,23 +285,37 @@
 
         // Keyboard input -> /ws/input (backend handleKey replays via SendKeys).
         // The visible #fakeKeyboard input lets touch devices (e.g. the Tesla
-        // browser) summon the on-screen keyboard. keyup covers all keys
-        // (incl. Backspace/Enter/Tab); keypress covers character keys. "Type"
-        // contains "key" so the server routes these as KeyData, not mouse events.
+        // browser) summon the on-screen keyboard.
+        //
+        // Each keystroke is sent EXACTLY ONCE to avoid duplicates:
+        //   - characters come from the "input" event (fires once per character,
+        //     and works with on-screen keyboards),
+        //   - non-character keys (Enter, Backspace, arrows, F-keys, ...) come from
+        //     "keydown" (they produce no input event, or none on an empty box).
+        // "Type" contains "key" so the server routes these as KeyData, not mouse.
         var fakeKeyboard = document.getElementById('fakeKeyboard');
 
-        function sendKey(type, event) {
+        function sendKey(key, code) {
             if (mouseSocket.readyState === WebSocket.OPEN) {
-                mouseSocket.send(JSON.stringify({
-                    Type: type,
-                    Key: event.key,
-                    KeyCode: event.code
-                }));
+                mouseSocket.send(JSON.stringify({ Type: 'key', Key: key, KeyCode: code || '' }));
             }
         }
 
-        fakeKeyboard.addEventListener('keyup', function (event) { sendKey('keyup', event); fakeKeyboard.value = ''; });
-        fakeKeyboard.addEventListener('keypress', function (event) { sendKey('keypress', event); });
+        fakeKeyboard.addEventListener('input', function (event) {
+            if (event.inputType === 'insertText' && event.data) {
+                for (var i = 0; i < event.data.length; i++) sendKey(event.data[i]);
+            }
+            fakeKeyboard.value = '';
+        });
+
+        var namedKeys = ['Backspace', 'Enter', 'Tab', 'Escape', 'Delete', 'Insert',
+            'Home', 'End', 'PageUp', 'PageDown', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'];
+        fakeKeyboard.addEventListener('keydown', function (event) {
+            if (namedKeys.indexOf(event.key) !== -1 || /^F\d{1,2}$/.test(event.key)) {
+                sendKey(event.key, event.code);
+                event.preventDefault();
+            }
+        });
 
     </script>
 </body>

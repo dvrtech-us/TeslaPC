@@ -49,9 +49,11 @@ No handling exists for `"click"`, `"move"` (beyond the cursor move), right-click
 
 ### Keyboard (`WebServer.handleKey`)
 
-Messages whose JSON contains `"key"` (the client sends `Type` of `"keyup"`/`"keypress"`) are
-deserialized as `KeyData { Type, Key, KeyCode }` and replayed with `SendKeys.SendWait`.
-`handleKey` debounces repeats of the same `Key` within 100 ms. Key handling:
+Messages whose JSON contains `"key"` are deserialized as `KeyData { Type, Key, KeyCode }` and
+replayed with `SendKeys.SendWait`. The client sends **exactly one message per keystroke**
+(`Type` = `"key"`): characters via the input box's `input` event, non-character keys via
+`keydown`. `handleKey` therefore does **no** server-side debounce (legitimate fast repeats like
+"ll" are preserved). Key handling:
 
 - **Modifier / lock / non-text keys are ignored** — `Shift`, `Control`, `Alt`, `Meta`, `OS`,
   `AltGraph`, `CapsLock`, `NumLock`, `ScrollLock`, `ContextMenu`, `Dead`, `Unidentified`, etc.

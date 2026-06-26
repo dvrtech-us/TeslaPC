@@ -22,9 +22,10 @@ Known-good invariants for remote input. Update only when intended behavior chang
 
 ## Keyboard
 
-- Messages containing `"key"` (`Type` = `"keyup"`/`"keypress"`) are replayed via
-  `SendKeys.SendWait` in `WebServer.handleKey`, with 100 ms same-key debounce. The `keybd_event`
-  P/Invoke is declared but not used for this.
+- The client sends **one message per keystroke** (`Type` = `"key"`): characters from the input
+  box's `input` event, non-character keys from `keydown`. The server replays via
+  `SendKeys.SendWait` in `WebServer.handleKey` with **no debounce** (so fast repeats like "ll"
+  are preserved and nothing is double-typed). The `keybd_event` P/Invoke is declared but unused.
 - **Standalone modifier/lock keys (`Shift`, `Control`, `Alt`, `Meta`, `CapsLock`, etc.) are
   never typed** — they return early. Shifted characters arrive pre-composed.
 - Named keys map to `SendKeys` tokens (arrows, Delete, Home/End, PageUp/Down, Insert, F1–F12,
