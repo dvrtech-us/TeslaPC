@@ -2,55 +2,22 @@
 
 <head>
     <title>Remote Desktop</title>
-    <style>
-        body {
-            margin: 0;
-            padding: 0;
-            overflow: hidden;
-            background-color: #000000;
-        }
-
-
-        img {
-            max-width: 100%;
-            -webkit-user-drag: none;
-            -khtml-user-drag: none;
-            -moz-user-drag: none;
-            -o-user-drag: none;
-            user-drag: none;
-        }
-
-        .button {
-            background-color: #4CAF50;
-            /* Green */
-            border: none;
-            color: white;
-            padding: 15px 32px;
-            text-align: center;
-            text-decoration: none;
-            display: inline-block;
-            font-size: 16px;
-            margin: 4px 2px;
-            cursor: pointer;
-        }
-
-        .button:disabled {
-            background-color: #6f8f71;
-            cursor: not-allowed;
-        }
-    </style>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
 </head>
 
 <body>
 
-    <!-- MJPEG stream now served from same origin at /stream -->
-    <img title="playback" style="width: 100%" src="/stream" />
-    <br />
-    <div style="margin: 10px;"> <button onclick="startAudioPlayback()" id="startPlayback" class="button"> Start
-            playback</button>
-        <input type="text" id="fakeKeyboard" class="button" placeholder="Open Keyboard" autocomplete="off"
+    <!-- MJPEG stream served from same origin at /stream -->
+    <div class="screen">
+        <img title="playback" src="/stream" />
+    </div>
+    <div class="controlbar">
+        <button onclick="startAudioPlayback()" id="startPlayback" class="btn primary">&#9658; Start playback</button>
+        <input type="text" id="fakeKeyboard" class="btn input" placeholder="&#9000; Keyboard" autocomplete="off"
             autocorrect="off" autocapitalize="off" spellcheck="false" />
-        <button class="button" onclick="window.location.assign('/list.html')">Files (VLC)</button> </div>
+        <button class="btn" onclick="window.location.assign('/list.html')">&#128193; Files</button>
+    </div>
 
     <!-- Include the WebSocket JavaScript library -->
 

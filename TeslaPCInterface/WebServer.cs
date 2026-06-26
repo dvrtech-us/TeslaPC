@@ -351,38 +351,53 @@ public class WebServer
 
     private string returnAllFilesAsHtmlLinks(string path)
     {
-        string html = @"";
-        string[] files = Directory.GetFiles(path);
-        html += "<h1>Files in " + path + " </h1>";
-        foreach (string file in files)
+        var sb = new StringBuilder();
+        bool atRoot = path == @"C:\video\" || path == @"C:\video";
+
+        // Sticky navigation bar: Screen, Up (when not at root), and the current path.
+        sb.Append("<div class=\"topbar\">");
+        sb.Append("<a class=\"navbtn\" href=\"/\">&#8962; Screen</a>");
+        if (!atRoot)
         {
-            String displayName = file.Replace(path, "").Replace("\\", "").Replace(".", " ");
-            //remove the file extension
-            displayName = displayName.Substring(0, displayName.LastIndexOf(" "));
-            html += "<a class=\"button pad\" href='/play.html?FILENAME=" + file + "'>" + displayName + "</a><br>";
+            string parentPath = Path.GetDirectoryName(path.TrimEnd('\\')) ?? @"C:\video\";
+            sb.Append("<a class=\"navbtn\" href=\"/list.html?path=" + HttpUtility.UrlEncode(parentPath) + "\">&#8593; Up</a>");
         }
-        html += "<h1>Folders</h1>";
+        sb.Append("<span class=\"path\">" + HttpUtility.HtmlEncode(path) + "</span>");
+        sb.Append("</div>");
+
         string[] directories = Directory.GetDirectories(path);
+        string[] files = Directory.GetFiles(path);
+
+        sb.Append("<div class=\"grid\">");
+
+        // Folders first.
         foreach (string directory in directories)
         {
-            html += "<a class=\"button pad\" href='/list.html?path=" + directory + "'>" + directory + "</a><br>";
+            string name = Path.GetFileName(directory.TrimEnd('\\'));
+            sb.Append("<a class=\"tile folder\" href=\"/list.html?path=" + HttpUtility.UrlEncode(directory) + "\">");
+            sb.Append("<span class=\"ic\">&#128193;</span>");
+            sb.Append("<span class=\"nm\">" + HttpUtility.HtmlEncode(name) + "</span></a>");
         }
-        //detect if the path is the root path
-        if (path != @"C:\video\" && path != @"C:\video")
+
+        // Then files (each opens VLC on the host via /play.html).
+        foreach (string file in files)
         {
-            String parentPath = Path.GetDirectoryName(path);
-            html += """<a class="button pad" href="/list.html?path=""" + parentPath + @""">    Up to " + parentPath + " </a><br>";
+            string name = Path.GetFileNameWithoutExtension(file);
+            string ext = Path.GetExtension(file).TrimStart('.').ToUpperInvariant();
+            sb.Append("<a class=\"tile file\" href=\"/play.html?FILENAME=" + HttpUtility.UrlEncode(file) + "\">");
+            sb.Append("<span class=\"ic\">&#127916;</span>");
+            sb.Append("<span class=\"nm\">" + HttpUtility.HtmlEncode(name) + "</span>");
+            if (ext.Length > 0)
+                sb.Append("<span class=\"ext\">" + HttpUtility.HtmlEncode(ext) + "</span>");
+            sb.Append("</a>");
         }
-        else
-        {
-            html += """<a class="button pad" href="/">Back to Screen</a><br>""";
-        }
 
+        sb.Append("</div>");
 
-    
+        if (directories.Length == 0 && files.Length == 0)
+            sb.Append("<div class=\"empty\">This folder is empty.</div>");
 
-   
-        return html;
+        return sb.ToString();
     }
 
     private string getContentType(string path)

@@ -73,29 +73,60 @@ namespace PrimaryProcess
                 return;
             }
 
+            // Collect LAN IPv4 addresses (skip loopback, link-local APIPA, and the CGNAT bypass IP).
+            static List<string> GetLocalIPv4Addresses()
+            {
+                var result = new List<string>();
+                try
+                {
+                    foreach (var nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                    {
+                        if (nic.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
+                        foreach (var addr in nic.GetIPProperties().UnicastAddresses)
+                        {
+                            if (addr.Address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork) continue;
+                            string ip = addr.Address.ToString();
+                            if (ip.StartsWith("127.") || ip.StartsWith("169.254.")
+                                || ip == TeslaBrowserBypass.TeslaBrowserBypass.BypassIP) continue;
+                            if (!result.Contains(ip)) result.Add(ip);
+                        }
+                    }
+                }
+                catch { }
+                return result;
+            }
+
+            string Urls(string host) =>
+                enableHttps ? $"http://{host}:{httpPort}/   https://{host}:{httpsPort}/"
+                            : $"http://{host}:{httpPort}/";
+
+            Console.WriteLine();
+            Console.WriteLine("==================== TeslaPC ====================");
             if (localhostOnly)
             {
-                Console.WriteLine($"Unified server started on http://127.0.0.1:{httpPort} (localhost only).");
-            }
-            else if (enableHttps)
-            {
-                Console.WriteLine($"Unified server started on port {httpPort} (HTTP) / {httpsPort} (HTTPS).");
-                Console.WriteLine($"Secure UI: https://localhost:{httpsPort}/");
+                Console.WriteLine("  Running (localhost only)");
+                Console.WriteLine($"  On this PC:   http://localhost:{httpPort}/");
             }
             else
             {
-                Console.WriteLine($"Unified server started on port {httpPort} (HTTP only).");
+                Console.WriteLine($"  Running on HTTP {httpPort}" + (enableHttps ? $" / HTTPS {httpsPort}" : " (HTTP only)"));
+                Console.WriteLine("  Open a browser to any of these:");
+                Console.WriteLine($"    On this PC:   {Urls("localhost")}");
+                foreach (var ip in GetLocalIPv4Addresses())
+                    Console.WriteLine($"    Network:      {Urls(ip)}");
+                if (bypass != null)
+                    Console.WriteLine($"    Tesla browser: {Urls(TeslaBrowserBypass.TeslaBrowserBypass.BypassIP)}");
+                if (enableHttps)
+                    Console.WriteLine("  (HTTPS uses a self-signed cert; click through the browser warning.)");
             }
+            Console.WriteLine("================================================");
+            Console.WriteLine();
 
             _ = serverTask.ContinueWith(t =>
             {
                 if (t.IsFaulted && t.Exception != null)
                     Console.WriteLine($"Server error: {t.Exception.GetBaseException().Message}");
             }, TaskScheduler.Default);
-            if (bypass != null)
-            {
-                Console.WriteLine($"Tesla browser access: http://{TeslaBrowserBypass.TeslaBrowserBypass.BypassIP}:{httpPort}");
-            }
             Console.WriteLine("Press Ctrl+C to stop.");
             using var shutdown = new ManualResetEventSlim(false);
             Console.CancelKeyPress += (_, e) =>
