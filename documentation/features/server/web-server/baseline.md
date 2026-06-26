@@ -6,7 +6,7 @@ Known-good invariants for the unified HTTP/HTTPS server. Update only when intend
 
 - A **single** `HttpListener` instance serves both HTTP (8080) and HTTPS (8443).
 - HTTPS is bound **only** when `enableHttps` is true, which is the return value of `SslCertificateBootstrap.TryEnsureHttpsReady`.
-- Listener prefixes always use the strong wildcard: `http://+:{port}/` in localhost mode, `http://*:{port}/` (+ `https://*:{sslPort}/`) in network mode. Host-specific prefixes are never used.
+- Listener prefixes always use the **strong wildcard `+`** in both modes: `http://+:{port}/` (localhost mode) and `http://+:{port}/` + `https://+:{sslPort}/` (network mode). The strong wildcard is required so the listener's http.sys URL group matches the `+` URL ACL reservations from `SslCertificateBootstrap`; a weak wildcard `*` causes http.sys to reject every request with 503. Host-specific prefixes are never used.
 - The HTTP accept loop runs on a dedicated background thread named `"HttpAccept"`; each request is processed on a thread-pool thread.
 - The startup `TaskCompletionSource` is signalled immediately after the accept thread starts — before any request is served.
 - `Program.Main` aborts startup if the server does not signal ready within **10 seconds**.

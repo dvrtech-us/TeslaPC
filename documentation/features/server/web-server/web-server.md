@@ -35,7 +35,7 @@ dispatching by request path. `Program.cs` orchestrates startup of every subsyste
 
 - A single `HttpListener` (`_Listener`, `WebServer.cs:11`) handles both protocols.
 - **Localhost mode**: adds prefix `http://+:{port}/` — the strong wildcard `+` is used even for local-only binding to avoid http.sys returning 503 on host-specific registrations.
-- **Network mode**: adds `http://*:{port}/`, and `https://*:{sslPort}/` when `enableHttps` is true.
+- **Network mode**: adds `http://+:{port}/`, and `https://+:{sslPort}/` when `enableHttps` is true. The strong wildcard `+` must match the URL ACL reservations created by `SslCertificateBootstrap` (`http://+:{port}/`, `https://+:{sslPort}/`); a weak wildcard `*` registers a different http.sys URL group than the reservation and causes every request to be rejected with 503 before reaching `GetContext`.
 - `_Listener.Start()` is called; on `HttpListenerException` the error and `netsh` remediation hints are logged, the start signal is faulted, and the exception re-throws.
 - A dedicated background `Thread` named `"HttpAccept"` runs `AcceptLoop()`. The start signal (`started.TrySetResult(true)`) is set immediately after the thread starts, because http.sys returns 503 until `GetContext()` is actively dequeuing.
 - The method then parks on `await Task.Delay(Timeout.Infinite, token)` to stay alive.

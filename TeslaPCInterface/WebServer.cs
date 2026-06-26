@@ -20,17 +20,28 @@ public class WebServer
         _audioCapture = audioCapture;
     }
 
-    public async Task StartWebServerAsync(int port, int sslPort, bool localhostOnly = false, bool enableHttps = true)
+    public async Task StartWebServerAsync(
+        int port,
+        int sslPort,
+        bool localhostOnly = false,
+        bool enableHttps = true,
+        TaskCompletionSource<bool>? started = null)
     {
         if (localhostOnly)
         {
-            _Listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+            // Use strong wildcard; http.sys host-specific 127.0.0.1 registrations
+            // can reject requests before they reach GetContext (503, arrived=0).
+            _Listener.Prefixes.Add($"http://+:{port}/");
         }
         else
         {
-            _Listener.Prefixes.Add("http://*:" + port + "/");
+            // Strong wildcard (+) matches the http.sys URL ACL reservations added by
+            // SslCertificateBootstrap (http://+:port/, https://+:sslPort/). A weak
+            // wildcard (*) registers a different URL group than the reservation, so
+            // http.sys rejects every request with 503 before it reaches GetContext.
+            _Listener.Prefixes.Add($"http://+:{port}/");
             if (enableHttps)
-                _Listener.Prefixes.Add("https://*:" + sslPort + "/");
+                _Listener.Prefixes.Add($"https://+:{sslPort}/");
         }
 
         Console.WriteLine("Unified server listening on: ");
@@ -54,49 +65,80 @@ public class WebServer
                 Console.WriteLine($"  netsh http add urlacl url=https://+:{sslPort}/ user=Everyone");
                 Console.WriteLine("For local testing only, pass --localhost.");
             }
+            started?.TrySetException(ex);
             throw;
         }
 
-        try
+        // Dedicated accept thread. http.sys returns 503 until GetContext() is actively
+        // dequeuing; a delayed thread-pool start leaves the port registered but dead.
+        var acceptThread = new Thread(AcceptLoop)
         {
-            while (!_cancellationTokenSource.IsCancellationRequested)
-            {
-                try
-                {
-                    var context = await _Listener.GetContextAsync();
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            await HandleRequest(context);
-                        }
-                        catch (Exception e)
-                        {
-                            Console.WriteLine($"Request handler error: {e.Message}");
-                        }
-                    });
-                }
-                catch (HttpListenerException) when (_cancellationTokenSource.IsCancellationRequested)
-                {
-                    // Expected when Stop() is called during GetContextAsync
-                    break;
-                }
-                catch (HttpListenerException e)
-                {
-                    Console.WriteLine("StartWebServer Async While: " + e.Message);
-                    break;
-                }
-            }
-        }
-        finally
+            IsBackground = true,
+            Name = "HttpAccept"
+        };
+        acceptThread.Start();
+        started?.TrySetResult(true);
+
+        // Keep serverTask alive until shutdown cancels the accept loop.
+        await Task.Delay(Timeout.Infinite, _cancellationTokenSource.Token);
+    }
+
+    private void AcceptLoop()
+    {
+        Console.WriteLine("[HTTP] Accept loop started");
+        while (!_cancellationTokenSource.IsCancellationRequested && _Listener.IsListening)
         {
             try
             {
-                _Listener.Stop();
-                _Listener.Close();
+                var context = _Listener.GetContext();
+                ThreadPool.QueueUserWorkItem(_ => ProcessRequest(context));
+            }
+            catch (HttpListenerException) when (_cancellationTokenSource.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (ObjectDisposedException) when (_cancellationTokenSource.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[HTTP] Accept error: {ex.Message}");
+                Thread.Sleep(50);
+            }
+        }
+
+        if (!_cancellationTokenSource.IsCancellationRequested)
+            Console.WriteLine("[HTTP] Accept loop stopped unexpectedly; new requests will return 503 until restart.");
+    }
+
+    private void ProcessRequest(object? state)
+    {
+        var context = (HttpListenerContext)state!;
+        try
+        {
+            ProcessRequestAsync(context).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[HTTP] Request error ({context.Request.HttpMethod} {context.Request.Url?.LocalPath}): {ex.Message}");
+            try
+            {
+                if (context.Response.OutputStream.CanWrite)
+                {
+                    context.Response.StatusCode = 500;
+                    context.Response.Close();
+                }
             }
             catch { }
         }
+    }
+
+    private async Task ProcessRequestAsync(HttpListenerContext context)
+    {
+        string path = context.Request.Url?.LocalPath ?? "/";
+        Console.WriteLine($"[HTTP] {context.Request.HttpMethod} {path}");
+        await HandleRequest(context);
     }
 
     /// <summary>
@@ -283,7 +325,9 @@ public class WebServer
         _cancellationTokenSource.Cancel();
         try
         {
-            _Listener.Stop();
+            if (_Listener.IsListening)
+                _Listener.Stop();
+            _Listener.Close();
         }
         catch (HttpListenerException)
         {
