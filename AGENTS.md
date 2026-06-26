@@ -6,7 +6,7 @@ before making changes. For a feature-by-feature reference, start at
 
 ## What This Project Is
 
-TeslaPC is a Windows remote-desktop streaming app (.NET 6.0, C#, WinForms). A single unified
+TeslaPC is a Windows remote-desktop streaming app (.NET 10.0, C#, WinForms). A single unified
 HTTP/HTTPS server (ports `8080`/`8443`) streams the screen as MJPEG, streams system audio over
 a WebSocket, and replays mouse input — all reachable from any browser, including the Tesla
 in-car browser via a CGNAT hotspot bypass.

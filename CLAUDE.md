@@ -7,7 +7,7 @@
 
 ## Project Overview
 
-**TeslaPC** is a Windows remote desktop streaming application built with .NET 6.0 and C#. It streams screen content, system audio, and accepts mouse/keyboard input through a web-based interface accessible via any browser.
+**TeslaPC** is a Windows remote desktop streaming application built with .NET 10.0 and C#. It streams screen content, system audio, and accepts mouse/keyboard input through a web-based interface accessible via any browser.
 
 ## Architecture
 
@@ -34,14 +34,14 @@ TeslaPCInterface/
 ├── MjpegWriter.cs             # MJPEG multipart boundary encoder
 ├── index.html                 # Single-page web UI (vanilla JS, Canvas, Web Audio API)
 ├── PCMPlayerProcessor.js      # AudioWorklet processor for PCM audio playback
-├── TeslaPCInterface.csproj    # Project file (.NET 6.0, WinForms)
+├── TeslaPCInterface.csproj    # Project file (.NET 10.0, WinForms)
 ├── TeslaPCInterface.sln       # Visual Studio solution
 └── bindSSLCert.bat            # Binds SSL cert to HTTPS port 8443 (requires admin)
 ```
 
 ## Build & Run
 
-**Prerequisites**: .NET 6.0 SDK, Windows (uses Win32 APIs)
+**Prerequisites**: .NET 10.0 SDK, Windows (uses Win32 APIs)
 
 ```bash
 # Build

@@ -44,10 +44,10 @@ namespace PrimaryProcess
             }
 
             // Single unified server handles all routes:
-            //   /          → web UI (index.html)
-            //   /stream    → MJPEG video stream
-            //   /ws/input  → mouse/keyboard WebSocket
-            //   /ws/audio  → audio WebSocket
+            //   /          â†’ web UI (index.html)
+            //   /stream    â†’ MJPEG video stream
+            //   /ws/input  â†’ mouse/keyboard WebSocket
+            //   /ws/audio  â†’ audio WebSocket
             bool localhostOnly = args.Contains("--localhost");
             bool enableHttps = false;
             if (!localhostOnly)
@@ -131,25 +131,38 @@ namespace PrimaryProcess
 
 
 }
-class MousePosition
+class InputData
 {
     //{"Type":"click","X":820,"Y":45,"DisplaySize":{"width":1280,"height":720}}
     public string Type { get; set; }
+
     public int X { get; set; }
     public int Y { get; set; }
 
     public DisplaySize? DisplaySize { get; set; }
 
-    public MousePosition GetAdjusted()
+    public InputData GetAdjusted()
     {
-        if(DisplaySize == null)
+        if (DisplaySize == null)
         {
             return this;
         }
         var x = (int)((double)X / DisplaySize.width * System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width);
         var y = (int)((double)Y / DisplaySize.height * System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
-        return new MousePosition { X = x, Y = y, Type = Type };
+        return new InputData { X = x, Y = y, Type = Type };
     }
+}
+
+class KeyData
+{
+    //{"Type":"click","X":820,"Y":45,"DisplaySize":{"width":1280,"height":720}}
+    public string Type { get; set; }
+
+    public string Key { get; set; }
+
+    public string KeyCode { get; set; }
+
+
 }
 class DisplaySize
 {

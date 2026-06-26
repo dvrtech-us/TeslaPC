@@ -313,6 +313,18 @@
         img.addEventListener('mousedown', function (event) { sendMouseEvent('down', event); });
         img.addEventListener('mouseup', function (event) { sendMouseEvent('up', event); });
 
+        // Keyboard input -> /ws/input (backend handleKey replays via SendKeys).
+        // Type contains "key" so the server routes it as KeyData, not a mouse event.
+        document.addEventListener('keydown', function (event) {
+            if (mouseSocket.readyState === WebSocket.OPEN) {
+                mouseSocket.send(JSON.stringify({
+                    Type: 'keydown',
+                    Key: event.key,
+                    KeyCode: event.code
+                }));
+            }
+            event.preventDefault();
+        });
 
     </script>
 </body>
