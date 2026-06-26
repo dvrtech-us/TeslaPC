@@ -20,9 +20,14 @@ Known-good invariants for remote input. Update only when intended behavior chang
 | `up` | yes | left button up |
 | `click` | yes | none (no dedicated click handling) |
 
+## Keyboard
+
+- Messages containing `"key"` (`Type` = `"keyup"`/`"keypress"`) are replayed via
+  `SendKeys.SendWait` in `WebServer.handleKey`, with 100 ms same-key debounce and special-key
+  token mapping. The `keybd_event` P/Invoke is declared but not used for this.
+
 ## Not Implemented (intentional current state)
 
-- Keyboard input: `keybd_event` is declared but never invoked.
 - Right-click, middle-click, and scroll wheel.
 - A dedicated `click` (down+up) action.
 

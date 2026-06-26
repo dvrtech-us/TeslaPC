@@ -13,7 +13,7 @@ Known-good invariants for the browser client. Update only when intended behavior
 
 - Mouse listeners are attached to the video `<img>`: `click`, `mousemove`, `mousedown`, `mouseup`.
 - Coordinates are relative to the image's bounding rect and sent with the image's rendered size as `DisplaySize`.
-- No keyboard handling exists in the client.
+- Keyboard input is sent from a visible `#fakeKeyboard` text input via `keyup`/`keypress` over `/ws/input` (the box lets touch devices open the on-screen keyboard); it is cleared after each keyup.
 
 ## Audio Rules
 

@@ -33,7 +33,7 @@ and JS are inline; the only external module is `PCMPlayerProcessor.js` (loaded a
 - Listeners on the `<img>`: `click`, `mousemove`, `mousedown`, `mouseup`.
 - Coordinates are computed relative to `img.getBoundingClientRect()` and `parseInt`-truncated.
 - Message: `{ "Type": "click|move|down|up", "X": int, "Y": int, "DisplaySize": { "width": img.width, "height": img.height } }`.
-- No keyboard handlers; no reconnect/onclose handling on the input socket.
+- Keyboard: a visible `#fakeKeyboard` text input (so touch devices like the Tesla browser can summon the on-screen keyboard) forwards `keyup`/`keypress` as `{Type, Key, KeyCode}` over `/ws/input`; the field is cleared after each keyup. No reconnect/onclose handling on the input socket.
 
 ### Audio (`startAudioPlayback`, `index.html:86`)
 

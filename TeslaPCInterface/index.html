@@ -47,7 +47,9 @@
     <img title="playback" style="width: 100%" src="/stream" />
     <br />
     <div style="margin: 10px;"> <button onclick="startAudioPlayback()" id="startPlayback" class="button"> Start
-            playback</button> </div>
+            playback</button>
+        <input type="text" id="fakeKeyboard" class="button" placeholder="Open Keyboard" autocomplete="off"
+            autocorrect="off" autocapitalize="off" spellcheck="false" /> </div>
 
     <!-- Include the WebSocket JavaScript library -->
 
@@ -314,17 +316,24 @@
         img.addEventListener('mouseup', function (event) { sendMouseEvent('up', event); });
 
         // Keyboard input -> /ws/input (backend handleKey replays via SendKeys).
-        // Type contains "key" so the server routes it as KeyData, not a mouse event.
-        document.addEventListener('keydown', function (event) {
+        // The visible #fakeKeyboard input lets touch devices (e.g. the Tesla
+        // browser) summon the on-screen keyboard. keyup covers all keys
+        // (incl. Backspace/Enter/Tab); keypress covers character keys. "Type"
+        // contains "key" so the server routes these as KeyData, not mouse events.
+        var fakeKeyboard = document.getElementById('fakeKeyboard');
+
+        function sendKey(type, event) {
             if (mouseSocket.readyState === WebSocket.OPEN) {
                 mouseSocket.send(JSON.stringify({
-                    Type: 'keydown',
+                    Type: type,
                     Key: event.key,
                     KeyCode: event.code
                 }));
             }
-            event.preventDefault();
-        });
+        }
+
+        fakeKeyboard.addEventListener('keyup', function (event) { sendKey('keyup', event); fakeKeyboard.value = ''; });
+        fakeKeyboard.addEventListener('keypress', function (event) { sendKey('keypress', event); });
 
     </script>
 </body>

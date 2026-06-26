@@ -1,8 +1,9 @@
 # Input Control
 
-Remote mouse control delivered from the browser over a WebSocket and replayed on the host
-with Win32 P/Invoke. Keyboard input is **not implemented** today (the P/Invoke is declared
-but never called).
+Remote mouse and keyboard control delivered from the browser over a WebSocket and replayed on
+the host. Mouse uses Win32 P/Invoke (`SetCursorPos`/`mouse_event`); keyboard is replayed with
+`System.Windows.Forms.SendKeys.SendWait` via `WebServer.handleKey`. (The `keybd_event` P/Invoke
+remains declared but unused — keyboard goes through `SendKeys`, not `keybd_event`.)
 
 ## User Flow
 
@@ -44,7 +45,15 @@ but never called).
 | 2 | `Win32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0,0,0,0)` | `Type == "down"` |
 | 3 | `Win32.mouse_event(MOUSEEVENTF_LEFTUP, 0,0,0,0)` | `Type == "up"` |
 
-No handling exists for `"click"`, `"move"` (beyond the cursor move), right-click, scroll, or keyboard.
+No handling exists for `"click"`, `"move"` (beyond the cursor move), right-click, or scroll.
+
+### Keyboard (`WebServer.handleKey`)
+
+Messages whose JSON contains `"key"` (the client sends `Type` of `"keyup"`/`"keypress"`) are
+deserialized as `KeyData { Type, Key, KeyCode }` and replayed with `SendKeys.SendWait`.
+`handleKey` debounces repeats of the same `Key` within 100 ms, and maps special keys to
+`SendKeys` tokens (e.g. `Backspace` → `{BACKSPACE}`, `Enter` → `{ENTER}`, `Tab` → `{TAB}`, and
+escaping for `+ ^ % ~ ( ) { } [ ]` etc.).
 
 ## Key Classes
 
@@ -63,7 +72,7 @@ No handling exists for `"click"`, `"move"` (beyond the cursor move), right-click
 | `mouse_event(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo)` | user32 | yes |
 | `GetCursorPos(out POINT)` | user32 | declared, unused |
 | `ClientToScreen(IntPtr, ref POINT)` | user32 | declared, unused |
-| `keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo)` | user32 | declared, **unused** (no keyboard support) |
+| `keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo)` | user32 | declared, **unused** (keyboard uses `SendKeys`, not `keybd_event`) |
 
 Constants: `MOUSEEVENTF_LEFTDOWN = 0x02`, `MOUSEEVENTF_LEFTUP = 0x04`.
 
