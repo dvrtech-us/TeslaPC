@@ -57,12 +57,21 @@ namespace PrimaryProcess
             }
 
             var webServer = new WebServer(imageServer, audioCapture);
-            var serverTask = webServer.StartWebServerAsync(httpPort, httpsPort, localhostOnly, enableHttps);
-            _ = serverTask.ContinueWith(t =>
+            var serverStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var serverTask = webServer.StartWebServerAsync(httpPort, httpsPort, localhostOnly, enableHttps, serverStarted);
+
+            try
             {
-                if (t.IsFaulted && t.Exception != null)
-                    Console.WriteLine($"Server error: {t.Exception.GetBaseException().Message}");
-            }, TaskScheduler.Default);
+                await serverStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Server failed to start: {ex.GetBaseException().Message}");
+                bypass?.Dispose();
+                imageServer.Dispose();
+                audioCapture.Dispose();
+                return;
+            }
 
             if (localhostOnly)
             {
@@ -77,6 +86,12 @@ namespace PrimaryProcess
             {
                 Console.WriteLine($"Unified server started on port {httpPort} (HTTP only).");
             }
+
+            _ = serverTask.ContinueWith(t =>
+            {
+                if (t.IsFaulted && t.Exception != null)
+                    Console.WriteLine($"Server error: {t.Exception.GetBaseException().Message}");
+            }, TaskScheduler.Default);
             if (bypass != null)
             {
                 Console.WriteLine($"Tesla browser access: http://{TeslaBrowserBypass.TeslaBrowserBypass.BypassIP}:{httpPort}");

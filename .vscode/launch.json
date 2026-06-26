@@ -1,0 +1,33 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "TeslaPC (localhost)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/TeslaPCInterface/bin/Debug/net6.0-windows/TeslaPCInterface.dll",
+      "args": ["--localhost", "--no-tesla-bypass"],
+      "cwd": "${workspaceFolder}/TeslaPCInterface/bin/Debug/net6.0-windows",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "TeslaPC (full network, admin)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/TeslaPCInterface/bin/Debug/net6.0-windows/TeslaPCInterface.dll",
+      "args": ["--no-tesla-bypass"],
+      "cwd": "${workspaceFolder}/TeslaPCInterface/bin/Debug/net6.0-windows",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "Attach to TeslaPC",
+      "type": "coreclr",
+      "request": "attach",
+      "processName": "TeslaPCInterface"
+    }
+  ]
+}

@@ -12,6 +12,8 @@
     <PackageReference Include="CSCore" Version="1.2.1.2" />
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="System.Net.WebSockets" Version="4.3.0" />
+    <PackageReference Include="Vortice.Direct3D11" Version="2.4.2" />
+    <PackageReference Include="Vortice.DXGI" Version="2.4.2" />
   </ItemGroup>
 
   <ItemGroup>

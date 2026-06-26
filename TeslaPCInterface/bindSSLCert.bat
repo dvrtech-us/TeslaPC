@@ -6,7 +6,13 @@ set APPID={A253521A-C31E-457C-AADD-C0E42A87EA0F}
 
 echo Generating self-signed certificate...
 powershell -NoProfile -Command ^
-  "$cert = New-SelfSignedCertificate -DnsName 'localhost','TeslaPC' -CertStoreLocation Cert:\LocalMachine\My -NotAfter (Get-Date).AddYears(5) -FriendlyName 'TeslaPC Dev Cert'; ^
+  "$cert = New-SelfSignedCertificate -DnsName 'localhost','TeslaPC' -CertStoreLocation Cert:\LocalMachine\My -KeyExportPolicy Exportable -NotAfter (Get-Date).AddYears(5) -FriendlyName 'TeslaPC Dev Cert'; ^
+   certutil -repairstore my $cert.Thumbprint | Out-Null; ^
+   $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert); ^
+   if ($rsa -is [System.Security.Cryptography.RSACryptoServiceProvider]) { $path = Join-Path $env:ProgramData ('Microsoft\Crypto\RSA\MachineKeys\' + $rsa.CspKeyContainerInfo.UniqueKeyContainerName) } ^
+   elseif ($rsa -is [System.Security.Cryptography.RSACng]) { $path = Join-Path $env:ProgramData ('Microsoft\Crypto\Keys\' + $rsa.Key.UniqueName) } ^
+   else { $path = $null }; ^
+   if ($path) { icacls $path /grant 'NETWORK SERVICE:R' 'NT AUTHORITY\SYSTEM:R' 'NT AUTHORITY\LOCAL SERVICE:R' | Out-Null }; ^
    $cert.Thumbprint" > "%TEMP%\teslapc_thumbprint.txt"
 
 set /p THUMBPRINT=<"%TEMP%\teslapc_thumbprint.txt"

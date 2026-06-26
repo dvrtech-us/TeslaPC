@@ -28,6 +28,11 @@ namespace Streaming
         {
             _context.Response.ContentType = "multipart/x-mixed-replace; boundary=" + _boundary;
             _context.Response.StatusCode = 200;
+            _context.Response.Headers.Add("Cache-Control", "no-cache, no-store, must-revalidate");
+            _context.Response.Headers.Add("Pragma", "no-cache");
+            // Long-lived multipart body: must stream without a fixed Content-Length.
+            _context.Response.SendChunked = true;
+            _context.Response.KeepAlive = true;
         }
 
 

@@ -1,11 +1,13 @@
 
+using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Net;
-using System.Net.Sockets;
 using System.Runtime.InteropServices;
 
 namespace Streaming
 {
+
 
     /// <summary>
     /// Provides a streaming server that can be used to stream any images source
@@ -55,7 +57,12 @@ namespace Streaming
         {
             Interlocked.Increment(ref _clientCount);
             EnsureCaptureRunning();
-            ThreadPool.QueueUserWorkItem(_ => StreamToClient(ctx));
+
+            // Send MJPEG headers on the request thread. If we defer this to the
+            // thread pool, http.sys can return 503 Service Unavailable.
+            var writer = new MjpegWriter(ctx, "boundary");
+            writer.WriteHeader();
+            ThreadPool.QueueUserWorkItem(_ => StreamToClient(ctx, writer));
         }
 
         /// <summary>
@@ -93,56 +100,11 @@ namespace Streaming
             {
                 SetProcessDpiAwareness(ProcessDPIAwareness.ProcessPerMonitorDPIAware);
 
-                Size screenSize = new(System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width, System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
-
-                // Cap output resolution to the configured maximum
-                int outWidth = Math.Min(screenSize.Width, _maxWidth);
-                int outHeight = Math.Min(screenSize.Height, _maxHeight);
-                bool needsResize = outWidth != screenSize.Width || outHeight != screenSize.Height;
-
-                using Bitmap srcImage = new(screenSize.Width, screenSize.Height);
-                using Graphics srcGraphics = Graphics.FromImage(srcImage);
-
-                using Bitmap? scaledImage = needsResize ? new Bitmap(outWidth, outHeight) : null;
-                using Graphics? scaledGraphics = needsResize ? Graphics.FromImage(scaledImage!) : null;
-
-                var jpegCodec = GetJpegCodec();
-                using EncoderParameters encoderParameters = new(1);
-                encoderParameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 60L);
-
-                using var ms = new MemoryStream();
-                int lastStart = Environment.TickCount;
-
                 while (!_cancellationTokenSource.Token.IsCancellationRequested
                        && Volatile.Read(ref _clientCount) > 0)
                 {
-                    srcGraphics.CopyFromScreen(0, 0, 0, 0, screenSize);
-
-                    ms.SetLength(0);
-
-                    if (needsResize)
-                    {
-                        scaledGraphics!.DrawImage(srcImage, 0, 0, outWidth, outHeight);
-                        scaledImage!.Save(ms, jpegCodec, encoderParameters);
-                    }
-                    else
-                    {
-                        srcImage.Save(ms, jpegCodec, encoderParameters);
-                    }
-
-                    // Publish frame to all waiting clients
-                    lock (_frameLock)
-                    {
-                        _currentFrame = ms.ToArray();
-                        _frameNumber++;
-                        Monitor.PulseAll(_frameLock);
-                    }
-
-                    // Wait for the next frame
-                    int elapsed = Environment.TickCount - lastStart;
-                    lastStart = Environment.TickCount;
-                    if (elapsed < Interval)
-                        Thread.Sleep(Interval - elapsed);
+                    if (!RunCaptureSession())
+                        break;
                 }
             }
             catch (Exception e)
@@ -159,39 +121,115 @@ namespace Streaming
             }
         }
 
+        private bool RunCaptureSession()
+        {
+            using var dxgiCapture = new DxgiScreenCapture();
+            bool useDxgi = dxgiCapture.IsAvailable;
+            if (!useDxgi)
+            {
+                Console.WriteLine("[Capture] Using GDI CopyFromScreen fallback.");
+            }
+
+            Size screenSize = useDxgi
+                ? dxgiCapture.CaptureSize
+                : new Size(
+                    System.Windows.Forms.Screen.PrimaryScreen!.Bounds.Width,
+                    System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
+
+            int outWidth = Math.Min(screenSize.Width, _maxWidth);
+            int outHeight = Math.Min(screenSize.Height, _maxHeight);
+            bool needsResize = outWidth != screenSize.Width || outHeight != screenSize.Height;
+
+            using Bitmap srcImage = new(screenSize.Width, screenSize.Height, PixelFormat.Format32bppArgb);
+            using Graphics? srcGraphics = useDxgi ? null : Graphics.FromImage(srcImage);
+
+            using Bitmap? scaledImage = needsResize ? new Bitmap(outWidth, outHeight, PixelFormat.Format24bppRgb) : null;
+            using Graphics? scaledGraphics = needsResize ? Graphics.FromImage(scaledImage!) : null;
+            if (scaledGraphics != null)
+            {
+                scaledGraphics.CompositingQuality = CompositingQuality.HighSpeed;
+                scaledGraphics.InterpolationMode = InterpolationMode.Bilinear;
+                scaledGraphics.SmoothingMode = SmoothingMode.None;
+            }
+
+            var jpegCodec = GetJpegCodec();
+            using EncoderParameters encoderParameters = new(1);
+            encoderParameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 60L);
+
+            using var ms = new MemoryStream();
+            int lastStart = Environment.TickCount;
+            while (!_cancellationTokenSource.Token.IsCancellationRequested
+                   && Volatile.Read(ref _clientCount) > 0)
+            {
+                bool captured = false;
+                if (useDxgi)
+                {
+                    captured = dxgiCapture.TryCapture(srcImage);
+                }
+                else
+                {
+                    srcGraphics!.CopyFromScreen(0, 0, 0, 0, screenSize);
+                    captured = true;
+                }
+
+                if (captured)
+                {
+                    ms.SetLength(0);
+
+                    if (needsResize)
+                    {
+                        scaledGraphics!.DrawImage(srcImage, 0, 0, outWidth, outHeight);
+                        scaledImage!.Save(ms, jpegCodec, encoderParameters);
+                    }
+                    else
+                    {
+                        srcImage.Save(ms, jpegCodec, encoderParameters);
+                    }
+
+                    PublishFrame(ms);
+                }
+
+                int elapsed = Environment.TickCount - lastStart;
+                lastStart = Environment.TickCount;
+                if (elapsed < Interval)
+                    Thread.Sleep(Interval - elapsed);
+            }
+
+            return false;
+        }
+
+        private void PublishFrame(MemoryStream jpegStream)
+        {
+            byte[] frameBytes = jpegStream.ToArray();
+            lock (_frameLock)
+            {
+                _currentFrame = frameBytes;
+                _frameNumber++;
+                Monitor.PulseAll(_frameLock);
+            }
+        }
+
         /// <summary>
         /// Per-client thread that reads shared frames and writes MJPEG to the response.
+        /// Drops stale frames so slow clients always receive the latest image.
         /// </summary>
-        private void StreamToClient(HttpListenerContext ctx)
+        private void StreamToClient(HttpListenerContext ctx, MjpegWriter wr)
         {
             try
             {
-                MjpegWriter wr = new(ctx, "boundary");
-                wr.WriteHeader();
-
                 int lastFrame = 0;
                 while (!_cancellationTokenSource.Token.IsCancellationRequested)
                 {
                     byte[] frame;
+                    int frameNumber;
+                    if (!TryWaitForLatestFrame(ref lastFrame, out frame, out frameNumber))
+                        return;
+
+                    // If a newer frame arrived while we were waiting, skip this one.
                     lock (_frameLock)
                     {
-                        while (_frameNumber == lastFrame)
-                        {
-                            if (_captureThread == null || !_captureThread.IsAlive)
-                                return;
-
-                            if (!Monitor.Wait(_frameLock, 1000))
-                            {
-                                if (_captureThread == null || !_captureThread.IsAlive)
-                                    return;
-                                continue;
-                            }
-
-                            if (_cancellationTokenSource.Token.IsCancellationRequested)
-                                return;
-                        }
-                        frame = _currentFrame;
-                        lastFrame = _frameNumber;
+                        if (_frameNumber > frameNumber)
+                            continue;
                     }
 
                     wr.Write(frame);
@@ -206,6 +244,37 @@ namespace Streaming
                 Interlocked.Decrement(ref _clientCount);
                 ctx.Response.OutputStream.Close();
             }
+        }
+
+        private bool TryWaitForLatestFrame(ref int lastFrame, out byte[] frame, out int frameNumber)
+        {
+            frame = Array.Empty<byte>();
+            frameNumber = 0;
+
+            lock (_frameLock)
+            {
+                while (_frameNumber == lastFrame)
+                {
+                    if (_captureThread == null || !_captureThread.IsAlive)
+                        return false;
+
+                    if (!Monitor.Wait(_frameLock, 1000))
+                    {
+                        if (_captureThread == null || !_captureThread.IsAlive)
+                            return false;
+                        continue;
+                    }
+
+                    if (_cancellationTokenSource.Token.IsCancellationRequested)
+                        return false;
+                }
+
+                frameNumber = _frameNumber;
+                frame = _currentFrame;
+                lastFrame = frameNumber;
+            }
+
+            return true;
         }
 
 
