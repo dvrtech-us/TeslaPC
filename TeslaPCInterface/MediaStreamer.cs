@@ -134,11 +134,17 @@ public sealed class MediaStreamer : IDisposable
             if (!_playing)
                 return;
             double pos = Clamp(seconds);
+            // Keep the target just shy of the end: seeking to exactly the duration makes ffmpeg
+            // start past all frames, emit nothing, and instantly hit EOF — which would look like a
+            // failed seek and revert to the live screen.
+            if (_duration > 0 && pos > _duration - 1.0)
+                pos = Math.Max(0, _duration - 1.0);
             KillCurrent();
             if (_paused)
                 _seekBase = pos;        // resume will start here
             else
                 StartFrom(pos);
+            Console.WriteLine($"[Media] Seek to {pos:0.0}s");
         }
     }
 
