@@ -1,0 +1,9 @@
+# TeslaPC project MCP servers (loaded when working in this repo)
+
+[mcp_servers.mcp-debugger]
+command = "npx"
+args = ["-y", "@debugmcp/mcp-debugger", "stdio"]
+enabled = true
+startup_timeout_sec = 30
+tool_timeout_sec = 180
+env = { NETCOREDBG_PATH = "C:\\Users\\david\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Samsung.NetCoreDbg_Microsoft.Winget.Source_8wekyb3d8bbwe\\netcoredbg\\netcoredbg.exe" }

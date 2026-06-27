@@ -1,11 +1,13 @@
-﻿
+
+using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Net;
-using System.Net.Sockets;
 using System.Runtime.InteropServices;
 
 namespace Streaming
 {
+
 
     /// <summary>
     /// Provides a streaming server that can be used to stream any images source
@@ -14,7 +16,16 @@ namespace Streaming
     public class ImageStreamingServer : IDisposable
     {
         private readonly CancellationTokenSource _cancellationTokenSource = new();
+        private readonly int _maxWidth;
+        private readonly int _maxHeight;
         private bool _disposed = false;
+
+        // Shared capture state
+        private readonly object _frameLock = new();
+        private byte[] _currentFrame = Array.Empty<byte>();
+        private int _frameNumber;
+        private int _clientCount;
+        private Thread? _captureThread;
 
 
         /// <summary>
@@ -25,144 +36,262 @@ namespace Streaming
 
         public ImageStreamingServer(int width, int height, int fps)
         {
+            _maxWidth = width;
+            _maxHeight = height;
 
-      
             this.Interval = 1000 / fps;
 
         }
 
         /// <summary>
-        /// Gets or sets the source of images that will be streamed to the 
-        /// any connected client.
-        /// </summary>
-        public IEnumerable<Image> ImagesSource { get; set; }
-
-        /// <summary>
-        /// Gets or sets the interval in milliseconds (or the delay time) between 
+        /// Gets or sets the interval in milliseconds (or the delay time) between
         /// the each image and the other of the stream (the default is 500 milliseconds).
         /// </summary>
         public int Interval { get; set; }
 
         /// <summary>
-        /// The listener that listens for any new connections.
+        /// Handles an MJPEG stream request from the unified server.
+        /// Writes MJPEG frames to the response until the client disconnects.
         /// </summary>
-        private HttpListener? _listener;
-
-
-        /// <summary>
-        /// Starts the server to accepts any new connections on the specified port.
-        /// </summary>
-        /// <param name="port"></param>
-        public async Task Start(int port, int sslPort)
+        public void HandleStreamRequest(HttpListenerContext ctx)
         {
-            _listener = new HttpListener();
-            _listener.Prefixes.Add($"http://*:{port}/");
+            Interlocked.Increment(ref _clientCount);
+            EnsureCaptureRunning();
 
-            _listener.Prefixes.Add($"https://*:{sslPort}/");
-
-            Console.WriteLine($"Image Server started on: ");
-            foreach (var prefix in _listener.Prefixes)
-            {
-                Console.WriteLine("\t" + prefix);
-            }
-
-
-            _listener.Start();
-
-            _ = ThreadPool.QueueUserWorkItem(o =>
-            {
-                try
-                {
-                    while (_listener.IsListening && !_cancellationTokenSource.Token.IsCancellationRequested)
-                    {
-                        _ = ThreadPool.QueueUserWorkItem(c =>
-                        {
-                         
-                            writeJPEG((HttpListenerContext)c);
-
-                        }, _listener.GetContext());
-                    }
-                }
-                catch { } // suppress any exceptions
-            });
+            // Send MJPEG headers on the request thread. If we defer this to the
+            // thread pool, http.sys can return 503 Service Unavailable.
+            var writer = new MjpegWriter(ctx, "boundary");
+            writer.WriteHeader();
+            ThreadPool.QueueUserWorkItem(_ => StreamToClient(ctx, writer));
         }
-        /// <summary>
-        /// Writes the images to the client as MJPEG.
-        /// </summary>
-        /// <param name="ctx"></param>
-        private void writeJPEG(HttpListenerContext ctx)
-        {
 
+        /// <summary>
+        /// Starts the shared capture thread if it isn't already running.
+        /// </summary>
+        private void EnsureCaptureRunning()
+        {
+            lock (_frameLock)
+            {
+                if (_captureThread == null || !_captureThread.IsAlive)
+                {
+                    _captureThread = new Thread(CaptureLoop) { IsBackground = true, Name = "ScreenCapture" };
+                    _captureThread.Start();
+                }
+            }
+        }
+
+        private static ImageCodecInfo GetJpegCodec()
+        {
+            foreach (var codec in ImageCodecInfo.GetImageEncoders())
+            {
+                if (codec.MimeType == "image/jpeg")
+                    return codec;
+            }
+            throw new InvalidOperationException("JPEG codec not found");
+        }
+
+        /// <summary>
+        /// Single capture loop shared by all clients. Captures the screen,
+        /// encodes to JPEG, and notifies waiting client threads.
+        /// </summary>
+        private void CaptureLoop()
+        {
             try
             {
-       
-                // Writes the response header to the client.
-                MjpegWriter wr = new(ctx, "--boundary");
-                wr.WriteHeader();
-                SetProcessDpiAwareness( ProcessDPIAwareness.ProcessPerMonitorDPIAware);
-   
-                Size size = new(System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width, System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
+                SetProcessDpiAwareness(ProcessDPIAwareness.ProcessPerMonitorDPIAware);
 
-
-                Bitmap srcImage = new(size.Width, size.Height);
-                Graphics srcGraphics = Graphics.FromImage(srcImage);
-
-              
-      
-
-        
-                var ms = new MemoryStream();
-                int lastStart = Environment.TickCount;
-                while (true)
+                while (!_cancellationTokenSource.Token.IsCancellationRequested
+                       && Volatile.Read(ref _clientCount) > 0)
                 {
-                    srcGraphics.CopyFromScreen(0, 0, 0, 0, size);
-
-
-                    ms.SetLength(0);
-                    //set jpeg quality
-                    EncoderParameters encoderParameters = new(1);
-                    encoderParameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 60L);
-                    srcImage.Save(ms, System.Drawing.Imaging.ImageFormat.Jpeg);
-                   
-                    wr.Write(ms);
-                    if(_cancellationTokenSource.Token.IsCancellationRequested)
-                    {
+                    if (!RunCaptureSession())
                         break;
-                    }
-                    //wait for the next frame
-                    int elapsed = Environment.TickCount - lastStart;
-                    lastStart = Environment.TickCount;
-                    if (elapsed < Interval)
-                    Thread.Sleep(Interval - elapsed );
-                   
                 }
             }
             catch (Exception e)
             {
-                Console.WriteLine(e.Message);
+                Console.WriteLine($"Capture loop error: {e.Message}");
             }
             finally
             {
+                lock (_frameLock)
+                {
+                    _captureThread = null;
+                    Monitor.PulseAll(_frameLock);
+                }
+            }
+        }
+
+        private bool RunCaptureSession()
+        {
+            using var dxgiCapture = new DxgiScreenCapture();
+            bool useDxgi = dxgiCapture.IsAvailable;
+            if (!useDxgi)
+            {
+                Console.WriteLine("[Capture] Using GDI CopyFromScreen fallback.");
+            }
+
+            Size screenSize = useDxgi
+                ? dxgiCapture.CaptureSize
+                : new Size(
+                    System.Windows.Forms.Screen.PrimaryScreen!.Bounds.Width,
+                    System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
+
+            int outWidth = Math.Min(screenSize.Width, _maxWidth);
+            int outHeight = Math.Min(screenSize.Height, _maxHeight);
+            bool needsResize = outWidth != screenSize.Width || outHeight != screenSize.Height;
+
+            using Bitmap srcImage = new(screenSize.Width, screenSize.Height, PixelFormat.Format32bppArgb);
+            using Graphics? srcGraphics = useDxgi ? null : Graphics.FromImage(srcImage);
+
+            using Bitmap? scaledImage = needsResize ? new Bitmap(outWidth, outHeight, PixelFormat.Format24bppRgb) : null;
+            using Graphics? scaledGraphics = needsResize ? Graphics.FromImage(scaledImage!) : null;
+            if (scaledGraphics != null)
+            {
+                scaledGraphics.CompositingQuality = CompositingQuality.HighSpeed;
+                scaledGraphics.InterpolationMode = InterpolationMode.Bilinear;
+                scaledGraphics.SmoothingMode = SmoothingMode.None;
+            }
+
+            var jpegCodec = GetJpegCodec();
+            using EncoderParameters encoderParameters = new(1);
+            encoderParameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 60L);
+
+            using var ms = new MemoryStream();
+            int lastStart = Environment.TickCount;
+            while (!_cancellationTokenSource.Token.IsCancellationRequested
+                   && Volatile.Read(ref _clientCount) > 0)
+            {
+                bool captured = false;
+                if (useDxgi)
+                {
+                    captured = dxgiCapture.TryCapture(srcImage);
+                }
+                else
+                {
+                    srcGraphics!.CopyFromScreen(0, 0, 0, 0, screenSize);
+                    captured = true;
+                }
+
+                if (captured)
+                {
+                    ms.SetLength(0);
+
+                    if (needsResize)
+                    {
+                        scaledGraphics!.DrawImage(srcImage, 0, 0, outWidth, outHeight);
+                        scaledImage!.Save(ms, jpegCodec, encoderParameters);
+                    }
+                    else
+                    {
+                        srcImage.Save(ms, jpegCodec, encoderParameters);
+                    }
+
+                    PublishFrame(ms);
+                }
+
+                int elapsed = Environment.TickCount - lastStart;
+                lastStart = Environment.TickCount;
+                if (elapsed < Interval)
+                    Thread.Sleep(Interval - elapsed);
+            }
+
+            return false;
+        }
+
+        private void PublishFrame(MemoryStream jpegStream)
+        {
+            byte[] frameBytes = jpegStream.ToArray();
+            lock (_frameLock)
+            {
+                _currentFrame = frameBytes;
+                _frameNumber++;
+                Monitor.PulseAll(_frameLock);
+            }
+        }
+
+        /// <summary>
+        /// Per-client thread that reads shared frames and writes MJPEG to the response.
+        /// Drops stale frames so slow clients always receive the latest image.
+        /// </summary>
+        private void StreamToClient(HttpListenerContext ctx, MjpegWriter wr)
+        {
+            try
+            {
+                int lastFrame = 0;
+                while (!_cancellationTokenSource.Token.IsCancellationRequested)
+                {
+                    byte[] frame;
+                    int frameNumber;
+                    if (!TryWaitForLatestFrame(ref lastFrame, out frame, out frameNumber))
+                        return;
+
+                    // If a newer frame arrived while we were waiting, skip this one.
+                    lock (_frameLock)
+                    {
+                        if (_frameNumber > frameNumber)
+                            continue;
+                    }
+
+                    wr.Write(frame);
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"Stream client error: {e.Message}");
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _clientCount);
                 ctx.Response.OutputStream.Close();
             }
         }
 
-      
+        private bool TryWaitForLatestFrame(ref int lastFrame, out byte[] frame, out int frameNumber)
+        {
+            frame = Array.Empty<byte>();
+            frameNumber = 0;
+
+            lock (_frameLock)
+            {
+                while (_frameNumber == lastFrame)
+                {
+                    if (_captureThread == null || !_captureThread.IsAlive)
+                        return false;
+
+                    if (!Monitor.Wait(_frameLock, 1000))
+                    {
+                        if (_captureThread == null || !_captureThread.IsAlive)
+                            return false;
+                        continue;
+                    }
+
+                    if (_cancellationTokenSource.Token.IsCancellationRequested)
+                        return false;
+                }
+
+                frameNumber = _frameNumber;
+                frame = _currentFrame;
+                lastFrame = frameNumber;
+            }
+
+            return true;
+        }
+
+
         public void Stop()
         {
-
-
             try
             {
                 _cancellationTokenSource.Cancel();
+                // Wake any waiting client threads so they can exit
+                lock (_frameLock)
+                {
+                    Monitor.PulseAll(_frameLock);
+                }
             }
             finally
             {
-
-
-
             }
-
         }
 
         private enum ProcessDPIAwareness
@@ -183,14 +312,9 @@ namespace Streaming
             {
                 if (disposing)
                 {
-                    // Dispose managed resources
+                    Stop();
                     _cancellationTokenSource.Dispose();
-                    _listener?.Stop();
-                    _listener?.Close();
-
                 }
-
-                // Dispose unmanaged resources
 
                 _disposed = true;
             }
@@ -204,12 +328,4 @@ namespace Streaming
 
 
     }
-
-
-    /// <summary>
-    /// Provides a way to capture the screen and stream it to the client.
-    /// </summary>
-
-
-
 }

@@ -2,310 +2,343 @@
 
 <head>
     <title>Remote Desktop</title>
-
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <link rel="stylesheet" type="text/css" href="/style.css" />
 </head>
 
 <body>
 
-    <img title="playback" style="width: 100%" src="http://LOCALHOST:8081" />
-    <br />
-    <!-- <div style="margin: 10px;"> <button onclick="startAudioPlayback()" id="startPlayback" class="button"> Start
-            playback</button> </div>
-
-     Include the WebSocket JavaScript library -->
-
-    <div style="margin: 10px; width: 100%">
-
-        <input type="text" id="fakeKeyboard" class="button" placeholder="Open Keyboard" /> <button class="button"
-                                                                                                   onclick="focus()">
-            Close Keyboard
-        </button>
-
-
-        <button class="button pad"
-                onclick="window.location.assign('http://LOCALHOST:8080/list.html')">
-           Play Video
-        </button>
+    <!-- MJPEG stream served from same origin at /stream -->
+    <div class="screen">
+        <img title="playback" src="/stream" />
     </div>
+    <div class="controlbar">
+        <button onclick="startAudioPlayback()" id="startPlayback" class="btn primary">&#9658; Start playback</button>
+        <input type="text" id="fakeKeyboard" class="btn input" placeholder="&#9000; Keyboard" autocomplete="off"
+            autocorrect="off" autocapitalize="off" spellcheck="false" />
+        <button class="btn" onclick="window.location.assign('/list.html')">&#128193; Files</button>
+    </div>
+
+    <!-- Include the WebSocket JavaScript library -->
+
+
 
 
     <script>
 
-        let audioContext = null
-        let audioSocket = null;
-        var audioSource = null;
-        let pcmPlayerNode = null;
+        // Build same-origin WebSocket URL
+        function getWsUrl(path) {
+            var protocol = (location.protocol === 'https:') ? 'wss://' : 'ws://';
+            return protocol + location.host + path;
+        }
 
-        async function startAudioPlaybackold() {
-            if (audioContext != null) {
+        let audioContext = null;
+        let audioSocket = null;
+        let pcmPlayerNode = null;
+        let audioFormat = null;
+        let useWorklet = true; // will be set to false if AudioWorklet fails
+        let scheduledTime = 0; // for fallback buffer scheduling
+        let audioConnecting = false;
+
+        function setPlaybackButtonState(connecting, label) {
+            var button = document.getElementById('startPlayback');
+            button.disabled = connecting;
+            if (label) {
+                button.innerHTML = label;
+            }
+        }
+
+        function resetAudioConnection() {
+            audioConnecting = false;
+            setPlaybackButtonState(false, audioContext ? 'Restart playback' : 'Start playback');
+        }
+
+        async function startAudioPlayback() {
+            if (audioConnecting) {
                 return;
             }
-            console.log('Before AudioContext start');
 
-            audioContext = new AudioContext({ sampleRate: 48000, channels: 2, latencyHint: 'interactive' });
-            console.log('After AudioContext start');
-
-            await audioContext.audioWorklet.addModule('PCMPlayerProcessor.js');
-            console.log("starting audioContext");
-            var pcmPlayerNode = new AudioWorkletNode(audioContext, 'pcm-player-processor', { outputChannelCount: [2] });
-            var audioSocket = new WebSocket('ws://LOCALHOST:8082/');
-            audioSocket.binaryType = 'arraybuffer'
-            pcmPlayerNode.connect(audioContext.destination);
-            audioSocket.onmessage = function (event) {
-
-
-                pcmPlayerNode.port.postMessage(event.data);
-            };
-            audioContext.resume();
-            console.log('after AudioContext resume');
-            var startPlaybackButton = document.getElementById('startPlayback');
-            //change the button text
-            startPlaybackButton.innerHTML = 'Restart playback';
-
-
-
-        }
-        var totalDuration = 0;
-        async function startAudioPlayback() {
-            if (audioContext == null) {
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                audioSource = audioContext.createBufferSource();
-                audioSocket = new WebSocket('ws://LOCALHOST:8082/');
-                audioSocket.binaryType = 'arraybuffer';
-                audioSocket.onmessage = function (event) {
-                    var audioData = new Float32Array(event.data);
-                    var buffer = audioContext.createBuffer(1, audioData.length, audioContext.sampleRate);
-                    buffer.copyToChannel(audioData, 0);
-                    var source = audioContext.createBufferSource();
-                    source.buffer = buffer;
-                    source.connect(audioContext.destination);
-                    source.start(totalDuration); // Schedule to play after previous buffer
-                    totalDuration += buffer.duration; // Update total duration
-                };
+            if (audioContext != null) {
+                if (audioSocket) audioSocket.close();
+                if (audioContext) audioContext.close();
+                audioContext = null;
+                audioSocket = null;
+                pcmPlayerNode = null;
+                audioFormat = null;
+                useWorklet = true;
+                scheduledTime = 0;
             }
+
+            audioConnecting = true;
+            setPlaybackButtonState(true, 'Connecting...');
+
+            audioSocket = new WebSocket(getWsUrl('/ws/audio'));
+            audioSocket.binaryType = 'arraybuffer';
+
+            audioSocket.onclose = function () {
+                resetAudioConnection();
+            };
+
+            audioSocket.onerror = function (event) {
+                console.error('Audio WebSocket error:', event);
+                resetAudioConnection();
+            };
+
+            audioSocket.onmessage = async function (event) {
+                // First message is text with format metadata
+                if (typeof event.data === 'string') {
+                    audioFormat = JSON.parse(event.data);
+                    console.log('Audio format:', audioFormat);
+
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                        sampleRate: audioFormat.sampleRate,
+                        latencyHint: 'interactive'
+                    });
+
+                    if (audioContext.sampleRate !== audioFormat.sampleRate) {
+                        console.warn(
+                            'Browser audio rate is ' + audioContext.sampleRate +
+                            'Hz, server rate is ' + audioFormat.sampleRate + 'Hz; resampling enabled'
+                        );
+                    }
+
+                    try {
+                        await audioContext.audioWorklet.addModule('PCMPlayerProcessor.js');
+                        pcmPlayerNode = new AudioWorkletNode(audioContext, 'pcm-player-processor', {
+                            outputChannelCount: [audioFormat.channels],
+                            processorOptions: {
+                                channels: audioFormat.channels,
+                                bitsPerSample: audioFormat.bitsPerSample,
+                                sampleFormat: audioFormat.sampleFormat || (audioFormat.bitsPerSample === 16 ? 'pcm16' : 'float'),
+                                sourceSampleRate: audioFormat.sampleRate
+                            }
+                        });
+                        pcmPlayerNode.connect(audioContext.destination);
+                        useWorklet = true;
+                        console.log('Audio: using AudioWorklet');
+                    } catch (e) {
+                        console.warn('AudioWorklet not available, using fallback:', e);
+                        useWorklet = false;
+                        scheduledTime = 0;
+                    }
+
+                    await audioContext.resume();
+
+                    audioConnecting = false;
+                    setPlaybackButtonState(false, 'Restart playback');
+                    console.log('Audio playback started');
+                    return;
+                }
+
+                // Subsequent messages are binary audio data
+                if (!audioFormat || !audioContext) return;
+
+                if (useWorklet && pcmPlayerNode) {
+                    // Primary path: AudioWorklet
+                    pcmPlayerNode.port.postMessage(event.data);
+                } else {
+                    // Fallback path: decode PCM and schedule AudioBufferSourceNodes
+                    playPcmChunkFallback(event.data);
+                }
+            };
+
+        }
+
+        function decodePcmToFloat32(arrayBuffer, format) {
+            var sampleFormat = format.sampleFormat || (format.bitsPerSample === 16 ? 'pcm16' : 'float');
+
+            if (sampleFormat === 'float') {
+                return new Float32Array(arrayBuffer);
+            }
+
+            if (sampleFormat === 'pcm16') {
+                var int16 = new Int16Array(arrayBuffer);
+                var pcm16 = new Float32Array(int16.length);
+                for (var i = 0; i < int16.length; i++) {
+                    pcm16[i] = int16[i] / 32768.0;
+                }
+                return pcm16;
+            }
+
+            if (sampleFormat === 'pcm24') {
+                var bytes = new Uint8Array(arrayBuffer);
+                var sampleCount = Math.floor(bytes.length / 3);
+                var pcm24 = new Float32Array(sampleCount);
+                for (var j = 0; j < sampleCount; j++) {
+                    var val = bytes[j * 3] | (bytes[j * 3 + 1] << 8) | (bytes[j * 3 + 2] << 16);
+                    if (val & 0x800000) {
+                        val |= 0xFF000000;
+                    }
+                    pcm24[j] = val / 8388608.0;
+                }
+                return pcm24;
+            }
+
+            if (sampleFormat === 'pcm32') {
+                var int32 = new Int32Array(arrayBuffer);
+                var pcm32 = new Float32Array(int32.length);
+                for (var k = 0; k < int32.length; k++) {
+                    pcm32[k] = int32[k] / 2147483648.0;
+                }
+                return pcm32;
+            }
+
+            return new Float32Array(arrayBuffer);
+        }
+
+        function resampleFloat32(floatSamples, channels, sourceRate, targetRate) {
+            if (sourceRate === targetRate) {
+                return floatSamples;
+            }
+
+            var sourceFrames = Math.floor(floatSamples.length / channels);
+            if (sourceFrames === 0) {
+                return floatSamples;
+            }
+
+            var targetFrames = Math.max(1, Math.floor(sourceFrames * targetRate / sourceRate));
+            var result = new Float32Array(targetFrames * channels);
+            var ratio = sourceRate / targetRate;
+
+            for (var outFrame = 0; outFrame < targetFrames; outFrame++) {
+                var srcPos = outFrame * ratio;
+                var srcFrame = Math.floor(srcPos);
+                var frac = srcPos - srcFrame;
+                var nextFrame = Math.min(srcFrame + 1, sourceFrames - 1);
+
+                for (var ch = 0; ch < channels; ch++) {
+                    var s0 = floatSamples[srcFrame * channels + ch];
+                    var s1 = floatSamples[nextFrame * channels + ch];
+                    result[outFrame * channels + ch] = s0 + (s1 - s0) * frac;
+                }
+            }
+
+            return result;
+        }
+
+        /**
+         * Fallback audio playback: manually decode PCM data into AudioBuffers
+         * and schedule them for gapless playback. Works on any browser with
+         * Web Audio API (no AudioWorklet needed).
+         */
+        function playPcmChunkFallback(rawData) {
+            var arrayBuffer = rawData instanceof ArrayBuffer ? rawData : rawData.buffer;
+            var channels = audioFormat.channels;
+            var sourceRate = audioFormat.sampleRate;
+            var playbackRate = audioContext.sampleRate;
+
+            var floatSamples = decodePcmToFloat32(arrayBuffer, audioFormat);
+            floatSamples = resampleFloat32(floatSamples, channels, sourceRate, playbackRate);
+
+            var framesCount = Math.floor(floatSamples.length / channels);
+            if (framesCount === 0) return;
+
+            var audioBuffer = audioContext.createBuffer(channels, framesCount, playbackRate);
+            for (var ch = 0; ch < channels; ch++) {
+                var channelData = audioBuffer.getChannelData(ch);
+                for (var frame = 0; frame < framesCount; frame++) {
+                    channelData[frame] = floatSamples[frame * channels + ch];
+                }
+            }
+
+            // Schedule for gapless playback
+            var source = audioContext.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(audioContext.destination);
+
+            var currentTime = audioContext.currentTime;
+            if (scheduledTime < currentTime) {
+                // We've fallen behind — schedule slightly in the future to avoid glitches
+                scheduledTime = currentTime + 0.02;
+            }
+            source.start(scheduledTime);
+            scheduledTime += audioBuffer.duration;
         }
 
 
-        // Create a WebSocket connection
-        var mouseSocket = new WebSocket('ws://LOCALHOST:8080/ws/');
+        // Input WebSocket — same origin
+        var mouseSocket = new WebSocket(getWsUrl('/ws/input'));
 
         // Get the image element
         var img = document.querySelector('img');
 
-        function sendOrReopenAndSend(data) {
-            if (mouseSocket.readyState === WebSocket.OPEN) {
-                mouseSocket.send(data);
-            } else {
-                console.log('Reopening socket');
-                console.log(data);
-                mouseSocket = new WebSocket('ws://LOCALHOST:8080/ws/');
-                mouseSocket.onopen = function () {
+        // Map a viewport point to host-screen coords. The stream is letterboxed inside the element
+        // (object-fit: contain), so use the frame's natural aspect ratio to find the real video
+        // rectangle; returns null for points in the black bars.
+        function mapPoint(clientX, clientY) {
+            var rect = img.getBoundingClientRect();
+            var natW = img.naturalWidth || rect.width;
+            var natH = img.naturalHeight || rect.height;
+            var scale = Math.min(rect.width / natW, rect.height / natH);
+            var dispW = natW * scale, dispH = natH * scale;
+            var offX = (rect.width - dispW) / 2, offY = (rect.height - dispH) / 2;
+            var x = clientX - rect.left - offX;
+            var y = clientY - rect.top - offY;
+            if (x < 0 || y < 0 || x > dispW || y > dispH) return null;
+            return { x: parseInt(x), y: parseInt(y), w: parseInt(dispW), h: parseInt(dispH) };
+        }
 
-                    mouseSocket.send(data);
-                };
+        function sendInput(type, clientX, clientY) {
+            if (mouseSocket.readyState !== WebSocket.OPEN) return;
+            var p = mapPoint(clientX, clientY);
+            if (!p) return;
+            mouseSocket.send(JSON.stringify({
+                Type: type, X: p.x, Y: p.y, DisplaySize: { width: p.w, height: p.h }
+            }));
+        }
+
+        // Mouse (desktop).
+        img.addEventListener('click', function (e) { sendInput('click', e.clientX, e.clientY); });
+        img.addEventListener('mousemove', function (e) { sendInput('move', e.clientX, e.clientY); });
+        img.addEventListener('mousedown', function (e) { sendInput('down', e.clientX, e.clientY); });
+        img.addEventListener('mouseup', function (e) { sendInput('up', e.clientX, e.clientY); });
+
+        // Touch (Tesla / tablets): map touchstart→down, touchmove→move, touchend→up to drive
+        // press-and-drag. preventDefault stops page scroll/zoom and the synthesized mouse events
+        // (so input isn't sent twice). passive:false is required for preventDefault on touchmove.
+        img.addEventListener('touchstart', function (e) {
+            var t = e.changedTouches[0]; sendInput('down', t.clientX, t.clientY); e.preventDefault();
+        }, { passive: false });
+        img.addEventListener('touchmove', function (e) {
+            var t = e.changedTouches[0]; sendInput('move', t.clientX, t.clientY); e.preventDefault();
+        }, { passive: false });
+        img.addEventListener('touchend', function (e) {
+            var t = e.changedTouches[0]; sendInput('up', t.clientX, t.clientY); e.preventDefault();
+        }, { passive: false });
+
+        // Keyboard input -> /ws/input (backend handleKey replays via SendKeys).
+        // The visible #fakeKeyboard input lets touch devices (e.g. the Tesla
+        // browser) summon the on-screen keyboard.
+        //
+        // Each keystroke is sent EXACTLY ONCE to avoid duplicates:
+        //   - characters come from the "input" event (fires once per character,
+        //     and works with on-screen keyboards),
+        //   - non-character keys (Enter, Backspace, arrows, F-keys, ...) come from
+        //     "keydown" (they produce no input event, or none on an empty box).
+        // "Type" contains "key" so the server routes these as KeyData, not mouse.
+        var fakeKeyboard = document.getElementById('fakeKeyboard');
+
+        function sendKey(key, code) {
+            if (mouseSocket.readyState === WebSocket.OPEN) {
+                mouseSocket.send(JSON.stringify({ Type: 'key', Key: key, KeyCode: code || '' }));
             }
         }
 
-        // Add an event listener for the 'click' event
-        img.addEventListener('click', function (event) {
-            // Get the click coordinates relative to the image
-            var rect = img.getBoundingClientRect();
-            var x = event.clientX - rect.left;
-            var y = event.clientY - rect.top;
-            //take into account the image size vs the actual size
-            //convert to integer
-            x = parseInt(x);
-            y = parseInt(y);
-
-            // Send these coordinates over the WebSocket connection
-            sendOrReopenAndSend(JSON.stringify({
-                Type: 'click',
-                X: x,
-                Y: y,
-                DisplaySize: {
-                    width: img.width,
-                    height: img.height
-                }
-            }));
-
+        fakeKeyboard.addEventListener('input', function (event) {
+            if (event.inputType === 'insertText' && event.data) {
+                for (var i = 0; i < event.data.length; i++) sendKey(event.data[i]);
+            }
+            fakeKeyboard.value = '';
         });
 
-        //add an event listener for the 'mousemove' event
-        img.addEventListener('mousemove', function (event) {
-
-            // Get the click coordinates relative to the image
-            var rect = img.getBoundingClientRect();
-            var x = event.clientX - rect.left;
-            var y = event.clientY - rect.top;
-            //take into account the image size vs the actual size
-            //convert to integer
-            x = parseInt(x);
-            y = parseInt(y);
-
-            // Send these coordinates over the WebSocket connection
-            sendOrReopenAndSend(JSON.stringify({
-                Type: 'move',
-                X: x,
-                Y: y,
-                DisplaySize: {
-                    width: img.width,
-                    height: img.height
-                }
-            }));
-
+        var namedKeys = ['Backspace', 'Enter', 'Tab', 'Escape', 'Delete', 'Insert',
+            'Home', 'End', 'PageUp', 'PageDown', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'];
+        fakeKeyboard.addEventListener('keydown', function (event) {
+            if (namedKeys.indexOf(event.key) !== -1 || /^F\d{1,2}$/.test(event.key)) {
+                sendKey(event.key, event.code);
+                event.preventDefault();
+            }
         });
-        //Add event for mouse down
-        img.addEventListener('mousedown', function (event) {
-            return;
-            // Get the click coordinates relative to the image
-            var rect = img.getBoundingClientRect();
-            var x = event.clientX - rect.left;
-            var y = event.clientY - rect.top;
-            //take into account the image size vs the actual size
-            //convert to integer
-            x = parseInt(x);
-            y = parseInt(y);
-
-            // Send these coordinates over the WebSocket connection
-            sendOrReopenAndSend(JSON.stringify({
-                Type: 'down',
-                X: x,
-                Y: y,
-                DisplaySize: {
-                    width: img.width,
-                    height: img.height
-                }
-            }));
-
-        });
-        //Add event for mouse up
-        img.addEventListener('mouseup', function (event) {
-
-            // Get the click coordinates relative to the image
-            var rect = img.getBoundingClientRect();
-            var x = event.clientX - rect.left;
-            var y = event.clientY - rect.top;
-            //take into account the image size vs the actual size
-            //convert to integer
-            x = parseInt(x);
-            y = parseInt(y);
-
-            // Send these coordinates over the WebSocket connection
-            sendOrReopenAndSend(JSON.stringify({
-                Type: 'up',
-                X: x,
-                Y: y,
-                DisplaySize: {
-                    width: img.width,
-                    height: img.height
-                }
-            }));
-
-        });
-
-        //handle touch events
-        img.addEventListener('touchstart', function (event) {
-            // Get the click coordinates relative to the image
-            var rect = img.getBoundingClientRect();
-            var x = event.touches[0].clientX - rect.left;
-            var y = event.touches[0].clientY - rect.top;
-            //take into account the image size vs the actual size
-            //convert to integer
-            x = parseInt(x);
-            y = parseInt(y);
-
-            // Send these coordinates over the WebSocket connection
-            sendOrReopenAndSend(JSON.stringify({
-                Type: 'down',
-                X: x,
-                Y: y,
-                DisplaySize: {
-                    width: img.width,
-                    height: img.height
-                }
-            }));
-
-        });
-
-        img.addEventListener('touchend', function (event) {
-            // Get the click coordinates relative to the image
-            var rect = img.getBoundingClientRect();
-            var x = event.changedTouches[0].clientX - rect.left;
-            var y = event.changedTouches[0].clientY - rect.top;
-            //take into account the image size vs the actual size
-            //convert to integer
-            x = parseInt(x);
-            y = parseInt(y);
-
-            // Send these coordinates over the WebSocket connection
-            sendOrReopenAndSend(JSON.stringify({
-                Type: 'up',
-                X: x,
-                Y: y,
-                DisplaySize: {
-                    width: img.width,
-                    height: img.height
-                }
-            }));
-
-        });
-
-        img.addEventListener('touchmove', function (event) {
-            // Get the click coordinates relative to the image
-            var rect = img.getBoundingClientRect();
-            var x = event.touches[0].clientX - rect.left;
-            var y = event.touches[0].clientY - rect.top;
-            //take into account the image size vs the actual size
-            //convert to integer
-            x = parseInt(x);
-            y = parseInt(y);
-
-            // Send these coordinates over the WebSocket connection
-            sendOrReopenAndSend(JSON.stringify({
-                Type: 'move',
-                X: x,
-                Y: y,
-                DisplaySize: {
-                    width: img.width,
-                    height: img.height
-                }
-            }));
-
-        });
-
-        //handle keyboard events
-        document.getElementById('fakeKeyboard').addEventListener('keyup', function (event) {
-            // Send numeric and chars
-            console.log('Key up event');
-            console.log(event);
-            sendOrReopenAndSend(JSON.stringify({
-                Type: 'keyup',
-                Key: event.key,
-                KeyCode: event.code
-            }));
-            //prevent default behavior
-            event.preventDefault();
-
-        });
-        document.getElementById('fakeKeyboard').addEventListener('keypress', function (event) {
-            // Send non-numeric
-            console.log('keypress');
-            console.log(event);
-
-            sendOrReopenAndSend(JSON.stringify({
-                Type: 'keypress',
-                Key: event.key,
-                KeyCode: event.code
-            }));
-            //prevent default behavior
-            event.preventDefault();
-
-        });
-
-
-
 
     </script>
 </body>

@@ -1,4 +1,5 @@
 using Streaming;
+using AudioStreamingServer;
 using System.Net.WebSockets;
 using System.Net;
 using System.Text.Json;
@@ -13,55 +14,166 @@ public class WebServer
 
     //serve the html file
 
+    private readonly ImageStreamingServer _imageStreamer;
+    private readonly AudioCapture _audioCapture;
 
-    public async Task StartWebServerAsync(int port, int sslPort)
+    public WebServer(ImageStreamingServer imageStreamer, AudioCapture audioCapture)
     {
+        _imageStreamer = imageStreamer;
+        _audioCapture = audioCapture;
+    }
 
-        _Listener.Prefixes.Add("http://*:" + port + "/");
-        _Listener.Prefixes.Add("https://*:" + sslPort + "/");
-        Console.WriteLine("Listening for WebSocket connections on: ");
+    public async Task StartWebServerAsync(
+        int port,
+        int sslPort,
+        bool localhostOnly = false,
+        bool enableHttps = true,
+        TaskCompletionSource<bool>? started = null)
+    {
+        if (localhostOnly)
+        {
+            // Use strong wildcard; http.sys host-specific 127.0.0.1 registrations
+            // can reject requests before they reach GetContext (503, arrived=0).
+            _Listener.Prefixes.Add($"http://+:{port}/");
+        }
+        else
+        {
+            // Strong wildcard (+) matches the http.sys URL ACL reservations added by
+            // SslCertificateBootstrap (http://+:port/, https://+:sslPort/). A weak
+            // wildcard (*) registers a different URL group than the reservation, so
+            // http.sys rejects every request with 503 before it reaches GetContext.
+            _Listener.Prefixes.Add($"http://+:{port}/");
+            if (enableHttps)
+                _Listener.Prefixes.Add($"https://+:{sslPort}/");
+        }
+
+        Console.WriteLine("Unified server listening on: ");
         foreach (var prefix in _Listener.Prefixes)
         {
             Console.WriteLine("\t" + prefix);
         }
 
-        _Listener.Start();
+        try
+        {
+            _Listener.Start();
+        }
+        catch (HttpListenerException ex)
+        {
+            Console.WriteLine($"Failed to start HTTP listener (exit {ex.ErrorCode}): {ex.Message}");
+            if (!localhostOnly)
+            {
+                Console.WriteLine("Binding to all interfaces requires administrator privileges or a URL ACL reservation.");
+                Console.WriteLine("Run as administrator, or reserve the URL with:");
+                Console.WriteLine($"  netsh http add urlacl url=http://+:{port}/ user=Everyone");
+                Console.WriteLine($"  netsh http add urlacl url=https://+:{sslPort}/ user=Everyone");
+                Console.WriteLine("For local testing only, pass --localhost.");
+            }
+            started?.TrySetException(ex);
+            throw;
+        }
 
-        while (!_cancellationTokenSource.IsCancellationRequested)
+        // Dedicated accept thread. http.sys returns 503 until GetContext() is actively
+        // dequeuing; a delayed thread-pool start leaves the port registered but dead.
+        var acceptThread = new Thread(AcceptLoop)
+        {
+            IsBackground = true,
+            Name = "HttpAccept"
+        };
+        acceptThread.Start();
+        started?.TrySetResult(true);
+
+        // Keep serverTask alive until shutdown cancels the accept loop.
+        await Task.Delay(Timeout.Infinite, _cancellationTokenSource.Token);
+    }
+
+    private void AcceptLoop()
+    {
+        Console.WriteLine("[HTTP] Accept loop started");
+        while (!_cancellationTokenSource.IsCancellationRequested && _Listener.IsListening)
         {
             try
             {
-
-
-                var context = await _Listener.GetContextAsync();
-                _ = Task.Run(async () =>
-                {
-                    if (context.Request.IsWebSocketRequest)
-                    {
-                        AcceptWebSocketAsync(context);
-                    }
-                    else
-                    {
-
-                        HandleHttpAsync(context);
-                    }
-                });
+                var context = _Listener.GetContext();
+                ThreadPool.QueueUserWorkItem(_ => ProcessRequest(context));
             }
-            catch (HttpListenerException e)
+            catch (HttpListenerException) when (_cancellationTokenSource.IsCancellationRequested)
             {
-                Console.WriteLine("StartWebServer Async While: " + e.Message);
+                break;
+            }
+            catch (ObjectDisposedException) when (_cancellationTokenSource.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[HTTP] Accept error: {ex.Message}");
+                Thread.Sleep(50);
             }
         }
 
-        //restart the server
+        if (!_cancellationTokenSource.IsCancellationRequested)
+            Console.WriteLine("[HTTP] Accept loop stopped unexpectedly; new requests will return 503 until restart.");
+    }
+
+    private void ProcessRequest(object? state)
+    {
+        var context = (HttpListenerContext)state!;
         try
         {
-            _Listener.Stop();
-            _Listener.Close();
+            ProcessRequestAsync(context).GetAwaiter().GetResult();
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[HTTP] Request error ({context.Request.HttpMethod} {context.Request.Url?.LocalPath}): {ex.Message}");
+            try
+            {
+                if (context.Response.OutputStream.CanWrite)
+                {
+                    context.Response.StatusCode = 500;
+                    context.Response.Close();
+                }
+            }
+            catch { }
+        }
+    }
 
-        _ = StartWebServerAsync(port, sslPort);
+    private async Task ProcessRequestAsync(HttpListenerContext context)
+    {
+        string path = context.Request.Url?.LocalPath ?? "/";
+        Console.WriteLine($"[HTTP] {context.Request.HttpMethod} {path}");
+        await HandleRequest(context);
+    }
+
+    /// <summary>
+    /// Routes all incoming requests by path:
+    ///   /stream       Ã¢â€ â€™ MJPEG video stream
+    ///   /ws/audio     Ã¢â€ â€™ Audio WebSocket
+    ///   /ws/* or WS   Ã¢â€ â€™ Input WebSocket (mouse/keyboard)
+    ///   everything else Ã¢â€ â€™ static file serving
+    /// </summary>
+    private async Task HandleRequest(HttpListenerContext context)
+    {
+        string path = context.Request.Url?.LocalPath ?? "/";
+
+        if (context.Request.IsWebSocketRequest)
+        {
+            if (path.StartsWith("/ws/audio", StringComparison.OrdinalIgnoreCase))
+            {
+                await _audioCapture.HandleClientAsync(context);
+            }
+            else
+            {
+                await AcceptWebSocketAsync(context);
+            }
+        }
+        else if (path.Equals("/stream", StringComparison.OrdinalIgnoreCase))
+        {
+            _imageStreamer.HandleStreamRequest(context);
+        }
+        else
+        {
+            HandleHttpAsync(context);
+        }
     }
 
     private void HandleHttpAsync(HttpListenerContext context)
@@ -74,34 +186,28 @@ public class WebServer
 
         string requestPath = request.Url.LocalPath.TrimStart('/');
 
-        if (requestPath == "stream.jpg")
-        {
-            // Writes the response header to the client.
-            MjpegWriter wr = new MjpegWriter(context, "--boundary");
-            wr.WriteHeader();
-
-
-        }
-
-
         //detect if visual studio is running in debug mode
         if (System.Diagnostics.Debugger.IsAttached)
         {
             runningInDebugMode = true;
         }
-        //if running in debug mode, serve the html file from the project directory
-        if (!runningInDebugMode)
+        if (runningInDebugMode)
         {
-            rootPath = "";
+            var location = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+            if (!string.IsNullOrEmpty(location) && location.Contains("bin"))
+            {
+                rootPath = location.Substring(0, location.LastIndexOf("bin"));
+            }
+            else
+            {
+                rootPath = location ?? AppContext.BaseDirectory;
+            }
+            Console.WriteLine("Path to html: " + rootPath);
         }
         else
         {
-            rootPath = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
-            //get the location of bin in the path
-            rootPath = rootPath.Substring(0, rootPath.LastIndexOf("bin"));
-            Console.WriteLine("Path to html: " + rootPath);
+            rootPath = AppContext.BaseDirectory;
         }
-        //if not running in debug mode, serve the html file from the directory where the executable is located
         //see if the request is for the html file
         if (request.Url.LocalPath == "/")
         {
@@ -245,38 +351,57 @@ public class WebServer
 
     private string returnAllFilesAsHtmlLinks(string path)
     {
-        string html = @"";
-        string[] files = Directory.GetFiles(path);
-        html += "<h1>Files in " + path + " </h1>";
-        foreach (string file in files)
+        var sb = new StringBuilder();
+        bool atRoot = path == @"C:\video\" || path == @"C:\video";
+
+        // Sticky navigation bar: Screen, Up (when not at root), and the current path.
+        sb.Append("<div class=\"topbar\">");
+        sb.Append("<a class=\"navbtn\" href=\"/\">&#8962; Screen</a>");
+        if (!atRoot)
         {
-            String displayName = file.Replace(path, "").Replace("\\", "").Replace(".", " ");
-            //remove the file extension
-            displayName = displayName.Substring(0, displayName.LastIndexOf(" "));
-            html += "<a class=\"button pad\" href='/play.html?FILENAME=" + file + "'>" + displayName + "</a><br>";
+            string parentPath = Path.GetDirectoryName(path.TrimEnd('\\')) ?? @"C:\video\";
+            sb.Append("<a class=\"navbtn\" href=\"/list.html?path=" + HttpUtility.UrlEncode(parentPath) + "\">&#8593; Up</a>");
         }
-        html += "<h1>Folders</h1>";
+        sb.Append("<span class=\"path\">" + HttpUtility.HtmlEncode(path) + "</span>");
+        sb.Append("</div>");
+
         string[] directories = Directory.GetDirectories(path);
+        var videoExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            { ".mp4", ".mkv", ".avi", ".mov", ".m4v", ".wmv", ".flv", ".webm", ".mpg", ".mpeg", ".ts", ".m2ts" };
+        string[] files = Directory.GetFiles(path)
+            .Where(f => videoExts.Contains(Path.GetExtension(f)))
+            .ToArray();
+
+        sb.Append("<div class=\"grid\">");
+
+        // Folders first.
         foreach (string directory in directories)
         {
-            html += "<a class=\"button pad\" href='/list.html?path=" + directory + "'>" + directory + "</a><br>";
+            string name = Path.GetFileName(directory.TrimEnd('\\'));
+            sb.Append("<a class=\"tile folder\" href=\"/list.html?path=" + HttpUtility.UrlEncode(directory) + "\">");
+            sb.Append("<span class=\"ic\">&#128193;</span>");
+            sb.Append("<span class=\"nm\">" + HttpUtility.HtmlEncode(name) + "</span></a>");
         }
-        //detect if the path is the root path
-        if (path != @"C:\video\" && path != @"C:\video")
+
+        // Then files (each opens VLC on the host via /play.html).
+        foreach (string file in files)
         {
-            String parentPath = Path.GetDirectoryName(path);
-            html += """<a class="button pad" href="/list.html?path=""" + parentPath + @""">    Up to " + parentPath + " </a><br>";
+            string name = Path.GetFileNameWithoutExtension(file);
+            string ext = Path.GetExtension(file).TrimStart('.').ToUpperInvariant();
+            sb.Append("<a class=\"tile file\" href=\"/play.html?FILENAME=" + HttpUtility.UrlEncode(file) + "\">");
+            sb.Append("<span class=\"ic\">&#127916;</span>");
+            sb.Append("<span class=\"nm\">" + HttpUtility.HtmlEncode(name) + "</span>");
+            if (ext.Length > 0)
+                sb.Append("<span class=\"ext\">" + HttpUtility.HtmlEncode(ext) + "</span>");
+            sb.Append("</a>");
         }
-        else
-        {
-            html += """<a class="button pad" href="/">Back to Screen</a><br>""";
-        }
 
+        sb.Append("</div>");
 
-    
+        if (directories.Length == 0 && files.Length == 0)
+            sb.Append("<div class=\"empty\">This folder is empty.</div>");
 
-   
-        return html;
+        return sb.ToString();
     }
 
     private string getContentType(string path)
@@ -372,172 +497,99 @@ public class WebServer
         }
     }
 
-    private KeyData lastInputData = new();
-    private DateTime lastInputTime = DateTime.Now;
-
     private void handleKey(KeyData inputData)
     {
         var key = inputData.Key;
-        var keyCode = inputData.KeyCode;
-        var type = inputData.Type;
+        if (string.IsNullOrEmpty(key))
+            return;
 
-        //if the key is the same as the last key and the time between the last key and this key is less than 100ms, ignore the key
-        if (lastInputData.Key == key && (DateTime.Now - lastInputTime).TotalMilliseconds < 100)
+        // Ignore standalone modifier / lock / non-text keys so we never type their
+        // names (e.g. pressing Shift must not type "Shift"). Shifted characters
+        // already arrive composed (e.g. "A", "!").
+        switch (key)
         {
-            Console.WriteLine("Ignoring key: " + key);
+            case "Shift":
+            case "Control":
+            case "Alt":
+            case "Meta":
+            case "OS":
+            case "AltGraph":
+            case "CapsLock":
+            case "NumLock":
+            case "ScrollLock":
+            case "ContextMenu":
+            case "Fn":
+            case "FnLock":
+            case "Hyper":
+            case "Super":
+            case "Symbol":
+            case "Dead":
+            case "Process":
+            case "Unidentified":
+                return;
+        }
+
+        if (key.Length > 1)
+        {
+            // Named keys -> SendKeys tokens. Unknown named keys are ignored so we
+            // never type a literal name like "ArrowLeft".
+            string? token = key switch
+            {
+                "Backspace" => "{BACKSPACE}",
+                "Enter" => "{ENTER}",
+                "Tab" => "{TAB}",
+                "Escape" => "{ESC}",
+                "Delete" => "{DELETE}",
+                "Insert" => "{INSERT}",
+                "Home" => "{HOME}",
+                "End" => "{END}",
+                "PageUp" => "{PGUP}",
+                "PageDown" => "{PGDN}",
+                "ArrowLeft" => "{LEFT}",
+                "ArrowRight" => "{RIGHT}",
+                "ArrowUp" => "{UP}",
+                "ArrowDown" => "{DOWN}",
+                "F1" => "{F1}",
+                "F2" => "{F2}",
+                "F3" => "{F3}",
+                "F4" => "{F4}",
+                "F5" => "{F5}",
+                "F6" => "{F6}",
+                "F7" => "{F7}",
+                "F8" => "{F8}",
+                "F9" => "{F9}",
+                "F10" => "{F10}",
+                "F11" => "{F11}",
+                "F12" => "{F12}",
+                _ => null
+            };
+
+            if (token != null)
+                SendKeys.SendWait(token);
             return;
         }
-        else
-        {
-            lastInputData = inputData;
-            lastInputTime = DateTime.Now;
-        }
 
-
-        //send the key
-        if (key == "Backspace")
-        {
-            key = "{BACKSPACE}";
-
-        }
-        else if (key == "Enter")
-        {
-            key = "{ENTER}";
-        }
-        else if (key == "Tab")
-        {
-            key = "{TAB}";
-        }
-        //escape ( and )
-        else if (key == "(")
-        {
-            key = "{(}";
-        }
-        else if (key == ")")
-        {
-            key = "{)}";
-        }
-        else if (key == "{")
-        {
-            key = "{{}";
-        }
-        else if (key == "}")
-        {
-            key = "{}}";
-        }
-        else if (key == "+")
-        {
-            key = "{+}";
-        }
-        else if (key == "^")
-        {
-            key = "{^}";
-        }
-        else if (key == "%")
-        {
-            key = "{%}";
-        }
-        else if (key == "~")
-        {
-            key = "{~}";
-        }
-        else if (key == "[")
-        {
-            key = "{[}";
-        }
-        else if (key == "]")
-        {
-            key = "{]}";
-        }
-        else if (key == ":")
-        {
-            key = "{:}";
-        }
-        else if (key == "\"")
-        {
-            key = "{\"}";
-        }
-        else if (key == "'")
-        {
-            key = "{'}";
-        }
-        else if (key == "<")
-        {
-            key = "{<}";
-        }
-        else if (key == ">")
-        {
-            key = "{>}";
-        }
-        else if (key == ",")
-        {
-            key = "{,}";
-        }
-        else if (key == ".")
-        {
-            key = "{.}";
-        }
-        else if (key == "?")
-        {
-            key = "{?}";
-        }
-        else if (key == "/")
-        {
-            key = "{/}";
-        }
-        else if (key == "\\")
-        {
-            key = "{\\}";
-        }
-        else if (key == "|")
-        {
-            key = "{|}";
-        }
-        else if (key == "=")
-        {
-            key = "{=}";
-        }
-        else if (key == "-")
-        {
-            key = "{-}";
-        }
-        else if (key == "_")
-        {
-            key = "{_}";
-        }
-        else if (key == "+")
-        {
-            key = "{+}";
-        }
-        else if (key == "*")
-        {
-            key = "{*}";
-        }
-        else if (key == "&")
-        {
-            key = "{&}";
-        }
-        else if (key == "^")
-        {
-            key = "{^}";
-        }
-
-
+        // Single character: escape the characters SendKeys treats as special.
+        if ("+^%~(){}[]".Contains(key))
+            key = "{" + key + "}";
 
         SendKeys.SendWait(key);
-
-
-
-
     }
 
-
-
-    public async Task StopAsync()
+    public Task StopAsync()
     {
         _cancellationTokenSource.Cancel();
-        _Listener.Stop();
-
+        try
+        {
+            if (_Listener.IsListening)
+                _Listener.Stop();
+            _Listener.Close();
+        }
+        catch (HttpListenerException)
+        {
+            // Listener may already be stopped
+        }
+        return Task.CompletedTask;
     }
 
 

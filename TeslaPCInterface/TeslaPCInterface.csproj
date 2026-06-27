@@ -2,16 +2,19 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net7.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Certes" Version="3.0.4" />
     <PackageReference Include="CSCore" Version="1.2.1.2" />
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="System.Net.WebSockets" Version="4.3.0" />
+    <PackageReference Include="Vortice.Direct3D11" Version="2.4.2" />
+    <PackageReference Include="Vortice.DXGI" Version="2.4.2" />
   </ItemGroup>
 
   <ItemGroup>
@@ -26,23 +29,22 @@
     <Content Remove="C:\Users\david\.nuget\packages\accord\3.8.0\build\Accord.dll.config" />
   </ItemGroup>
 
+  <!-- Copy all web assets to the output dir so the server can serve them. Globs
+       so new .html/.css/.js/.png files are picked up automatically. -->
   <ItemGroup>
     <None Update="bindSSLCert.bat">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
-    <None Update="index.html">
+    <None Update="*.html">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
-    <None Update="list.html">
+    <None Update="*.css">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
-    <None Update="PCMPlayerProcessor.js">
+    <None Update="*.js">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
-    <None Update="play.html">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
-    <None Update="teslapc.png">
+    <None Update="*.png">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
   </ItemGroup>

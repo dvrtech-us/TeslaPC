@@ -1,13 +1,11 @@
 using CSCore;
-using CSCore.CoreAudioAPI;
 using CSCore.SoundIn;
-using CSCore.Codecs.WAV;
-using System.Buffers;
 using System.Collections.Concurrent;
-using System.IO;
 using System.Net;
 using System.Net.WebSockets;
 using System.Text;
+using System.Text.Json;
+
 namespace AudioStreamingServer
 {
     public class AudioCapture : IDisposable
@@ -15,153 +13,255 @@ namespace AudioStreamingServer
         private WasapiLoopbackCapture? capture = null;
         private readonly CancellationTokenSource _cancellationTokenSource = new();
         private bool _disposed = false;
+        private bool _capturing = false;
+        private Task? _broadcastTask;
+
+        private readonly ConcurrentQueue<byte[]> _audioDataQueue = new();
+        private readonly SemaphoreSlim _audioDataSignal = new(0);
+        private readonly ConcurrentDictionary<string, WebSocket> _clients = new();
+
+        private int _sampleRate;
+        private int _bitsPerSample;
+        private int _channels;
+        private string _sampleFormat = "float";
+
         /// <summary>
-        /// Starts capturing the audio from the default audio input device.
+        /// Starts capturing audio from the default loopback device (system audio).
+        /// Reads the actual device format so the client knows how to decode.
         /// </summary>
         public void StartCapturing()
         {
+            if (_capturing)
+                return;
+
             capture = new WasapiLoopbackCapture();
-            // initialize the soundIn instance
             capture.Initialize();
 
-            // choose the correct format 
-            var format = new WaveFormat(48000, 16, 2); // 48kHz, 16bit, stereo
+            // Read the actual capture format from the device
+            var waveFormat = capture.WaveFormat;
+            _sampleRate = waveFormat.SampleRate;
+            _bitsPerSample = waveFormat.BitsPerSample;
+            _channels = waveFormat.Channels;
+            _sampleFormat = ResolveSampleFormat(waveFormat);
 
-            // create a wavewriter to write the data to
+            Console.WriteLine($"Audio capture format: {_sampleRate}Hz, {_sampleFormat}, {_channels}ch");
 
-            MemoryStream memoryStream = new MemoryStream();
-            WaveWriter writer = new WaveWriter(memoryStream, format);
-            // setup an eventhandler to receive the recorded data
-            capture.DataAvailable += async (s, e) =>
-  {
-      // Write the recorded audio to the MemoryStream
-      writer.Write(e.Data, e.Offset, e.ByteCount);
-
-      // Convert the MemoryStream's data to an ArraySegment<byte>
-      var buffer = new ArraySegment<byte>(memoryStream.ToArray());
-
-      // Send the data over the WebSocket
-      _audioDataQueue.Enqueue(buffer.Array);
-
-      // Clear the MemoryStream
-      memoryStream.SetLength(0);
-  };
-
-            // start capturing
-            capture.Start();
-        }
-
-        /// <summary>
-        /// A queue that holds the audio data that will be sent to the client.
-        /// </summary>
-        private readonly ConcurrentQueue<byte[]> _audioDataQueue = new();
-      
-
-        /// <summary>
-        /// This event is called when the recording is stopped.
-        /// </summary>
-        /// <param name="sender"></param>
-        /// <param name="e"></param>
-
-        private void waveSource_RecordingStopped(object sender, StoppedEventArgs e)
-        {
-            if (capture != null)
+            capture.DataAvailable += (s, e) =>
             {
-                capture.Dispose();
-                capture = null;
-            }
-
-        }
-
-
-        /// <summary>
-        /// Starts the server to accepts any new connections on the specified port.
-        /// </summary>
-        /// <param name="port"></param>
-        /// <param name="sslPort"></param>  
-        /// <returns></returns>
-        public async Task Start(int port, int sslPort)
-        {
-            HttpListener listener = new HttpListener();
-            listener.Prefixes.Add($"http://*:{port}/");
-            listener.Prefixes.Add($"https://*:{sslPort}/");
-
-            listener.Start();
-
-            Console.WriteLine($"Audio Server started on: ");
-            foreach (var prefix in listener.Prefixes)
-            {
-                Console.WriteLine("\t" + prefix);
-            }
-            //start capturing the audio
-            StartCapturing();
-
-            //start the server
-            while (!_cancellationTokenSource.IsCancellationRequested)
-            {
-
-                HttpListenerContext listenerContext = await listener.GetContextAsync();
-
-                if (listenerContext.Request.IsWebSocketRequest)
+                if (e.ByteCount > 0 && !_clients.IsEmpty)
                 {
-                    HttpListenerWebSocketContext webSocketContext = await listenerContext.AcceptWebSocketAsync(null);
-                    WebSocket webSocket = webSocketContext.WebSocket;
+                    // Copy the raw PCM data (no WaveWriter/WAV header)
+                    byte[] buffer = new byte[e.ByteCount];
+                    Array.Copy(e.Data, e.Offset, buffer, 0, e.ByteCount);
+                    _audioDataQueue.Enqueue(buffer);
+                    _audioDataSignal.Release();
+                }
+            };
 
+            capture.Start();
+            _capturing = true;
+
+            // Start a background task that broadcasts audio to all connected clients
+            _broadcastTask = Task.Run(() => BroadcastAudioAsync(_cancellationTokenSource.Token));
+        }
+
+        /// <summary>
+        /// Returns a JSON string with the audio format metadata for the client.
+        /// </summary>
+        private string GetFormatMetadata()
+        {
+            return JsonSerializer.Serialize(new
+            {
+                type = "format",
+                sampleRate = _sampleRate,
+                bitsPerSample = _bitsPerSample,
+                channels = _channels,
+                sampleFormat = _sampleFormat
+            });
+        }
+
+        private static string ResolveSampleFormat(WaveFormat waveFormat)
+        {
+            if (waveFormat.WaveFormatTag == AudioEncoding.IeeeFloat)
+                return "float";
+
+            if (waveFormat.WaveFormatTag == AudioEncoding.Pcm)
+                return PcmFormatName(waveFormat.BitsPerSample);
+
+            if (waveFormat.WaveFormatTag == AudioEncoding.Extensible && waveFormat is WaveFormatExtensible extensible)
+            {
+                if (extensible.SubFormat == AudioSubTypes.IeeeFloat)
+                    return "float";
+                if (extensible.SubFormat == AudioSubTypes.Pcm)
+                    return PcmFormatName(waveFormat.BitsPerSample);
+            }
+
+            Console.WriteLine($"Unknown audio encoding tag {waveFormat.WaveFormatTag}, inferring from bit depth");
+            return waveFormat.BitsPerSample == 32 ? "float" : PcmFormatName(waveFormat.BitsPerSample);
+        }
+
+        private static string PcmFormatName(int bitsPerSample)
+        {
+            return bitsPerSample switch
+            {
+                16 => "pcm16",
+                24 => "pcm24",
+                32 => "pcm32",
+                _ => $"pcm{bitsPerSample}"
+            };
+        }
+
+        /// <summary>
+        /// Handles a single WebSocket client from the unified server.
+        /// Sends format metadata, then keeps alive until disconnect.
+        /// </summary>
+        public async Task HandleClientAsync(HttpListenerContext listenerContext)
+        {
+            WebSocket webSocket;
+            string clientId = Guid.NewGuid().ToString();
+
+            try
+            {
+                var webSocketContext = await listenerContext.AcceptWebSocketAsync(null);
+                webSocket = webSocketContext.WebSocket;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"WebSocket accept failed: {e.Message}");
+                return;
+            }
+
+            try
+            {
+                // Send format metadata as the first text message
+                var formatJson = GetFormatMetadata();
+                var formatBytes = Encoding.UTF8.GetBytes(formatJson);
+                await webSocket.SendAsync(
+                    new ArraySegment<byte>(formatBytes),
+                    WebSocketMessageType.Text,
+                    true,
+                    _cancellationTokenSource.Token);
+
+                // Register this client for broadcasting
+                _clients.TryAdd(clientId, webSocket);
+                Console.WriteLine($"Audio client connected: {clientId}");
+
+                // Keep the connection alive by reading (handles close frames)
+                var recvBuffer = new byte[256];
+                while (webSocket.State == WebSocketState.Open)
+                {
+                    var result = await webSocket.ReceiveAsync(
+                        new ArraySegment<byte>(recvBuffer), _cancellationTokenSource.Token);
+                    if (result.MessageType == WebSocketMessageType.Close)
+                    {
+                        break;
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"Audio client error ({clientId}): {e.Message}");
+            }
+            finally
+            {
+                _clients.TryRemove(clientId, out _);
+                Console.WriteLine($"Audio client disconnected: {clientId}");
+                if (webSocket.State != WebSocketState.Closed && webSocket.State != WebSocketState.Aborted)
+                {
                     try
-                    {
-
-                        while (webSocket.State == WebSocketState.Open)
-                        {
-                            if (_audioDataQueue.TryDequeue(out var buffer))
-                            {
-                                // Rent an array from the pool
-                                byte[] rentedBuffer = ArrayPool<byte>.Shared.Rent(buffer.Length);
-
-                                try
-                                {
-                                    // Copy your data into the rented array
-                                    buffer.AsSpan().CopyTo(rentedBuffer);
-                                    var bu = new ArraySegment<byte>(buffer, 0, buffer.Length);
-                                    // Use the rented array
-                                    await webSocket.SendAsync(buffer, WebSocketMessageType.Binary, true, CancellationToken.None);
-                                }
-                                finally
-                                {
-                                    // Return the array to the pool
-                                    ArrayPool<byte>.Shared.Return(rentedBuffer);
-                                }
-                            }
-                        }
-                    }
-                    catch (Exception e)
-                    {
-                        Console.WriteLine(e.Message);
-                    }
-                    finally
                     {
                         await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None);
                     }
+                    catch { }
                 }
-                else
+                webSocket.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Broadcasts queued audio data to all connected WebSocket clients.
+        /// Uses a semaphore to avoid CPU spinning when the queue is empty.
+        /// </summary>
+        private async Task BroadcastAudioAsync(CancellationToken cancellationToken)
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                await _audioDataSignal.WaitAsync(cancellationToken);
+
+                if (_audioDataQueue.TryDequeue(out var buffer))
                 {
-                    listenerContext.Response.StatusCode = 400;
-                    listenerContext.Response.Close();
+                    var sendTasks = new List<Task>(_clients.Count);
+                    foreach (var ws in _clients.Values)
+                    {
+                        if (ws.State == WebSocketState.Open)
+                            sendTasks.Add(SendAudioAsync(ws, buffer));
+                    }
+
+                    if (sendTasks.Count > 0)
+                        await Task.WhenAll(sendTasks);
                 }
             }
         }
+
+        private static async Task SendAudioAsync(WebSocket ws, byte[] buffer)
+        {
+            try
+            {
+                await ws.SendAsync(
+                    new ArraySegment<byte>(buffer),
+                    WebSocketMessageType.Binary,
+                    true,
+                    CancellationToken.None);
+            }
+            catch
+            {
+                // Client will be cleaned up in HandleClientAsync
+            }
+        }
+
         protected virtual void Dispose(bool disposing)
         {
             if (!_disposed)
             {
                 if (disposing)
                 {
-                    // Dispose managed resources
+                    _cancellationTokenSource.Cancel();
+
+                    foreach (var ws in _clients.Values)
+                    {
+                        if (ws.State == WebSocketState.Open || ws.State == WebSocketState.CloseReceived)
+                        {
+                            try
+                            {
+                                ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None)
+                                    .GetAwaiter().GetResult();
+                            }
+                            catch { }
+                        }
+                        ws.Dispose();
+                    }
+                    _clients.Clear();
+
+                    capture?.Stop();
                     capture?.Dispose();
-                    _cancellationTokenSource?.Dispose();
+                    capture = null;
+                    _capturing = false;
+
+                    if (_broadcastTask != null)
+                    {
+                        try
+                        {
+                            _broadcastTask.Wait(TimeSpan.FromSeconds(2));
+                        }
+                        catch (AggregateException)
+                        {
+                            // Task was cancelled
+                        }
+                    }
+
+                    _cancellationTokenSource.Dispose();
+                    _audioDataSignal.Dispose();
                 }
-
-                // Dispose unmanaged resources
-
                 _disposed = true;
             }
         }
