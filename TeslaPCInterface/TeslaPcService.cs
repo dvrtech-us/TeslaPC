@@ -48,9 +48,11 @@ internal sealed class TeslaPcService
 
     public async Task StartAsync(string[] args)
     {
-        // 1280x720 cap box. The capture loop scales the live screen into this box preserving
-        // aspect ratio (and never upscales), so the stream always matches the screen's shape.
-        _imageServer = new ImageStreamingServer(1280, 720, 30);
+        // Cap box: the capture loop scales the live screen into it preserving aspect ratio (and never
+        // upscales). Configurable via TESLAPC_STREAM_HEIGHT (default 1080); the width cap is generous
+        // (4x height) so height is the binding dimension for normal and ultrawide displays.
+        int h = AppSettings.StreamHeight;
+        _imageServer = new ImageStreamingServer(h * 4, h, 30);
         _audioCapture = new AudioCapture();
         _audioCapture.StartCapturing();
         _media = new MediaStreamer(_imageServer, _audioCapture) { Root = AppSettings.VideoRoot };

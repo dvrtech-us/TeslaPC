@@ -43,6 +43,16 @@
             </label>
 
             <label class="field">
+                <span class="flabel">Stream resolution</span>
+                <select class="finput" name="streamHeight">
+                    <option value="480">480p (lowest bandwidth)</option>
+                    <option value="720">720p</option>
+                    <option value="1080">1080p (best quality)</option>
+                </select>
+                <span class="fhint">Max vertical pixels streamed (live screen and video). Higher is sharper but uses more bandwidth. Applies immediately.</span>
+            </label>
+
+            <label class="field">
                 <span class="flabel">Log level</span>
                 <select class="finput" name="logLevel">
                     <option value="error">Error (quietest)</option>
@@ -69,6 +79,12 @@
                 form.acmeEmail.value = c.acmeEmail || '';
                 form.videoRoot.value = c.videoRoot || '';
                 if (c.logLevel) form.logLevel.value = c.logLevel;
+                if (c.streamHeight) {
+                    var opts = [480, 720, 1080], best = opts[0];
+                    for (var i = 0; i < opts.length; i++)
+                        if (Math.abs(opts[i] - c.streamHeight) < Math.abs(best - c.streamHeight)) best = opts[i];
+                    form.streamHeight.value = String(best);
+                }
                 document.getElementById('cfState').textContent = c.cfTokenSet
                     ? 'A token is saved. Leave blank to keep it, or type a new one to replace it.'
                     : 'No token saved yet. Paste your Cloudflare API token to enable trusted HTTPS.';
@@ -84,6 +100,7 @@
             body.set('acmeEmail', form.acmeEmail.value);
             body.set('videoRoot', form.videoRoot.value);
             body.set('logLevel', form.logLevel.value);
+            body.set('streamHeight', form.streamHeight.value);
             if (form.cfToken.value) body.set('cfToken', form.cfToken.value);
 
             msg.className = 'msg'; msg.textContent = 'Saving…';

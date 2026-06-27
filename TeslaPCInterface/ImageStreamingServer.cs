@@ -16,8 +16,9 @@ namespace Streaming
     public class ImageStreamingServer : IDisposable
     {
         private readonly CancellationTokenSource _cancellationTokenSource = new();
-        private readonly int _maxWidth;
-        private readonly int _maxHeight;
+        private volatile int _maxWidth;
+        private volatile int _maxHeight;
+        private int _restartEpoch;   // bumped to force the capture session to restart (cap/desktop-res change)
         private bool _disposed = false;
 
         // Shared capture state
@@ -36,6 +37,31 @@ namespace Streaming
         private volatile bool _mediaMode;
         /// <summary>True while an external source (MediaStreamer) is driving the frame buffer.</summary>
         public bool MediaMode => _mediaMode;
+
+        /// <summary>Current cap box the live screen is scaled into (preserving aspect, never upscaling).</summary>
+        public int MaxWidth => _maxWidth;
+        public int MaxHeight => _maxHeight;
+
+        /// <summary>
+        /// Changes the output cap box live. The running capture session restarts on its next tick and
+        /// reallocates at the new size.
+        /// </summary>
+        public void SetMaxResolution(int width, int height)
+        {
+            _maxWidth = Math.Max(16, width);
+            _maxHeight = Math.Max(16, height);
+            RestartCapture();
+        }
+
+        /// <summary>
+        /// Forces the capture session to restart (rebuilds the DXGI duplication and scaled buffers).
+        /// Call after the Windows display resolution changes — DXGI can't continue across a mode switch.
+        /// </summary>
+        public void RestartCapture()
+        {
+            Interlocked.Increment(ref _restartEpoch);
+            lock (_frameLock) Monitor.PulseAll(_frameLock);
+        }
 
 
         /// <summary>
@@ -182,6 +208,7 @@ namespace Streaming
 
         private bool RunCaptureSession()
         {
+            int epoch = Volatile.Read(ref _restartEpoch);
             using var dxgiCapture = new DxgiScreenCapture();
             bool useDxgi = dxgiCapture.IsAvailable;
             if (!useDxgi)
@@ -224,6 +251,14 @@ namespace Streaming
                    && Volatile.Read(ref _clientCount) > 0
                    && !_mediaMode)
             {
+                // Restart the session (reallocate at the new size) when the cap changes or the desktop
+                // resolution changes — DXGI duplication can't survive a display-mode switch.
+                if (Volatile.Read(ref _restartEpoch) != epoch)
+                    return true;
+                var nowBounds = System.Windows.Forms.Screen.PrimaryScreen!.Bounds;
+                if (nowBounds.Width != screenSize.Width || nowBounds.Height != screenSize.Height)
+                    return true;
+
                 bool captured = false;
                 if (useDxgi)
                 {

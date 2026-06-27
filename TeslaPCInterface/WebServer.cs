@@ -181,6 +181,10 @@ public class WebServer
         {
             HandleConfig(context);
         }
+        else if (path.StartsWith("/display/", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleDisplay(context, path);
+        }
         else
         {
             HandleHttpAsync(context);
@@ -210,11 +214,13 @@ public class WebServer
             string? videoRoot = form.Get("videoRoot");
             string? cfToken = form.Get("cfToken");
             string? logLevel = form.Get("logLevel");
+            string? streamHeight = form.Get("streamHeight");
 
             if (host != null) toSave[AppSettings.HttpsHostKey] = host.Trim();
             if (email != null) toSave[AppSettings.AcmeEmailKey] = email.Trim();
             if (videoRoot != null && !string.IsNullOrWhiteSpace(videoRoot)) toSave[AppSettings.VideoRootKey] = videoRoot.Trim();
             if (Log.Parse(logLevel) is { } _) toSave[AppSettings.LogLevelKey] = logLevel!.Trim().ToLowerInvariant();
+            if (int.TryParse(streamHeight, out var sh) && sh >= 240 && sh <= 2160) toSave[AppSettings.StreamHeightKey] = sh.ToString();
             // Only overwrite the token when a non-blank value is supplied (the form leaves it blank to keep).
             if (!string.IsNullOrWhiteSpace(cfToken)) toSave[AppSettings.CloudflareTokenKey] = cfToken.Trim();
 
@@ -226,6 +232,11 @@ public class WebServer
                     _media.Root = toSave[AppSettings.VideoRootKey];
                 if (toSave.ContainsKey(AppSettings.LogLevelKey))
                     Log.SetLevel(toSave[AppSettings.LogLevelKey]);
+                if (toSave.ContainsKey(AppSettings.StreamHeightKey))
+                {
+                    int h = int.Parse(toSave[AppSettings.StreamHeightKey]);
+                    _imageStreamer.SetMaxResolution(h * 4, h);
+                }
                 bool restartNeeded = toSave.ContainsKey(AppSettings.HttpsHostKey)
                     || toSave.ContainsKey(AppSettings.CloudflareTokenKey)
                     || toSave.ContainsKey(AppSettings.AcmeEmailKey);
@@ -247,9 +258,58 @@ public class WebServer
             acmeEmail = AppSettings.Get(AppSettings.AcmeEmailKey) ?? "",
             videoRoot = _media.Root,
             logLevel = Log.LevelName,
+            streamHeight = _imageStreamer.MaxHeight,
             cfTokenSet = !string.IsNullOrWhiteSpace(AppSettings.Get(AppSettings.CloudflareTokenKey))
         };
         WriteJson(context.Response, JsonSerializer.Serialize(payload));
+    }
+
+    /// <summary>
+    /// Display-resolution endpoints (change the actual Windows desktop resolution):
+    ///   /display/info          -> current resolution + supported modes (JSON)
+    ///   /display/match?w=&h=   -> set the desktop to the supported mode best matching the given
+    ///                             viewport aspect ratio (capped at the current stream height)
+    ///   /display/set?w=&h=     -> set a specific supported resolution
+    /// After a successful change the capture session is restarted (DXGI can't survive a mode switch).
+    /// </summary>
+    private void HandleDisplay(HttpListenerContext context, string path)
+    {
+        var query = HttpUtility.ParseQueryString(context.Request.Url?.Query ?? "");
+        string action = path.Substring("/display/".Length).TrimEnd('/').ToLowerInvariant();
+        bool changed = false;
+
+        if (action == "match")
+        {
+            if (int.TryParse(query.Get("w"), out var vw) && int.TryParse(query.Get("h"), out var vh) && vw > 0 && vh > 0)
+            {
+                // Cap the target height at twice the stream height so we don't switch to a resolution
+                // far larger than what we actually stream.
+                int maxH = Math.Max(720, _imageStreamer.MaxHeight * 2);
+                var best = DisplayManager.BestForAspect((double)vw / vh, maxH);
+                if (best is { } m && (DisplayManager.Current() is var cur && (cur.Width != m.Width || cur.Height != m.Height)))
+                {
+                    changed = DisplayManager.TrySet(m.Width, m.Height);
+                    if (changed) { _imageStreamer.RestartCapture(); Console.WriteLine($"[Display] Matched viewport {vw}x{vh} -> {m.Width}x{m.Height}"); }
+                }
+            }
+        }
+        else if (action == "set")
+        {
+            if (int.TryParse(query.Get("w"), out var w) && int.TryParse(query.Get("h"), out var h) && w > 0 && h > 0)
+            {
+                changed = DisplayManager.TrySet(w, h);
+                if (changed) _imageStreamer.RestartCapture();
+            }
+        }
+
+        var cur2 = DisplayManager.Current();
+        WriteJson(context.Response, JsonSerializer.Serialize(new
+        {
+            changed,
+            width = cur2.Width,
+            height = cur2.Height,
+            modes = DisplayManager.Modes().Select(m => new { w = m.Width, h = m.Height })
+        }));
     }
 
     /// <summary>

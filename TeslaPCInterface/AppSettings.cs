@@ -17,8 +17,20 @@ public static class AppSettings
     public const string AcmeEmailKey = "TESLAPC_ACME_EMAIL";
     public const string VideoRootKey = "TESLAPC_VIDEO_ROOT";
     public const string LogLevelKey = "TESLAPC_LOG_LEVEL";
+    public const string StreamHeightKey = "TESLAPC_STREAM_HEIGHT";
 
     public const string DefaultVideoRoot = @"C:\video\";
+    public const int DefaultStreamHeight = 1080;
+
+    /// <summary>Max vertical pixels for the stream (the live screen/media is scaled into this cap).</summary>
+    public static int StreamHeight
+    {
+        get
+        {
+            var v = Get(StreamHeightKey);
+            return int.TryParse(v, out var h) && h >= 240 && h <= 2160 ? h : DefaultStreamHeight;
+        }
+    }
 
     /// <summary><c>%ProgramData%\TeslaPC\.env</c> — the persistent config file (survives rebuilds).</summary>
     public static string EnvFilePath => Path.Combine(
