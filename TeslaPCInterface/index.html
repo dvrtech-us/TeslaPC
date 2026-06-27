@@ -18,7 +18,7 @@
             autocorrect="off" autocapitalize="off" spellcheck="false" />
         <button class="btn" onclick="window.location.assign('/list.html')">&#128193; Files</button>
         <button class="btn" onclick="window.location.assign('/config.html')">&#9881; Settings</button>
-        <select id="resSel" class="btn input" title="Stream resolution" onchange="setRes(this.value)">
+        <select id="resSel" class="btn" title="Stream resolution" onchange="setRes(this.value)">
             <option value="480">480p</option>
             <option value="720">720p</option>
             <option value="1080">1080p</option>
@@ -426,6 +426,16 @@
                 event.preventDefault();
             }
             if (document.activeElement === fakeKeyboard) fakeKeyboard.value = '';
+        });
+
+        // Tap anywhere except the input itself -> blur it so the on-screen keyboard dismisses.
+        // The img's touch handlers call preventDefault (passive:false), which suppresses the normal
+        // synthetic-click blur; these passive document listeners still fire and blur explicitly.
+        ['touchstart', 'pointerdown'].forEach(function (type) {
+            document.addEventListener(type, function (e) {
+                if (document.activeElement === fakeKeyboard && e.target !== fakeKeyboard)
+                    fakeKeyboard.blur();
+            }, { passive: true });
         });
 
     </script>

@@ -88,15 +88,20 @@ html, body {
     position: fixed;
     left: 0; right: 0; bottom: 0;
     display: flex;
-    gap: var(--gap);
+    gap: 8px;
     align-items: center;
-    justify-content: center;
-    flex-wrap: wrap;
-    padding: 12px 16px;
+    justify-content: flex-start;
+    flex-wrap: nowrap;            /* one row — never push the keyboard onto a second row */
+    overflow-x: auto;            /* safety: scroll instead of wrap if it ever exceeds the width */
+    padding: 10px 12px;
     background: rgba(13, 16, 21, .92);
     backdrop-filter: blur(8px);
     border-top: 1px solid rgba(255, 255, 255, .06);
 }
+/* Compact controls so all of them fit one row on the Tesla viewport (~1180px wide). */
+.controlbar .btn { flex: 0 0 auto; min-height: 54px; padding: 0 14px; font-size: 1rem; }
+.controlbar .btn.input { flex: 1 1 120px; min-width: 110px; }   /* keyboard takes the slack, stays reachable */
+.controlbar #resSel { min-width: 84px; width: 92px; padding: 0 6px; }
 
 /* ---------- File browser ---------- */
 .page {
