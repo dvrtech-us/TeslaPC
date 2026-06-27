@@ -34,7 +34,7 @@ Known-good invariants for remote input. Update only when intended behavior chang
 
 ## Not Implemented (intentional current state)
 
-- Right-click, middle-click, and scroll wheel.
+- Middle-click and scroll wheel. (Right-click **is** supported via `Type == "rightclick"` — desktop `contextmenu` or touch long-press.)
 - A dedicated `click` (down+up) action.
 
 ## Access Control

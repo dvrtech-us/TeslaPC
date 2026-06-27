@@ -292,18 +292,45 @@
         img.addEventListener('mousemove', function (e) { sendInput('move', e.clientX, e.clientY); });
         img.addEventListener('mousedown', function (e) { sendInput('down', e.clientX, e.clientY); });
         img.addEventListener('mouseup', function (e) { sendInput('up', e.clientX, e.clientY); });
+        // Desktop right mouse button -> right-click on the host.
+        img.addEventListener('contextmenu', function (e) { sendInput('rightclick', e.clientX, e.clientY); e.preventDefault(); });
 
-        // Touch (Tesla / tablets): map touchstart→down, touchmove→move, touchend→up to drive
-        // press-and-drag. preventDefault stops page scroll/zoom and the synthesized mouse events
-        // (so input isn't sent twice). passive:false is required for preventDefault on touchmove.
+        // Touch (Tesla / tablets):
+        //   quick tap            -> left click
+        //   press + drag         -> left-button drag
+        //   press & hold ~0.5s   -> right-click (long-press)
+        // The 'down' is deferred until we know it's a drag, so a long-press isn't also a left press.
+        var LONG_PRESS_MS = 500, MOVE_TOL = 12;
+        var tStartX = 0, tStartY = 0, tMoved = false, tDownSent = false, tLongPressed = false, tTimer = null;
         img.addEventListener('touchstart', function (e) {
-            var t = e.changedTouches[0]; sendInput('down', t.clientX, t.clientY); e.preventDefault();
+            var t = e.changedTouches[0];
+            tStartX = t.clientX; tStartY = t.clientY;
+            tMoved = false; tDownSent = false; tLongPressed = false;
+            tTimer = setTimeout(function () {
+                tLongPressed = true;
+                sendInput('rightclick', tStartX, tStartY);
+            }, LONG_PRESS_MS);
+            e.preventDefault();
         }, { passive: false });
         img.addEventListener('touchmove', function (e) {
-            var t = e.changedTouches[0]; sendInput('move', t.clientX, t.clientY); e.preventDefault();
+            if (tLongPressed) { e.preventDefault(); return; }
+            var t = e.changedTouches[0];
+            if (!tMoved && Math.abs(t.clientX - tStartX) + Math.abs(t.clientY - tStartY) > MOVE_TOL) {
+                tMoved = true;
+                clearTimeout(tTimer);          // it's a drag, not a long-press
+                sendInput('down', tStartX, tStartY);
+                tDownSent = true;
+            }
+            if (tDownSent) sendInput('move', t.clientX, t.clientY);
+            e.preventDefault();
         }, { passive: false });
         img.addEventListener('touchend', function (e) {
-            var t = e.changedTouches[0]; sendInput('up', t.clientX, t.clientY); e.preventDefault();
+            clearTimeout(tTimer);
+            var t = e.changedTouches[0];
+            if (tLongPressed) { /* right-click already sent */ }
+            else if (tDownSent) { sendInput('up', t.clientX, t.clientY); }   // end of drag
+            else { sendInput('down', tStartX, tStartY); sendInput('up', tStartX, tStartY); } // tap = left click
+            e.preventDefault();
         }, { passive: false });
 
         // Keyboard input -> /ws/input (backend handleKey replays via SendKeys).
