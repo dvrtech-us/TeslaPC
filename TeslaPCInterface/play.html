@@ -21,6 +21,19 @@
         </div>
     </div>
 
+    <!-- Shown when playback finishes/stops, so the live desktop is never left on screen. -->
+    <div id="endedOverlay" class="tap-overlay" style="display:none">
+        <div class="tap-inner">
+            <div class="big-ic">&#10003;</div>
+            <div class="tap-title">Finished</div>
+            <div class="ended-actions">
+                <button class="btn primary" onclick="replay()">&#8635; Replay</button>
+                <button class="btn" onclick="window.location.assign('/list.html')">&#128193; Files</button>
+                <button class="btn" onclick="window.location.assign('/')">&#8962; Screen</button>
+            </div>
+        </div>
+    </div>
+
     <div class="controlbar mediabar">
         <button id="playpause" class="btn primary" onclick="togglePlay()">&#10073;&#10073; Pause</button>
         <span id="cur" class="time">0:00</span>
@@ -32,6 +45,7 @@
 
     <script src="/audio-client.js"></script>
     <script>
+        var MEDIA_FILE = "{{FILEPATH}}";   // full host path of the playing file (for Replay)
         var paused = false;
         var ended = false;
         var dragging = false;
@@ -39,6 +53,7 @@
         var curEl = document.getElementById('cur');
         var durEl = document.getElementById('dur');
         var ppEl = document.getElementById('playpause');
+        var endedOverlay = document.getElementById('endedOverlay');
 
         function fmt(sec) {
             sec = Math.max(0, Math.floor(sec || 0));
@@ -54,7 +69,6 @@
         document.getElementById('tapstart').addEventListener('click', startSound);
 
         function togglePlay() {
-            if (ended) { window.location.assign('/'); return; }
             fetch(paused ? '/media/resume' : '/media/pause').then(refreshSoon);
             paused = !paused;
             ppEl.innerHTML = paused ? '&#9658; Play' : '&#10073;&#10073; Pause';
@@ -62,6 +76,13 @@
 
         function stopPlayback() {
             fetch('/media/stop').then(function () { window.location.assign('/'); });
+        }
+
+        function replay() {
+            if (!MEDIA_FILE) { window.location.assign('/list.html'); return; }
+            endedOverlay.style.display = 'none';
+            ended = false;
+            fetch('/media/play?path=' + encodeURIComponent(MEDIA_FILE)).then(refreshSoon);
         }
 
         seek.addEventListener('input', function () { dragging = true; curEl.textContent = fmt(seek.value); });
@@ -82,8 +103,9 @@
                 seek.value = Math.floor(st.position);
                 curEl.textContent = fmt(st.position);
             }
-            if (ended) ppEl.innerHTML = '&#9664; Back to screen';
-            else ppEl.innerHTML = paused ? '&#9658; Play' : '&#10073;&#10073; Pause';
+            ppEl.innerHTML = paused ? '&#9658; Play' : '&#10073;&#10073; Pause';
+            // When playback has ended/stopped, cover the screen so the live desktop is never shown.
+            endedOverlay.style.display = ended ? 'flex' : 'none';
         }
 
         function refresh() {
@@ -92,7 +114,7 @@
         function refreshSoon() { setTimeout(refresh, 250); }
 
         refresh();
-        setInterval(refresh, 1000);
+        setInterval(refresh, 500);
     </script>
 </body>
 

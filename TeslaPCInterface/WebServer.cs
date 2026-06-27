@@ -393,7 +393,9 @@ public class WebServer
                 string? requestFilePath = QueryParameters.Get("FILENAME");
                 if (string.IsNullOrEmpty(requestFilePath))
                 {
-                    responseString = responseString.Replace("{{TITLE}}", "No video file specified");
+                    responseString = responseString
+                        .Replace("{{TITLE}}", "No video file specified")
+                        .Replace("{{FILEPATH}}", "");
                 }
                 else if (_media.IsFfmpegAvailable)
                 {
@@ -401,8 +403,9 @@ public class WebServer
                     // then serve the player page (play.html). The Tesla never decodes "video", so it
                     // keeps playing while the car is in motion.
                     _media.Play(requestFilePath);
-                    responseString = responseString.Replace("{{TITLE}}",
-                        HttpUtility.HtmlEncode(Path.GetFileNameWithoutExtension(requestFilePath)));
+                    responseString = responseString
+                        .Replace("{{TITLE}}", HttpUtility.HtmlEncode(Path.GetFileNameWithoutExtension(requestFilePath)))
+                        .Replace("{{FILEPATH}}", HttpUtility.JavaScriptStringEncode(requestFilePath));
                 }
                 else
                 {

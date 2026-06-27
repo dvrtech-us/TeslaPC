@@ -292,6 +292,7 @@ html, body {
 }
 .tap-inner { text-align: center; padding: 24px; }
 .tap-inner .big-ic { font-size: 5rem; color: var(--accent); }
+.ended-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 18px; }
 .tap-title {
     font-size: 1.3rem;
     font-weight: 600;
