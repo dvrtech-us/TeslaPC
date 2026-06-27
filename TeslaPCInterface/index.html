@@ -264,16 +264,25 @@
 
         function sendMouseEvent(type, event) {
             var rect = img.getBoundingClientRect();
-            var x = parseInt(event.clientX - rect.left);
-            var y = parseInt(event.clientY - rect.top);
+            // The stream is letterboxed inside the element (object-fit: contain). Map the click to
+            // the actual video area using the frame's natural aspect ratio, so coordinates stay
+            // correct at any scale and ignore taps in the black bars.
+            var natW = img.naturalWidth || rect.width;
+            var natH = img.naturalHeight || rect.height;
+            var scale = Math.min(rect.width / natW, rect.height / natH);
+            var dispW = natW * scale, dispH = natH * scale;
+            var offX = (rect.width - dispW) / 2, offY = (rect.height - dispH) / 2;
+            var x = event.clientX - rect.left - offX;
+            var y = event.clientY - rect.top - offY;
+            if (x < 0 || y < 0 || x > dispW || y > dispH) return; // tap landed in the letterbox
 
             mouseSocket.send(JSON.stringify({
                 Type: type,
-                X: x,
-                Y: y,
+                X: parseInt(x),
+                Y: parseInt(y),
                 DisplaySize: {
-                    width: img.width,
-                    height: img.height
+                    width: parseInt(dispW),
+                    height: parseInt(dispH)
                 }
             }));
         }
