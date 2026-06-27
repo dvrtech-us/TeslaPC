@@ -25,6 +25,8 @@ namespace Streaming
         private byte[] _currentFrame = Array.Empty<byte>();
         private int _frameNumber;
         private int _clientCount;
+        /// <summary>Number of clients currently receiving the MJPEG stream.</summary>
+        public int ClientCount => Volatile.Read(ref _clientCount);
         private Thread? _captureThread;
 
 
