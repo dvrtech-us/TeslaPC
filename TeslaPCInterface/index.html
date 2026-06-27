@@ -335,15 +335,12 @@
         }, { passive: false });
 
         // Keyboard input -> /ws/input (backend handleKey replays via SendKeys).
-        // The visible #fakeKeyboard input lets touch devices (e.g. the Tesla
-        // browser) summon the on-screen keyboard.
-        //
-        // Each keystroke is sent EXACTLY ONCE to avoid duplicates:
-        //   - characters come from the "input" event (fires once per character,
-        //     and works with on-screen keyboards),
-        //   - non-character keys (Enter, Backspace, arrows, F-keys, ...) come from
-        //     "keydown" (they produce no input event, or none on an empty box).
         // "Type" contains "key" so the server routes these as KeyData, not mouse.
+        //
+        // Three ways to type, all funnelling through sendKey/sendText:
+        //   1. The visible #fakeKeyboard box (touch devices summon the on-screen keyboard).
+        //   2. A physical keyboard with the box NOT focused (page-wide keydown capture).
+        //   3. Paste (Ctrl+V or long-press paste), anywhere or into the box.
         var fakeKeyboard = document.getElementById('fakeKeyboard');
 
         function sendKey(key, code) {
@@ -352,20 +349,77 @@
             }
         }
 
-        fakeKeyboard.addEventListener('input', function (event) {
-            if (event.inputType === 'insertText' && event.data) {
-                for (var i = 0; i < event.data.length; i++) sendKey(event.data[i]);
+        // Send a run of text one character at a time (typing or pasting). Newlines and tabs are
+        // translated to the Enter/Tab keys the backend understands.
+        function sendText(text) {
+            for (var i = 0; i < text.length; i++) {
+                var ch = text[i];
+                if (ch === '\r' || ch === '\n') {
+                    if (ch === '\r' && text[i + 1] === '\n') i++;   // CRLF -> one Enter
+                    sendKey('Enter');
+                } else if (ch === '\t') {
+                    sendKey('Tab');
+                } else {
+                    sendKey(ch);
+                }
             }
-            fakeKeyboard.value = '';
-        });
+        }
 
         var namedKeys = ['Backspace', 'Enter', 'Tab', 'Escape', 'Delete', 'Insert',
             'Home', 'End', 'PageUp', 'PageDown', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'];
+        var modifierKeys = ['Shift', 'Control', 'Alt', 'Meta', 'OS', 'AltGraph', 'CapsLock',
+            'NumLock', 'ScrollLock', 'ContextMenu', 'Fn', 'FnLock', 'Hyper', 'Super', 'Symbol',
+            'Dead', 'Process', 'Unidentified'];
+
+        function isEditable(el) {
+            return el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+        }
+
+        function isNamedKey(event) {
+            return namedKeys.indexOf(event.key) !== -1 || /^F\d{1,2}$/.test(event.key);
+        }
+
+        // (1) On-screen keyboard box: characters arrive via the input event.
+        fakeKeyboard.addEventListener('input', function (event) {
+            // insertText is normal typing; insertFromPaste covers pasting into the box on browsers
+            // that don't fire a separate paste event. (The document paste handler below also covers
+            // it; sending happens once because that handler preventDefaults when it fires.)
+            if (event.data && (event.inputType === 'insertText' || event.inputType === 'insertFromPaste')) {
+                sendText(event.data);
+            }
+            fakeKeyboard.value = '';
+        });
+        // Named/special keys typed into the box.
         fakeKeyboard.addEventListener('keydown', function (event) {
-            if (namedKeys.indexOf(event.key) !== -1 || /^F\d{1,2}$/.test(event.key)) {
+            if (isNamedKey(event)) { sendKey(event.key, event.code); event.preventDefault(); }
+        });
+
+        // (2) Physical keyboard without clicking the box: capture keystrokes on the whole page.
+        // Skipped while a text field (incl. the box) is focused so nothing is doubled, and modifier
+        // combos are ignored so browser shortcuts and Ctrl+V paste still work.
+        document.addEventListener('keydown', function (event) {
+            if (isEditable(event.target)) return;
+            if (event.ctrlKey || event.metaKey || event.altKey) return;
+            if (modifierKeys.indexOf(event.key) !== -1) return;
+            if (event.key.length === 1) {
+                sendKey(event.key);
+                event.preventDefault();
+            } else if (isNamedKey(event)) {
                 sendKey(event.key, event.code);
                 event.preventDefault();
             }
+        });
+
+        // (3) Paste anywhere on the page (or into the box) forwards the clipboard text. One
+        // document-level handler covers both cases; preventDefault stops a duplicate input event.
+        document.addEventListener('paste', function (event) {
+            var data = event.clipboardData || window.clipboardData;
+            var text = data ? data.getData('text') : '';
+            if (text) {
+                sendText(text);
+                event.preventDefault();
+            }
+            if (document.activeElement === fakeKeyboard) fakeKeyboard.value = '';
         });
 
     </script>
