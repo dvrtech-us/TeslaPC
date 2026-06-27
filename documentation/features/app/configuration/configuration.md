@@ -113,13 +113,15 @@ is left intact.
 Returns a JSON object with the current non-secret settings:
 
 ```json
-{ "httpsHost": "my.example.com", "acmeEmail": "admin@example.com", "videoRoot": "C:\\video\\", "cfTokenSet": true, "logLevel": "info", "streamHeight": 1080 }
+{ "httpsHost": "my.example.com", "acmeEmail": "admin@example.com", "videoRoot": "C:\\video\\", "cfTokenSet": true, "logLevel": "info", "streamHeight": 1080, "version": "1.0.0" }
 ```
 
 `cfTokenSet` is `true` when `TESLAPC_CF_TOKEN` is set to a non-empty value. **The token
 value is never included in the response.** `logLevel` is the current level as a lowercase
 string (`error`, `warn`, `info`, or `debug`) returned by `Log.LevelName`. `streamHeight` is
-the current `_imageStreamer.MaxHeight` integer (default `1080`).
+the current `_imageStreamer.MaxHeight` integer (default `1080`). `version` is the application
+version string from `AppSettings.Version` (e.g. `"1.0.0"`); surfaced here so the web Settings
+page can display it in the footer.
 
 #### `POST /config`
 
@@ -185,10 +187,11 @@ A full process restart is not required; the in-app Restart is sufficient.
 
 | Member | File | Responsibility |
 |--------|------|----------------|
-| `AppSettings` | `TeslaPCInterface/AppSettings.cs` | Constants, `Get`, `VideoRoot`, `Save` |
+| `AppSettings` | `TeslaPCInterface/AppSettings.cs` | Constants, `Get`, `VideoRoot`, `Save`, `Version` |
 | `AppSettings.Save` | `TeslaPCInterface/AppSettings.cs` | Rewrite `%ProgramData%\TeslaPC\.env`; mirror values into live env |
 | `AppSettings.VideoRoot` | `TeslaPCInterface/AppSettings.cs` | Read video root from env or fall back to `C:\video\` |
 | `AppSettings.StreamHeight` | `TeslaPCInterface/AppSettings.cs` | Read and clamp `TESLAPC_STREAM_HEIGHT`; default `1080` |
+| `AppSettings.Version` | `TeslaPCInterface/AppSettings.cs` | Reads `AssemblyInformationalVersionAttribute`; strips `+git` suffix; falls back to assembly version |
 | `Program.LoadDotEnv` | `TeslaPCInterface/Program.cs` | Load app-dir `.env` then `%ProgramData%` `.env` at startup |
 | `WebServer.HandleConfig` | `TeslaPCInterface/WebServer.cs` | `GET /config` (safe read) and `POST /config` (write + apply) |
 | `TeslaPcService.VideoRoot` | `TeslaPCInterface/TeslaPcService.cs` | Exposes `_media.Root` |
@@ -205,9 +208,30 @@ A full process restart is not required; the in-app Restart is sufficient.
 
 | Route | Method | Protocol | Auth | Handler |
 |-------|--------|----------|------|---------|
-| `/config` | GET | HTTP/HTTPS | none | `WebServer.HandleConfig` — returns `{ httpsHost, acmeEmail, videoRoot, cfTokenSet, logLevel, streamHeight }` JSON |
+| `/config` | GET | HTTP/HTTPS | none | `WebServer.HandleConfig` — returns `{ httpsHost, acmeEmail, videoRoot, cfTokenSet, logLevel, streamHeight, version }` JSON |
 | `/config` | POST | HTTP/HTTPS | none | `WebServer.HandleConfig` — saves settings, applies video folder / log level / stream height live, returns `{ saved, restartNeeded }` JSON |
 | `/config.html` | GET | HTTP/HTTPS | none | Static page served from `TeslaPCInterface/config.html` |
+| `/version` | GET | HTTP/HTTPS | none | `WebServer.HandleRequest` — returns `{ "version": "<version>" }` JSON (e.g. `{ "version": "1.0.0" }`); lightweight endpoint for health checks or external tooling |
+
+## Versioning
+
+`AppSettings.Version` returns the application version at runtime:
+
+1. Reads `AssemblyInformationalVersionAttribute` from the executing assembly.
+2. Strips any `+git` suffix (e.g. `1.0.0+abc1234` → `1.0.0`).
+3. Falls back to the assembly version if the informational attribute is absent.
+
+The version string is set in `TeslaPCInterface.csproj` via `<Version>1.0.0</Version>`. It is
+surfaced in:
+
+| Surface | Detail |
+|---------|--------|
+| WinForms control panel | Muted `v1.0.0` label under the "TeslaPC" wordmark in the tab bar (`MainForm`) |
+| Web Settings page (`config.html`) footer | Pre-filled by the `version` field from `GET /config` |
+| `GET /config` response | `version` field in the JSON object |
+| `GET /version` endpoint | `{ "version": "1.0.0" }` — lightweight standalone endpoint |
+
+**Release convention:** tag git at the released commit as `v<Version>` (e.g. `v1.0.0`).
 
 ## Settings / Environment Keys
 

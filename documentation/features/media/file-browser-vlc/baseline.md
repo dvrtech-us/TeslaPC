@@ -5,6 +5,14 @@ Known-good invariants. Update only when intended behavior changes.
 ## Invariants
 
 - `/list.html` lists the contents of `?path=` or, when absent, **`C:\video\`**.
+- The browser renders a `<div class="list">` of `<a class="row …">` rows — folders first, then
+  files. The old `.grid`/`.tile` layout is no longer used.
+- Folder rows carry class `row folder`; file rows carry class `row file`.
+- File rows display the **full filename including extension** (`Path.GetFileName`).
+- File state badges are derived from `MediaLibrary.GetAll()` (one query per page render):
+  - Watched (≥ 95 %): `row.watched` class + `badge done` "Watched" badge.
+  - Partial: `"{percent}%"` badge.
+  - Not started: no badge.
 - Files link to `/play.html?FILENAME=<fullpath>`; subfolders link to `/list.html?path=<folder>`.
 - At the browse root (`C:\video\`) a **Back to Screen** link is shown; otherwise an **Up** link
   to the parent folder.

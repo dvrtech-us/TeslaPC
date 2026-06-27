@@ -33,7 +33,9 @@ documentation/
 
 **Quality rules:** name exact classes, methods, file paths, and constant values; document
 timings, thresholds, and config keys; describe failure/fallback paths; document actual
-behavior, not aspirations. This project has **no database**, so there are no `sql/` folders.
+behavior, not aspirations. The project uses a small SQLite database (`Microsoft.Data.Sqlite`)
+at `%ProgramData%\TeslaPC\teslapc.db` (owned by the `media-library` feature); there are
+still **no `sql/` folders** — the schema is created in code.
 
 ### Feature Map (quick index)
 
@@ -46,6 +48,7 @@ behavior, not aspirations. This project has **no database**, so there are no `sq
 | streaming | display-control | `DisplayManager.cs`, `WebServer.cs` |
 | app | control-panel | `Program.cs`, `MainForm.cs`, `TeslaPcService.cs` |
 | app | configuration | `AppSettings.cs`, `WebServer.cs`, `MainForm.cs`, `config.html` |
+| media | media-library | `MediaLibrary.cs`, `MediaStreamer.cs` |
 | client | web-ui | `index.html`, `PCMPlayerProcessor.js` |
 | infrastructure | tesla-browser-bypass | `TeslaBrowserBypass.cs` |
 | infrastructure | firewall-bootstrap | `FirewallBootstrap.cs` |
@@ -98,6 +101,15 @@ no bypass).
 - No automated test suite; verify by running the app and connecting via browser.
 - No CI/CD, no pre-commit hooks. Main branch is `main`. Commit messages are short and descriptive.
 
+## Versioning & Releases
+
+- The application version is set in `TeslaPCInterface.csproj` via `<Version>1.0.0</Version>`.
+- `AppSettings.Version` reads `AssemblyInformationalVersionAttribute` at runtime, strips any
+  `+git` suffix, and falls back to the assembly version.
+- The version is surfaced in the WinForms tab bar, the `GET /config` JSON (`version` field),
+  the `config.html` footer, and the `GET /version` endpoint (`{ "version": "1.0.0" }`).
+- **Release convention:** tag git at the released commit as `v<Version>` (e.g. `v1.0.0`).
+
 ## Per-Org Engineering Defaults
 
 - Default stack for new work unless the environment dictates otherwise: desktop = C#, web = PHP/Laravel + Bootstrap, mobile = Flutter, Windows scripting = PowerShell.
@@ -109,3 +121,8 @@ no bypass).
 - Mouse supports left-click, drag, and right-click (long-press on touch); **no scroll-wheel** yet. Keyboard input is implemented (typing, named keys, and paste, replayed host-side via `SendKeys`); the `keybd_event` P/Invoke remains declared but unused.
 - Static files are read via `File.ReadAllText` (UTF-8), so binary assets (e.g. `.png`/`.jpg`) are not served correctly. Video playback does **not** use this path — it streams via the ffmpeg/MJPEG media pipeline.
 - `bindSSLCert.bat` and `SslCertificateBootstrap.cs` diverge slightly (extra port cleanup, explicit subject) — see the https-bootstrap baseline.
+- **SQLite advisory GHSA-2m69-gcr7-jv3q** on `SQLitePCLRaw.lib.e_sqlite3` (transitive via
+  `Microsoft.Data.Sqlite`). No patched release exists as of 2026-06-27. Risk is nil: the DB
+  is a local, single-user, parameterized-query store with no untrusted SQL. Pinned at
+  `SQLitePCLRaw.bundle_e_sqlite3` 2.1.11 (latest). See
+  `documentation/features/media/media-library/media-library.md`.
