@@ -63,6 +63,11 @@ namespace PrimaryProcess
             bool bypassEnabled = !args.Contains("--no-tesla-bypass");
             if (bypassEnabled)
             {
+                // Turn Mobile Hotspot on if it's off, so the bypass has an adapter to attach to,
+                // then give the virtual adapter a moment to come up before configuring it.
+                if (HotspotManager.EnsureHotspotOn())
+                    System.Threading.Thread.Sleep(2000);
+
                 bypass = new TeslaBrowserBypass.TeslaBrowserBypass();
                 if (!bypass.Setup(httpPort, httpsPort))
                 {

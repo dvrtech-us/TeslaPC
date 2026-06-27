@@ -8,10 +8,12 @@ through it, so the Tesla browser will connect.
 
 ## User Flow
 
-1. The operator enables Windows Mobile Hotspot and connects the Tesla to it.
-2. TeslaPC launches (without `--no-tesla-bypass`) **as administrator**.
+1. TeslaPC launches (without `--no-tesla-bypass`) **as administrator**.
+2. If Windows Mobile Hotspot is off, `HotspotManager.EnsureHotspotOn()` turns it on (WinRT
+   tethering API via PowerShell), then waits ~2 s for the virtual adapter to come up.
 3. The bypass adds `100.64.0.1` to the hotspot adapter and forwards `8080`/`8443` to localhost.
-4. The Tesla browser navigates to `https://100.64.0.1:8443/`.
+4. The user connects the Tesla to the hotspot and browses to `https://my.thelpers.com:8443/`
+   (trusted) or `https://100.64.0.1:8443/`.
 5. On shutdown, the bypass removes the IP, portproxy rules, and firewall rule.
 
 ## Technical Flow (`TeslaBrowserBypass`, `TeslaBrowserBypass.cs`, namespace `TeslaBrowserBypass`)
