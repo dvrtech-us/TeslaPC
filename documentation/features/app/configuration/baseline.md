@@ -4,9 +4,9 @@ Known-good invariants. Update only when intended behavior changes.
 
 ## Invariants
 
-- The five settings (`TESLAPC_HTTPS_HOST`, `TESLAPC_CF_TOKEN`, `TESLAPC_ACME_EMAIL`,
-  `TESLAPC_VIDEO_ROOT`, `TESLAPC_LOG_LEVEL`) are persisted to `%ProgramData%\TeslaPC\.env`
-  by `AppSettings.Save`.
+- The six settings (`TESLAPC_HTTPS_HOST`, `TESLAPC_CF_TOKEN`, `TESLAPC_ACME_EMAIL`,
+  `TESLAPC_VIDEO_ROOT`, `TESLAPC_LOG_LEVEL`, `TESLAPC_STREAM_HEIGHT`) are persisted to
+  `%ProgramData%\TeslaPC\.env` by `AppSettings.Save`.
 - `Program.LoadDotEnv` loads the app-directory `.env` first, then `%ProgramData%\TeslaPC\.env`.
   **Existing environment variables win** — neither file overwrites a key already set in the
   process environment.
@@ -44,3 +44,11 @@ Known-good invariants. Update only when intended behavior changes.
   the other settings. `logLevel` is **not** a secret and is always included in the response.
 - `logLevel` is **not** part of the `restartNeeded` flag returned by `POST /config`; it takes
   effect live.
+- `GET /config` includes `streamHeight` (integer — current `_imageStreamer.MaxHeight`; default
+  `1080`). `POST /config` accepts `streamHeight` (240–2160); calls
+  `_imageStreamer.SetMaxResolution(h*4, h)` immediately and persists via `AppSettings.Save`.
+  `streamHeight` is **not** part of `restartNeeded` — it takes effect live.
+- `AppSettings.StreamHeight` clamps the env-var value to `[240, 2160]`; values outside the
+  range or absent/unparseable fall back to `AppSettings.DefaultStreamHeight` (1080).
+- The stream-resolution dropdown (480p / 720p / 1080p) appears in both `index.html` and
+  `config.html` and posts to `POST /config` as `streamHeight`.

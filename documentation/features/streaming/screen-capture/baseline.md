@@ -25,9 +25,21 @@ Known-good invariants for screen capture and MJPEG streaming. Update only when i
 - JPEG quality is fixed at `60`.
 - Frame pacing is best-effort via `Environment.TickCount`; overruns are not compensated across frames.
 - Scaling uses fixed `Bilinear` / `HighSpeed` / no-smoothing settings.
-- Output is the live screen scaled **uniformly** into the `1280×720` cap box — aspect ratio is
-  always preserved and the image is never upscaled (screens ≤ the box stream at native size). The
-  cap box is fixed (passed as 1280×720), so it follows live resolution changes, not the startup size.
+- Output is the live screen scaled **uniformly** into the `MaxWidth × MaxHeight` cap box — aspect ratio is
+  always preserved and the image is never upscaled (screens ≤ the box stream at native size).
+- `MaxHeight` defaults to `AppSettings.DefaultStreamHeight` (1080). Width cap is always `4 × MaxHeight`
+  so height is the binding dimension for normal and ultrawide displays.
+- `_maxWidth` and `_maxHeight` are `volatile`; they may change between sessions without
+  stopping connected clients.
+
+## Session-Restart Rules
+
+- `RunCaptureSession` returns `true` (triggering a restart) when:
+  - `_restartEpoch` differs from the value snapshotted at session start (set by `SetMaxResolution` or `RestartCapture`), **or**
+  - `Screen.PrimaryScreen.Bounds` no longer matches the `screenSize` captured at session start.
+- On a `true` return, `CaptureLoop` immediately calls `RunCaptureSession` again with fresh state.
+- DXGI Desktop Duplication cannot survive a display-mode switch; a new `DxgiScreenCapture` is
+  constructed for every session.
 
 ## Access Control
 
@@ -39,3 +51,4 @@ Known-good invariants for screen capture and MJPEG streaming. Update only when i
 - Capture/encode error on a frame → logged, frame skipped, loop continues.
 - Client disconnect → write throws, caught in `StreamToClient`; `_clientCount` decremented and the response stream closed in `finally`.
 - No new frame within 1000 ms → client re-checks capture-thread liveness; exits if the thread is dead.
+- Headless / no active display → DXGI captures nothing (black or last frame); GDI may return a blank 800×600 desktop.
