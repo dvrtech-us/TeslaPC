@@ -19,7 +19,12 @@ and runs the server in the background.
   - **Dashboard tab**: status rows (Server, HTTPS mode, Hotspot, Connected clients), the Tesla
     connect URL, and large buttons — **Toggle Hotspot**, **Restart** (server), **Minimize**, **Quit**.
   - **Log tab**: a read-only `RichTextBox`. `Console.Out` is redirected to it via `ControlWriter`,
-    which also tees to the original stream (so a redirected log file still gets output).
+    which also tees to the original stream (so a redirected log file still gets output). The
+    `RichTextBox` is only updated while the Log tab is **visible**. While the tab is hidden, new
+    lines accumulate in an in-memory `StringBuilder` buffer (cap 120 000 chars; trimmed to
+    90 000 when the cap is exceeded). When the Log tab is opened, `ShowLogBuffer` rebuilds the
+    `RichTextBox` from the buffer in one pass, then `AppendToBox` resumes live updates for as
+    long as the tab stays open.
   - A 2 s `Timer` refreshes status from the service.
   - **Keeps the display awake** via `SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED |
     ES_DISPLAY_REQUIRED)` — required so DXGI screen capture doesn't stall when the monitor would

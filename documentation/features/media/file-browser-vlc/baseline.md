@@ -54,7 +54,12 @@ Known-good invariants. Update only when intended behavior changes.
 
 - ffmpeg not found and VLC not installed at `C:\Program Files\VideoLAN\VLC\vlc.exe` →
   `Process.Start` throws → HTTP 500.
-- Browse folder missing → `Directory.GetFiles` throws → HTTP 500.
+- Browse folder missing (`Directory.Exists` returns false) → `returnAllFilesAsHtmlLinks`
+  returns a friendly `.empty` page ("This folder doesn't exist … Pick a valid Video folder in
+  Settings") with a link to `/config.html` — **HTTP 200, not 500**.
+- Browse folder exists but unreadable (access error from `Directory.GetDirectories` or
+  `Directory.GetFiles`) → `Log.Warn` is called; a "Couldn't read this folder" `.empty` message
+  is shown — **HTTP 200, not 500**.
 - Path passed to `Play` does not exist or is outside `Root` → `Play` returns an error status;
   media mode is not entered.
 - ffprobe unavailable or unable to determine duration → `duration` is reported as 0; playback
@@ -66,4 +71,5 @@ Known-good invariants. Update only when intended behavior changes.
 
 - ffmpeg (and ffprobe) available via `TESLAPC_FFMPEG`, `AppContext.BaseDirectory`, or PATH.
 - VLC installed at the standard path (only required when ffmpeg is absent).
-- `C:\video\` (or the chosen `?path=`) exists.
+- `C:\video\` (or the chosen `?path=`) should exist; a missing or unreadable folder is now
+  handled gracefully (HTTP 200 with a friendly message) rather than causing HTTP 500.

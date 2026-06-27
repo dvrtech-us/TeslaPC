@@ -26,6 +26,12 @@ All routing is in `WebServer.HandleHttpAsync`. Media control is in `MediaStreame
 
 - Query: `?path=<folder>` (defaults to `C:\video\` when absent).
 - `returnAllFilesAsHtmlLinks(path)` builds touch markup:
+  - Checks `Directory.Exists(path)` first. If the folder does not exist, returns the topbar
+    plus a `.empty` message ("This folder doesn't exist … Pick a valid Video folder in
+    Settings") with a link to `/config.html` — HTTP 200, not 500.
+  - `Directory.GetDirectories` and `Directory.GetFiles` are wrapped in try/catch; on an
+    `UnauthorizedAccessException` or other I/O error, `Log.Warn` is called and a "Couldn't
+    read this folder" `.empty` message is shown — HTTP 200, not 500.
   - a sticky `.topbar` with **Screen** (`/`), **Up** (parent, omitted at the `C:\video\` root),
     and the current path.
   - a `.grid` of `.tile` cards — **folders first** (`📁`, link to `/list.html?path=<folder>`),
@@ -200,9 +206,11 @@ play/pause/seek/stop commands** — a notable capability to keep in mind for net
   by `TESLAPC_FFMPEG`. Install via `winget install Gyan.FFmpeg` or any standard distribution.
 - If ffmpeg is absent, **VLC** must be installed at `C:\Program Files\VideoLAN\VLC\vlc.exe`
   (e.g. `winget install VideoLAN.VLC`) for the fallback path to work.
-- A **browse folder** must exist; `C:\video\` by default, or pass `?path=`.
-- If ffmpeg is absent and VLC is missing, or if the browse folder does not exist, the request
-  fails (HTTP 500) because `Process.Start` / `Directory.GetFiles` throw.
+- A **browse folder** must exist; `C:\video\` by default, or pass `?path=`. If the folder
+  does not exist or is unreadable, the file browser returns a friendly HTTP 200 page with an
+  error message and a link to `/config.html`; it does not return HTTP 500.
+- If ffmpeg is absent and VLC is missing, the VLC `Process.Start` call throws → HTTP 500.
+  A missing browse folder no longer causes HTTP 500.
 
 ## Database Schema
 
