@@ -105,6 +105,6 @@ no bypass).
 ## Current Known Gaps (documented, not bugs)
 
 - **No authentication** on any route; access is controlled only at the network layer.
-- **Keyboard input is not implemented** (the `keybd_event` P/Invoke is declared but unused); mouse is left-button only (no right-click/scroll).
-- Static files are read via `File.ReadAllText` (UTF-8), so binary assets are not served correctly.
+- Mouse supports left-click, drag, and right-click (long-press on touch); **no scroll-wheel** yet. Keyboard input is implemented (typing, named keys, and paste, replayed host-side via `SendKeys`); the `keybd_event` P/Invoke remains declared but unused.
+- Static files are read via `File.ReadAllText` (UTF-8), so binary assets (e.g. `.png`/`.jpg`) are not served correctly. Video playback does **not** use this path — it streams via the ffmpeg/MJPEG media pipeline.
 - `bindSSLCert.bat` and `SslCertificateBootstrap.cs` diverge slightly (extra port cleanup, explicit subject) — see the https-bootstrap baseline.
