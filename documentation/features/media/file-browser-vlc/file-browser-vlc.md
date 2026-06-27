@@ -3,8 +3,7 @@
 A server-side file browser that lists video files on the host, and an in-app ffmpeg decode
 pipeline that plays a chosen file by feeding the existing MJPEG `/stream` and `/ws/audio`
 endpoints directly — no VLC, no screen capture, host display can be off. Reached from the main
-UI via the **Files** button. The file browser (`/list.html`) is unchanged; only the playback
-path changed. VLC is retained as an automatic fallback when ffmpeg is absent.
+UI via the **Files** button. VLC is retained as an automatic fallback when ffmpeg is absent.
 
 ## User Flow
 
@@ -25,22 +24,34 @@ All routing is in `WebServer.HandleHttpAsync`. Media control is in `MediaStreame
 ### `/list.html` (file browser)
 
 - Query: `?path=<folder>` (defaults to `C:\video\` when absent).
-- `returnAllFilesAsHtmlLinks(path)` builds touch markup:
+- `returnAllFilesAsHtmlLinks(path)` builds a list-view layout:
   - Checks `Directory.Exists(path)` first. If the folder does not exist, returns the topbar
     plus a `.empty` message ("This folder doesn't exist … Pick a valid Video folder in
     Settings") with a link to `/config.html` — HTTP 200, not 500.
   - `Directory.GetDirectories` and `Directory.GetFiles` are wrapped in try/catch; on an
     `UnauthorizedAccessException` or other I/O error, `Log.Warn` is called and a "Couldn't
     read this folder" `.empty` message is shown — HTTP 200, not 500.
-  - a sticky `.topbar` with **Screen** (`/`), **Up** (parent, omitted at the `C:\video\` root),
+  - A sticky `.topbar` with **Screen** (`/`), **Up** (parent, omitted at the `C:\video\` root),
     and the current path.
-  - a `.grid` of `.tile` cards — **folders first** (`📁`, link to `/list.html?path=<folder>`),
-    then files (`🎬`, link to `/play.html?FILENAME=<fullpath>`, with an extension badge).
-  - an empty folder shows a `.empty` message.
+  - A `<div class="list">` containing `<a class="row …">` rows — **folders first**, then files.
+    - **Folder rows** (`row folder`): folder icon (`.ic`), folder name (`.nm`), chevron (`.chev`);
+      link to `/list.html?path=<folder>`.
+    - **File rows** (`row file`): film icon (`.ic`), full filename including extension via
+      `Path.GetFileName` (`.nm`), and a state badge (`.badge`) from the `MediaLibrary`:
+      - **Watched** (≥ 95 %): green check icon + `watched` CSS class on the row + a "Watched"
+        badge with class `badge done`.
+      - **Partially watched** (saved position > 0, not watched): a `"{percent}%"` badge.
+      - **Not started** (no record or 0 %): film icon only, no badge.
+      Link goes to `/play.html?FILENAME=<fullpath>`.
+  - An empty folder shows a `.empty` message.
+- All file-state data comes from a single `MediaLibrary.GetAll()` call before the loop
+  (one DB query per page render, keyed by lower-cased path).
 - Display names are HTML-encoded (`HttpUtility.HtmlEncode`) and query values URL-encoded
   (`HttpUtility.UrlEncode`), so filenames with spaces/special characters work.
 - The result is substituted into the `{{GUTS}}` placeholder in `list.html`. Styling is in
-  the shared `style.css`.
+  the shared `style.css` (new classes: `.list`, `.row`, `.row .ic/.nm/.chev/.badge`,
+  `.row.watched`, `.badge.done`; the `--good` color token; old `.grid`/`.tile` styles remain
+  but are no longer used by the browser).
 
 ### `/play.html` (in-app player or VLC fallback)
 
@@ -161,9 +172,10 @@ request port is `8443` swaps `:8080→:8443`, `:8081→:8444`, `:8082→:8445`, 
 | `AudioCapture.EnqueueMediaAudio` | `TeslaPCInterface/AudioStreamingServer.cs` | Push decoded audio PCM into the broadcast queue |
 | `WebServer.HandleMedia` | `TeslaPCInterface/WebServer.cs` | Routes `/media/*` requests to `MediaStreamer` |
 | `WebServer.HandleHttpAsync` | `TeslaPCInterface/WebServer.cs` | Serves `list.html`/`play.html`, applies templating, dispatches to `_media.Play` or VLC fallback |
-| `WebServer.returnAllFilesAsHtmlLinks` | `TeslaPCInterface/WebServer.cs` | Builds file/folder link markup for the browser |
+| `WebServer.returnAllFilesAsHtmlLinks` | `TeslaPCInterface/WebServer.cs` | Builds list-view file/folder markup for the browser, with watched/resume badges from `MediaLibrary` |
 | `WebServer.handleHTMLReplacements` | `TeslaPCInterface/WebServer.cs` | Host/port/protocol substitution for HTML responses |
-| `TeslaPcService` | `TeslaPCInterface/TeslaPcService.cs` | Constructs `MediaStreamer`, passes it to `WebServer`, calls `_media.Stop()` on shutdown |
+| `MediaLibrary` | `TeslaPCInterface/MediaLibrary.cs` | SQLite playback-progress store; `GetAll()` used by the file browser per page render |
+| `TeslaPcService` | `TeslaPCInterface/TeslaPcService.cs` | Constructs `MediaLibrary` and `MediaStreamer`, passes both to `WebServer`, calls `_media.Stop()` on shutdown |
 | `list.html` | `TeslaPCInterface/list.html` | File-browser page template (`{{GUTS}}`) |
 | `play.html` | `TeslaPCInterface/play.html` | Player page template (`{{TITLE}}`); VLC fallback uses an inline status card |
 | `audio-client.js` | `TeslaPCInterface/audio-client.js` | Self-contained WebSocket audio client for play.html |
@@ -214,7 +226,9 @@ play/pause/seek/stop commands** — a notable capability to keep in mind for net
 
 ## Database Schema
 
-None.
+The file browser reads from the `playback` table via `MediaLibrary.GetAll()` to derive
+watched/resume badges. The schema is owned by the
+[media-library](../media-library/media-library.md) feature.
 
 ## SQL Artifacts
 

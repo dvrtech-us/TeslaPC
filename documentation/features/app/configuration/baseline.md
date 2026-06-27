@@ -52,3 +52,11 @@ Known-good invariants. Update only when intended behavior changes.
   range or absent/unparseable fall back to `AppSettings.DefaultStreamHeight` (1080).
 - The stream-resolution dropdown (480p / 720p / 1080p) appears in both `index.html` and
   `config.html` and posts to `POST /config` as `streamHeight`.
+- `GET /config` includes a `version` field (string) — the value of `AppSettings.Version`.
+  The version is read-only; it cannot be changed via `POST /config` and is not part of
+  `restartNeeded`.
+- `GET /version` returns `{ "version": "<version>" }` — the same value as the `version` field
+  in `GET /config`. It is a standalone, read-only endpoint with no side effects.
+- `AppSettings.Version` reads `AssemblyInformationalVersionAttribute`, strips any `+git`
+  suffix, and falls back to the assembly version. The value is determined at build time by
+  `<Version>` in the `.csproj` and does not change while the process is running.

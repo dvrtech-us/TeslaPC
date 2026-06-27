@@ -25,7 +25,8 @@ Each feature has its own directory under `features/<module>/<feature-name>/` con
 | app | [control-panel](features/app/control-panel/control-panel.md) | WinForms desktop control panel (Dashboard + Log, status, large controls) | `Program.cs`, `MainForm.cs`, `TeslaPcService.cs` |
 | app | [configuration](features/app/configuration/configuration.md) | In-app settings editor (WinForms Config tab + `/config.html`); persists to `%ProgramData%\TeslaPC\.env` | `AppSettings.cs`, `WebServer.cs`, `MainForm.cs`, `config.html` |
 | client | [web-ui](features/client/web-ui/web-ui.md) | Single-page browser client (video, audio, input) | `index.html`, `PCMPlayerProcessor.js` |
-| media | [file-browser-vlc](features/media/file-browser-vlc/file-browser-vlc.md) | Host file browser that launches videos in VLC full-screen | `WebServer.cs`, `list.html`, `play.html` |
+| media | [file-browser-vlc](features/media/file-browser-vlc/file-browser-vlc.md) | Host file browser (list view) with watched/resume badges; in-app ffmpeg player | `WebServer.cs`, `list.html`, `play.html` |
+| media | [media-library](features/media/media-library/media-library.md) | SQLite playback-progress store: resume, watched flag, play count | `MediaLibrary.cs`, `MediaStreamer.cs` |
 | infrastructure | [tesla-browser-bypass](features/infrastructure/tesla-browser-bypass/tesla-browser-bypass.md) | CGNAT secondary IP + portproxy so the Tesla in-car browser can connect | `TeslaBrowserBypass.cs` |
 | infrastructure | [firewall-bootstrap](features/infrastructure/firewall-bootstrap/firewall-bootstrap.md) | Idempotent Windows Firewall inbound rule for ports 8080/8443 | `FirewallBootstrap.cs` |
 | infrastructure | [https-bootstrap](features/infrastructure/https-bootstrap/https-bootstrap.md) | Self-signed cert generation, key ACLs, URL ACLs, and SSL binding to port 8443 | `SslCertificateBootstrap.cs`, `bindSSLCert.bat` |
@@ -35,4 +36,6 @@ Each feature has its own directory under `features/<module>/<feature-name>/` con
 - Document **actual behavior as implemented**, not desired future behavior.
 - Name exact classes, methods, file paths, and constant values — no vague references.
 - Update the primary doc on every behavior-affecting change; update `baseline.md` only when intended behavior changes; add a `trail/` entry for any non-trivial decision.
-- This project has **no database**, so feature directories contain no `sql/` folder.
+- The project uses a small SQLite database (`%ProgramData%\TeslaPC\teslapc.db`, owned by
+  the `media-library` feature). There are still **no `sql/` folders** — the schema is created
+  in code (`CREATE TABLE IF NOT EXISTS` in `MediaLibrary`'s constructor).
