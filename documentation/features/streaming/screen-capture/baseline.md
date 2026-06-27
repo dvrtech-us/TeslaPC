@@ -25,7 +25,9 @@ Known-good invariants for screen capture and MJPEG streaming. Update only when i
 - JPEG quality is fixed at `60`.
 - Frame pacing is best-effort via `Environment.TickCount`; overruns are not compensated across frames.
 - Scaling uses fixed `Bilinear` / `HighSpeed` / no-smoothing settings.
-- Output resolution is clamped to the configured max (`1280×720`).
+- Output is the live screen scaled **uniformly** into the `1280×720` cap box — aspect ratio is
+  always preserved and the image is never upscaled (screens ≤ the box stream at native size). The
+  cap box is fixed (passed as 1280×720), so it follows live resolution changes, not the startup size.
 
 ## Access Control
 

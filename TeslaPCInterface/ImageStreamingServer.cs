@@ -138,8 +138,11 @@ namespace Streaming
                     System.Windows.Forms.Screen.PrimaryScreen!.Bounds.Width,
                     System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
 
-            int outWidth = Math.Min(screenSize.Width, _maxWidth);
-            int outHeight = Math.Min(screenSize.Height, _maxHeight);
+            // Scale uniformly to fit within the cap box (preserves aspect ratio; never upscales),
+            // so the stream always matches the screen's shape regardless of its aspect ratio.
+            double scale = Math.Min(1.0, Math.Min((double)_maxWidth / screenSize.Width, (double)_maxHeight / screenSize.Height));
+            int outWidth = Math.Max(1, (int)Math.Round(screenSize.Width * scale));
+            int outHeight = Math.Max(1, (int)Math.Round(screenSize.Height * scale));
             bool needsResize = outWidth != screenSize.Width || outHeight != screenSize.Height;
 
             using Bitmap srcImage = new(screenSize.Width, screenSize.Height, PixelFormat.Format32bppArgb);

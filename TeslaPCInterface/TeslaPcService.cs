@@ -37,10 +37,9 @@ internal sealed class TeslaPcService
 
     public async Task StartAsync(string[] args)
     {
-        var bounds = System.Windows.Forms.Screen.PrimaryScreen!.Bounds;
-        var resolution = new System.Drawing.Size(Math.Min(bounds.Width, 1280), Math.Min(bounds.Height, 720));
-
-        _imageServer = new ImageStreamingServer(resolution.Width, resolution.Height, 30);
+        // 1280x720 cap box. The capture loop scales the live screen into this box preserving
+        // aspect ratio (and never upscales), so the stream always matches the screen's shape.
+        _imageServer = new ImageStreamingServer(1280, 720, 30);
         _audioCapture = new AudioCapture();
         _audioCapture.StartCapturing();
 
