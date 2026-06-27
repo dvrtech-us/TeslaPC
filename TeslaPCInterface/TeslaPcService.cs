@@ -18,6 +18,7 @@ internal sealed class TeslaPcService
     private readonly CancellationTokenSource _cts = new();
     private ImageStreamingServer? _imageServer;
     private AudioCapture? _audioCapture;
+    private MediaLibrary? _library;
     private MediaStreamer? _media;
     private WebServer? _webServer;
     private TeslaBrowserBypass.TeslaBrowserBypass? _bypass;
@@ -55,7 +56,8 @@ internal sealed class TeslaPcService
         _imageServer = new ImageStreamingServer(h * 4, h, 30);
         _audioCapture = new AudioCapture();
         _audioCapture.StartCapturing();
-        _media = new MediaStreamer(_imageServer, _audioCapture) { Root = AppSettings.VideoRoot };
+        _library = new MediaLibrary();
+        _media = new MediaStreamer(_imageServer, _audioCapture, _library) { Root = AppSettings.VideoRoot };
 
         BypassEnabled = !args.Contains("--no-tesla-bypass");
         if (BypassEnabled)
@@ -85,7 +87,7 @@ internal sealed class TeslaPcService
             EnableHttps = SslCertificateBootstrap.TryEnsureHttpsReady(HttpsPort, HttpPort, _httpsHost);
         }
 
-        _webServer = new WebServer(_imageServer, _audioCapture, _media);
+        _webServer = new WebServer(_imageServer, _audioCapture, _media, _library);
         var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var serverTask = _webServer.StartWebServerAsync(HttpPort, HttpsPort, LocalhostOnly, EnableHttps, started);
         try { await started.Task.WaitAsync(TimeSpan.FromSeconds(10)); }

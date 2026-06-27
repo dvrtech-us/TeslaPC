@@ -29,6 +29,8 @@ public sealed class MediaStreamer : IDisposable
 
     private readonly ImageStreamingServer _img;
     private readonly AudioCapture _audio;
+    private readonly MediaLibrary _lib;
+    private readonly System.Threading.Timer _saveTimer;
     private readonly string? _ffmpeg;
     private readonly string? _ffprobe;
 
@@ -46,10 +48,14 @@ public sealed class MediaStreamer : IDisposable
     /// <summary>The directory the file browser is rooted at; playback is restricted to files under it.</summary>
     public string Root { get; set; } = @"C:\video\";
 
-    public MediaStreamer(ImageStreamingServer img, AudioCapture audio)
+    public MediaStreamer(ImageStreamingServer img, AudioCapture audio, MediaLibrary library)
     {
         _img = img;
         _audio = audio;
+        _lib = library;
+        // Persist the current position every 5s so progress survives even if the viewer just
+        // navigates away (no explicit stop). Pause/seek/stop/EOF also persist immediately.
+        _saveTimer = new System.Threading.Timer(_ => PersistTick(), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
         _ffmpeg = ResolveExe("ffmpeg");
         _ffprobe = ResolveExe("ffprobe");
         Console.WriteLine(_ffmpeg != null
@@ -95,10 +101,20 @@ public sealed class MediaStreamer : IDisposable
             KillCurrent();
             _file = path;
             _duration = ProbeDuration(path);
+            _lib.IncrementPlayCount(path);
+
+            // Resume from the saved position when partway through (not near the start or already watched).
+            double start = 0;
+            var prog = _lib.Get(path);
+            if (prog != null && !prog.Watched && _duration > 0
+                && prog.Position > 5 && prog.Position < _duration * MediaLibrary.WatchedFraction)
+                start = prog.Position;
+
             _img.EnterMediaMode();
             _audio.MediaMode = true;
-            StartFrom(0);
-            Console.WriteLine($"[Media] Playing {Path.GetFileName(path)} ({_duration:0.0}s)");
+            StartFrom(start);
+            Console.WriteLine($"[Media] Playing {Path.GetFileName(path)} ({_duration:0.0}s)"
+                + (start > 0 ? $", resuming at {start:0.0}s" : ""));
         }
         return true;
     }
@@ -113,6 +129,7 @@ public sealed class MediaStreamer : IDisposable
             _paused = true;
             _sw.Reset();
             KillCurrent();
+            if (_file != null) _lib.SaveProgress(_file, _seekBase, _duration);
         }
     }
 
@@ -143,6 +160,7 @@ public sealed class MediaStreamer : IDisposable
                 _seekBase = pos;        // resume will start here
             else
                 StartFrom(pos);
+            if (_file != null) _lib.SaveProgress(_file, pos, _duration);
             Console.WriteLine($"[Media] Seek to {pos:0.0}s");
         }
     }
@@ -153,6 +171,7 @@ public sealed class MediaStreamer : IDisposable
         lock (_gate)
         {
             bool wasActive = _playing || _paused;
+            if (wasActive && _file != null) _lib.SaveProgress(_file, CurrentPosition(), _duration);
             KillCurrent();
             _playing = false;
             _paused = false;
@@ -175,6 +194,18 @@ public sealed class MediaStreamer : IDisposable
     {
         double pos = _seekBase + (_paused ? 0 : _sw.Elapsed.TotalSeconds);
         return Clamp(pos);
+    }
+
+    /// <summary>Periodic timer callback: snapshot the position under the lock, then persist outside it.</summary>
+    private void PersistTick()
+    {
+        string? f; double pos, dur;
+        lock (_gate)
+        {
+            if (!_playing || _paused || _file == null) return;
+            f = _file; pos = CurrentPosition(); dur = _duration;
+        }
+        _lib.SaveProgress(f, pos, dur);
     }
 
     private double Clamp(double pos)
@@ -329,6 +360,7 @@ public sealed class MediaStreamer : IDisposable
         {
             if (gen != _gen || !_playing || _paused)
                 return;
+            if (_file != null) _lib.MarkWatched(_file, _duration);   // reached the end -> watched
             _playing = false;
             _file = null;
             _seekBase = 0;
@@ -445,7 +477,11 @@ public sealed class MediaStreamer : IDisposable
         catch { return false; }
     }
 
-    public void Dispose() => Stop();
+    public void Dispose()
+    {
+        try { _saveTimer.Dispose(); } catch { }
+        Stop();
+    }
 }
 
 /// <summary>Snapshot of the player state, serialized to JSON for the <c>/media/status</c> route.</summary>

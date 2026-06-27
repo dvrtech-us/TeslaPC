@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text;
 
 /// <summary>
@@ -37,6 +38,13 @@ public static class AppSettings
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "TeslaPC", ".env");
 
     public static string? Get(string key) => Environment.GetEnvironmentVariable(key);
+
+    /// <summary>The app version (from the assembly, set by &lt;Version&gt; in the csproj).</summary>
+    public static string Version =>
+        Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion.Split('+')[0]
+        ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString()
+        ?? "0.0.0";
 
     /// <summary>Configured video folder, or the default when unset/blank.</summary>
     public static string VideoRoot
