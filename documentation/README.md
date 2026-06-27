@@ -21,6 +21,7 @@ Each feature has its own directory under `features/<module>/<feature-name>/` con
 | server | [input-control](features/server/input-control/input-control.md) | Mouse (Win32 P/Invoke) and keyboard (SendKeys) over the `/ws/input` WebSocket | `WebServer.cs`, `Program.cs` |
 | streaming | [screen-capture](features/streaming/screen-capture/screen-capture.md) | MJPEG screen streaming with DXGI Desktop Duplication and GDI fallback | `ImageStreamingServer.cs`, `DxgiScreenCapture.cs`, `MjpegWriter.cs` |
 | streaming | [audio-capture](features/streaming/audio-capture/audio-capture.md) | WASAPI loopback system-audio streaming over `/ws/audio` | `AudioStreamingServer.cs`, `PCMPlayerProcessor.js` |
+| app | [control-panel](features/app/control-panel/control-panel.md) | WinForms desktop control panel (Dashboard + Log, status, large controls) | `Program.cs`, `MainForm.cs`, `TeslaPcService.cs` |
 | client | [web-ui](features/client/web-ui/web-ui.md) | Single-page browser client (video, audio, input) | `index.html`, `PCMPlayerProcessor.js` |
 | media | [file-browser-vlc](features/media/file-browser-vlc/file-browser-vlc.md) | Host file browser that launches videos in VLC full-screen | `WebServer.cs`, `list.html`, `play.html` |
 | infrastructure | [tesla-browser-bypass](features/infrastructure/tesla-browser-bypass/tesla-browser-bypass.md) | CGNAT secondary IP + portproxy so the Tesla in-car browser can connect | `TeslaBrowserBypass.cs` |

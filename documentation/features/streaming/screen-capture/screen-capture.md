@@ -24,7 +24,9 @@ Duplication (GPU) and falls back to GDI `CopyFromScreen`.
 
 1. `using var dxgiCapture = new DxgiScreenCapture()`; check `IsAvailable`.
 2. Screen size from `dxgiCapture.CaptureSize` (DXGI) or `Screen.PrimaryScreen.Bounds` (GDI).
-3. Output size clamped: `min(screen, _maxWidth/_maxHeight)`.
+3. Output size = the live screen scaled **uniformly** to fit the `1280×720` cap box, preserving
+   aspect ratio and never upscaling: `scale = min(1, 1280/screenW, 720/screenH)`. So a 1080p screen
+   streams 1280×720, a 16:10 screen 1152×720, and anything ≤ the box streams at native size.
 4. Allocate `srcImage` (`Format32bppArgb`) and, if resizing, `scaledImage` (`Format24bppRgb`).
 5. Resolve the JPEG codec (`GetJpegCodec`) and set `Encoder.Quality = 60L`.
 6. Per frame:

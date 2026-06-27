@@ -26,15 +26,23 @@ The application runs a single unified HTTP/HTTPS server on ports 8080 (HTTP) and
 
 ```
 TeslaPCInterface/
-├── Program.cs                 # Entry point - initializes unified server and optional Tesla bypass
-├── WebServer.cs               # Unified HTTP/HTTPS server with path-based routing
+├── Program.cs                 # WinExe entry: loads .env, runs MainForm
+├── MainForm.cs                # WinForms touch control panel (Dashboard + Log tabs)
+├── TeslaPcService.cs          # Server lifecycle + status + hotspot-watchdog/ACME-renewal loops
+├── WebServer.cs               # Unified HTTP/HTTPS server with path-based routing + input replay
 ├── ImageStreamingServer.cs    # MJPEG screen capture (30 FPS, max 1280x720)
+├── DxgiScreenCapture.cs       # DXGI Desktop Duplication capture (GDI fallback)
 ├── AudioStreamingServer.cs    # WASAPI loopback audio capture via CSCore
 ├── TeslaBrowserBypass.cs      # Tesla in-car browser hotspot bypass (CGNAT IP + portproxy)
+├── HotspotManager.cs          # Enable/disable Windows Mobile Hotspot (WinRT tethering)
+├── FirewallBootstrap.cs       # Inbound firewall rule for 8080/8443
+├── SslCertificateBootstrap.cs # Bind trusted/self-signed cert to 8443 (http.sys)
+├── AcmeCertificateManager.cs  # In-app Let's Encrypt (Certes + Cloudflare DNS-01)
 ├── MjpegWriter.cs             # MJPEG multipart boundary encoder
-├── index.html                 # Single-page web UI (vanilla JS, Canvas, Web Audio API)
+├── index.html                 # Single-page web UI (vanilla JS, Web Audio API)
 ├── PCMPlayerProcessor.js      # AudioWorklet processor for PCM audio playback
-├── TeslaPCInterface.csproj    # Project file (.NET 10.0, WinForms)
+├── .env.example               # Config template (copy to .env; gitignored)
+├── TeslaPCInterface.csproj    # Project file (.NET 10.0, WinForms, WinExe)
 ├── TeslaPCInterface.sln       # Visual Studio solution
 └── bindSSLCert.bat            # Binds SSL cert to HTTPS port 8443 (requires admin)
 ```
