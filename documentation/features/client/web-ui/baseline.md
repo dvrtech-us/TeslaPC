@@ -13,7 +13,13 @@ Known-good invariants for the browser client. Update only when intended behavior
 
 - Mouse listeners are attached to the video `<img>`: `click`, `mousemove`, `mousedown`, `mouseup`.
 - Coordinates are relative to the image's bounding rect and sent with the image's rendered size as `DisplaySize`.
-- Keyboard input is sent from a visible `#fakeKeyboard` text input via `keyup`/`keypress` over `/ws/input` (the box lets touch devices open the on-screen keyboard); it is cleared after each keyup.
+- All keyboard paths send over `/ws/input` via `sendKey(key, code)` (`{Type:'key', Key, KeyCode}`) or `sendText(text)`.
+- Paste is forwarded regardless of whether `#fakeKeyboard` is focused: a `document`-level `paste` listener reads `clipboardData.getData('text')` and calls `sendText`; it also fires when the user pastes into the box itself (the box's own `input` event is suppressed by `preventDefault()`).
+- Physical keyboard typing is captured page-wide by a `document`-level `keydown` listener; the user does **not** need to focus `#fakeKeyboard` for keystrokes to be forwarded.
+- Focused editable elements (`INPUT`, `TEXTAREA`, `contentEditable`) receive no page-level keyboard capture (the listener returns early via `isEditable`), preventing double-send when a real editable is active.
+- Modifier-held combos (`ctrlKey`, `metaKey`, `altKey`) and standalone modifier keys (`modifierKeys` list) are not captured by the page-level listener, so browser shortcuts (e.g. Ctrl+V) continue to work normally.
+- `sendText` maps `\r\n` (CRLF, consumed as one unit), bare `\r`, and bare `\n` to the `Enter` key; `\t` to the `Tab` key; all other characters are forwarded as their literal value.
+- `#fakeKeyboard` (visible text input) still accepts typed characters and paste via its `input` event, forwarding both `insertText` and `insertFromPaste` input types; it is the primary input path on touch/on-screen-keyboard devices.
 
 ## Audio Rules
 
