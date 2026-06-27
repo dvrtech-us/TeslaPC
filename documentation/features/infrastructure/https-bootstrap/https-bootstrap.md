@@ -1,10 +1,19 @@
 # HTTPS Bootstrap
 
-Provisions everything http.sys needs to serve HTTPS on port `8443`: a self-signed
-certificate, private-key ACLs for the http.sys service accounts, URL ACL reservations, and
-the SSL certificate binding. Runs automatically at startup; `bindSSLCert.bat` is the manual
-equivalent/fallback. The return value gates whether [web-server](../../server/web-server/web-server.md)
-binds the HTTPS prefix.
+Provisions everything http.sys needs to serve HTTPS on port `8443`: a certificate, private-key
+ACLs for the http.sys service accounts, URL ACL reservations, and the SSL certificate binding.
+Runs automatically at startup; `bindSSLCert.bat` is the manual equivalent/fallback. The return
+value gates whether [web-server](../../server/web-server/web-server.md) binds the HTTPS prefix.
+
+**Two certificate modes:**
+
+- **Trusted (production)** — when a hostname is configured via `--https-host <host>` (or env
+  `TESLAPC_HTTPS_HOST`) and a matching, publicly-trusted certificate is installed in
+  `LocalMachine\My` (issued externally by **win-acme / Let's Encrypt DNS-01** — see the runbook
+  in `documentation/planning/Infrastructure/`), the bootstrap binds **that** cert. The Tesla
+  browses `https://<host>:8443/` (DNS A record → `100.64.0.1`) and gets **no warning**.
+- **Self-signed (fallback)** — when no host is set, or no trusted cert is present yet (first boot,
+  localhost/dev), the bootstrap generates and binds the self-signed `TeslaPC Dev Cert` as before.
 
 ## User Flow
 
@@ -13,10 +22,16 @@ Automatic at startup when elevated and not in `--localhost` mode. If it returns 
 
 ## Technical Flow (`SslCertificateBootstrap`, `SslCertificateBootstrap.cs`, namespace `PrimaryProcess`)
 
-`TryEnsureHttpsReady(int httpsPort, int httpPort)` (`:20`), called from `Program.cs:56`:
+`TryEnsureHttpsReady(int httpsPort, int httpPort, string? trustedHost)`, called from `Program.cs`:
 
 1. **Admin check** — non-admin logs a suggestion to use `--localhost` and returns `false`.
 2. **URL ACLs** — `EnsureUrlReservation` for `http://+:8080/` and `https://+:8443/` via `netsh http add urlacl url={url} user=Everyone` (not pre-checked; netsh silently succeeds or fails).
+2a. **Trusted cert (if `trustedHost` set)** — `TryUseTrustedCertificate(httpsPort, host)`:
+   `GetTrustedCertificate(host)` scans `LocalMachine\My` for the newest cert where
+   `cert.MatchesHostname(host)`, `NotAfter > now`, `HasPrivateKey`, accessible key, and that is
+   **not** the self-signed `TeslaPC Dev Cert`. If found, bind it (reusing `IsCertificateBound` /
+   `PrepareCertificateForHttpSys` / `RemoveSslBinding` / `TryBindCertificate`) and return `true`.
+   If not found, log and fall through to the self-signed steps below.
 3. **Prune broken certs** — `RemoveBrokenCertificates()`: in `LocalMachine\My`, remove any cert named `TeslaPC Dev Cert` whose `GetRSAPrivateKey()` throws (inaccessible key).
 4. **Get or create cert** — `GetOrCreateCertificate()`: reuse a `TeslaPC Dev Cert` only if `NotAfter > UtcNow`, `HasPrivateKey`, and `GetRSAPrivateKey() != null`; otherwise `CreateSelfSignedCertificate()`.
 5. **Binding idempotency** — `IsCertificateBound(8443, thumbprint)`: parse `Certificate Hash` from `netsh http show sslcert ipport=0.0.0.0:8443`; if it matches, log "already configured" and return `true`.

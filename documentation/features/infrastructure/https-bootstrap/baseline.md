@@ -4,6 +4,11 @@ Known-good invariants. Update only when intended behavior changes.
 
 ## Invariants
 
+- **Trusted cert takes precedence.** When `--https-host <host>` (or `TESLAPC_HTTPS_HOST`) is set
+  and a non-self-signed cert in `LocalMachine\My` satisfies `MatchesHostname(host)` + valid dates +
+  accessible private key, that cert is bound and the self-signed path is skipped. Otherwise the
+  self-signed `TeslaPC Dev Cert` is used (first boot / localhost / no host). The trusted cert is
+  never created or deleted by the app — it is provisioned/renewed externally (win-acme).
 - The http.sys AppId is exactly `{A253521A-C31E-457C-AADD-C0E42A87EA0F}` and is identical in `SslCertificateBootstrap.cs` and `bindSSLCert.bat` — the two paths are interchangeable.
 - `TeslaPC Dev Cert` is the **sole** lookup key for finding, reusing, and cleaning up certificates; changing it orphans existing certs.
 - `RemoveBrokenCertificates()` always runs **before** `GetOrCreateCertificate()` — certs with inaccessible private keys are pruned before reuse is attempted.

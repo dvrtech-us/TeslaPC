@@ -49,11 +49,21 @@ namespace PrimaryProcess
             //   /ws/input  â†’ mouse/keyboard WebSocket
             //   /ws/audio  â†’ audio WebSocket
             bool localhostOnly = args.Contains("--localhost");
+
+            // Optional hostname for a publicly-trusted cert (win-acme / Let's Encrypt). When set
+            // and a matching cert is installed in LocalMachine\My, HTTPS uses it instead of the
+            // self-signed dev cert. Source: --https-host <host> or TESLAPC_HTTPS_HOST.
+            string? httpsHost = null;
+            int hostIdx = Array.IndexOf(args, "--https-host");
+            if (hostIdx >= 0 && hostIdx + 1 < args.Length) httpsHost = args[hostIdx + 1];
+            if (string.IsNullOrWhiteSpace(httpsHost)) httpsHost = Environment.GetEnvironmentVariable("TESLAPC_HTTPS_HOST");
+            if (string.IsNullOrWhiteSpace(httpsHost)) httpsHost = null;
+
             bool enableHttps = false;
             if (!localhostOnly)
             {
                 FirewallBootstrap.TryEnsureFirewallOpen(httpPort, httpsPort);
-                enableHttps = SslCertificateBootstrap.TryEnsureHttpsReady(httpsPort, httpPort);
+                enableHttps = SslCertificateBootstrap.TryEnsureHttpsReady(httpsPort, httpPort, httpsHost);
             }
 
             var webServer = new WebServer(imageServer, audioCapture);
@@ -116,8 +126,12 @@ namespace PrimaryProcess
                     Console.WriteLine($"    Network:      {Urls(ip)}");
                 if (bypass != null)
                     Console.WriteLine($"    Tesla browser: {Urls(TeslaBrowserBypass.TeslaBrowserBypass.BypassIP)}");
-                if (enableHttps)
+                if (enableHttps && httpsHost != null)
+                    Console.WriteLine($"    Trusted name:  https://{httpsHost}:{httpsPort}/   (use this on the Tesla for no warning)");
+                if (enableHttps && httpsHost == null)
                     Console.WriteLine("  (HTTPS uses a self-signed cert; click through the browser warning.)");
+                else if (enableHttps)
+                    Console.WriteLine("  (HTTPS by IP uses the self-signed cert and warns; the trusted name above does not.)");
             }
             Console.WriteLine("================================================");
             Console.WriteLine();

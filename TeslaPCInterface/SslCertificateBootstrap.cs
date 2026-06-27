@@ -17,7 +17,7 @@ internal static class SslCertificateBootstrap
     private const string CertFriendlyName = "TeslaPC Dev Cert";
     private static readonly Guid HttpSysAppId = new("A253521A-C31E-457C-AADD-C0E42A87EA0F");
 
-    public static bool TryEnsureHttpsReady(int httpsPort, int httpPort)
+    public static bool TryEnsureHttpsReady(int httpsPort, int httpPort, string? trustedHost = null)
     {
         if (!IsAdministrator())
         {
@@ -28,6 +28,12 @@ internal static class SslCertificateBootstrap
 
         EnsureUrlReservation($"http://+:{httpPort}/");
         EnsureUrlReservation($"https://+:{httpsPort}/");
+
+        // Prefer a real, publicly-trusted certificate for the configured host (provisioned
+        // externally, e.g. by win-acme via Let's Encrypt DNS-01). Falls back to the self-signed
+        // dev certificate when no trusted cert is present (first boot, localhost, or no host set).
+        if (!string.IsNullOrWhiteSpace(trustedHost) && TryUseTrustedCertificate(httpsPort, trustedHost!))
+            return true;
 
         RemoveBrokenCertificates();
 
@@ -87,6 +93,87 @@ internal static class SslCertificateBootstrap
     {
         Console.WriteLine($"[SSL] HTTPS ready on port {httpsPort} (thumbprint {thumbprint}).");
         Console.WriteLine("[SSL] Browsers will warn about the self-signed certificate.");
+    }
+
+    /// <summary>
+    /// Binds a publicly-trusted certificate for <paramref name="host"/> if one is present in
+    /// LocalMachine\My (e.g. issued by win-acme / Let's Encrypt). Returns false to fall back to
+    /// the self-signed dev certificate.
+    /// </summary>
+    private static bool TryUseTrustedCertificate(int httpsPort, string host)
+    {
+        var cert = GetTrustedCertificate(host);
+        if (cert == null)
+        {
+            Console.WriteLine($"[SSL] No trusted certificate for '{host}' in LocalMachine\\My yet; using self-signed.");
+            return false;
+        }
+
+        try
+        {
+            string thumbprint = NormalizeThumbprint(cert.Thumbprint);
+            if (IsCertificateBound(httpsPort, thumbprint))
+            {
+                Console.WriteLine($"[SSL] HTTPS already bound to the trusted certificate for {host}.");
+                return true;
+            }
+
+            PrepareCertificateForHttpSys(cert, thumbprint);
+            RemoveSslBinding(httpsPort);
+            if (TryBindCertificate(httpsPort, thumbprint))
+            {
+                Console.WriteLine($"[SSL] HTTPS ready on port {httpsPort} using the trusted certificate for {host}.");
+                Console.WriteLine($"[SSL]   issuer: {cert.Issuer}");
+                Console.WriteLine($"[SSL]   valid until: {cert.NotAfter:yyyy-MM-dd}");
+                return true;
+            }
+
+            Console.WriteLine($"[SSL] Failed to bind the trusted certificate for {host}; falling back to self-signed.");
+            return false;
+        }
+        finally
+        {
+            cert.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Finds the newest valid, private-key-bearing certificate in LocalMachine\My whose SAN/CN
+    /// matches <paramref name="host"/>, excluding our own self-signed dev cert.
+    /// </summary>
+    private static X509Certificate2? GetTrustedCertificate(string host)
+    {
+        try
+        {
+            using var store = new X509Store(StoreName.My, StoreLocation.LocalMachine);
+            store.Open(OpenFlags.ReadOnly);
+
+            X509Certificate2? best = null;
+            foreach (var candidate in store.Certificates)
+            {
+                if (candidate.FriendlyName == CertFriendlyName
+                    || candidate.NotAfter <= DateTime.Now
+                    || candidate.NotBefore > DateTime.Now
+                    || !candidate.HasPrivateKey
+                    || !HasAccessiblePrivateKey(candidate)
+                    || !candidate.MatchesHostname(host))
+                {
+                    continue;
+                }
+
+                if (best == null || candidate.NotAfter > best.NotAfter)
+                {
+                    best?.Dispose();
+                    best = new X509Certificate2(candidate);
+                }
+            }
+            return best;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[SSL] Error searching for a trusted certificate: {ex.Message}");
+            return null;
+        }
     }
 
     private static bool IsAdministrator()
