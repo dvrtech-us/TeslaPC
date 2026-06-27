@@ -189,8 +189,16 @@ internal sealed class MainForm : Form
         _logPanel.Padding = new Padding(12);
     }
 
+    // Keep the system and display awake while running — an always-on streaming appliance must not
+    // let the monitor sleep, or DXGI screen capture stalls (the desktop drops to a basic 800x600
+    // surface and stops delivering frames).
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern uint SetThreadExecutionState(uint esFlags);
+    private const uint ES_CONTINUOUS = 0x80000000, ES_SYSTEM_REQUIRED = 0x00000001, ES_DISPLAY_REQUIRED = 0x00000002;
+
     private async void OnShownAsync(object? sender, EventArgs e)
     {
+        SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
         _statusTimer.Start();
         await Task.Run(async () =>
         {
