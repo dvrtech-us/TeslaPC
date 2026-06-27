@@ -30,14 +30,18 @@ and JS are inline; the only external module is `PCMPlayerProcessor.js` (loaded a
 ### Input (`mapPoint` / `sendInput`, `index.html`)
 
 - The input WebSocket opens on load: `new WebSocket(getWsUrl('/ws/input'))`.
-- **Mouse** listeners on the `<img>`: `click`, `mousemove`, `mousedown`, `mouseup`.
-- **Touch** listeners (Tesla/tablets): `touchstart`→`down`, `touchmove`→`move`, `touchend`→`up`
-  (so press-and-drag works), each with `preventDefault` (`passive:false`) to stop page scroll/zoom
-  and suppress duplicate synthesized mouse events.
+- **Mouse** listeners on the `<img>`: `click`, `mousemove`, `mousedown`, `mouseup`, and
+  `contextmenu`→`rightclick` (desktop right-click, `preventDefault`ed).
+- **Touch** listeners (Tesla/tablets), all `preventDefault`ed (`passive:false`) to stop scroll/zoom
+  and avoid duplicate synthesized mouse events:
+  - **quick tap** → `down`+`up` (left click)
+  - **press + drag** (move > ~12px) → `down` then `move`…`up` (left-button drag)
+  - **press & hold ~0.5s** → `rightclick` (long-press; the `down` is deferred so a hold isn't also a
+    left press)
 - `mapPoint(clientX, clientY)` converts a viewport point to the **actual video rectangle**
   (accounting for the `object-fit: contain` letterbox via `naturalWidth/Height`); points in the
   black bars return null and are ignored. `sendInput(type, x, y)` sends the mapped coords.
-- Message: `{ "Type": "click|move|down|up", "X": int, "Y": int, "DisplaySize": { "width": dispW, "height": dispH } }` where `dispW/dispH` are the displayed video size.
+- Message: `{ "Type": "click|move|down|up|rightclick", "X": int, "Y": int, "DisplaySize": { "width": dispW, "height": dispH } }` where `dispW/dispH` are the displayed video size.
 - Keyboard: a visible `#fakeKeyboard` text input (so touch devices like the Tesla browser can summon the on-screen keyboard) forwards `keyup`/`keypress` as `{Type, Key, KeyCode}` over `/ws/input`; the field is cleared after each keyup. No reconnect/onclose handling on the input socket.
 
 ### Audio (`startAudioPlayback`, `index.html:86`)

@@ -42,10 +42,13 @@ remains declared but unused — keyboard goes through `SendKeys`, not `keybd_eve
 | Order | Action | Condition |
 |-------|--------|-----------|
 | 1 | `Win32.SetCursorPos(x, y)` | always |
-| 2 | `Win32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0,0,0,0)` | `Type == "down"` |
-| 3 | `Win32.mouse_event(MOUSEEVENTF_LEFTUP, 0,0,0,0)` | `Type == "up"` |
+| 2 | `Win32.mouse_event(MOUSEEVENTF_LEFTDOWN, …)` | `Type == "down"` |
+| 3 | `Win32.mouse_event(MOUSEEVENTF_LEFTUP, …)` | `Type == "up"` |
+| 4 | `Win32.mouse_event(MOUSEEVENTF_RIGHTDOWN, …)` then `MOUSEEVENTF_RIGHTUP` | `Type == "rightclick"` |
 
-No handling exists for `"click"`, `"move"` (beyond the cursor move), right-click, or scroll.
+The client produces `"rightclick"` from a desktop right-mouse (`contextmenu`) event or a touch
+**long-press** (~0.5 s). No handling exists for `"click"`/`"move"` beyond the cursor move, or for
+middle-click and scroll.
 
 ### Keyboard (`WebServer.handleKey`)
 
