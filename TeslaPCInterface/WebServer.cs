@@ -177,10 +177,74 @@ public class WebServer
         {
             HandleMedia(context, path);
         }
+        else if (path.Equals("/config", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleConfig(context);
+        }
         else
         {
             HandleHttpAsync(context);
         }
+    }
+
+    /// <summary>
+    /// Configuration endpoint backing the web Settings page.
+    ///   GET  /config  -> current values as JSON. The Cloudflare token is **never** returned (only a
+    ///                    `cfTokenSet` flag), so the secret can't be read back over the network.
+    ///   POST /config  -> save (application/x-www-form-urlencoded): httpsHost, acmeEmail, videoRoot,
+    ///                    and optionally cfToken (blank = keep existing). The video folder applies
+    ///                    immediately; host/token/email changes take effect on the next server restart.
+    /// </summary>
+    private void HandleConfig(HttpListenerContext context)
+    {
+        if (context.Request.HttpMethod == "POST")
+        {
+            string body;
+            using (var reader = new StreamReader(context.Request.InputStream, context.Request.ContentEncoding))
+                body = reader.ReadToEnd();
+            var form = HttpUtility.ParseQueryString(body);
+
+            var toSave = new Dictionary<string, string>();
+            string? host = form.Get("httpsHost");
+            string? email = form.Get("acmeEmail");
+            string? videoRoot = form.Get("videoRoot");
+            string? cfToken = form.Get("cfToken");
+
+            if (host != null) toSave[AppSettings.HttpsHostKey] = host.Trim();
+            if (email != null) toSave[AppSettings.AcmeEmailKey] = email.Trim();
+            if (videoRoot != null && !string.IsNullOrWhiteSpace(videoRoot)) toSave[AppSettings.VideoRootKey] = videoRoot.Trim();
+            // Only overwrite the token when a non-blank value is supplied (the form leaves it blank to keep).
+            if (!string.IsNullOrWhiteSpace(cfToken)) toSave[AppSettings.CloudflareTokenKey] = cfToken.Trim();
+
+            try
+            {
+                AppSettings.Save(toSave);
+                // The video folder can apply live; host/cert settings need a restart.
+                if (toSave.ContainsKey(AppSettings.VideoRootKey))
+                    _media.Root = toSave[AppSettings.VideoRootKey];
+                bool restartNeeded = toSave.ContainsKey(AppSettings.HttpsHostKey)
+                    || toSave.ContainsKey(AppSettings.CloudflareTokenKey)
+                    || toSave.ContainsKey(AppSettings.AcmeEmailKey);
+                Console.WriteLine("[Config] Saved settings via web UI.");
+                WriteJson(context.Response, JsonSerializer.Serialize(new { saved = true, restartNeeded }));
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Config] Save failed: {ex.Message}");
+                WriteJson(context.Response, JsonSerializer.Serialize(new { saved = false, error = ex.Message }));
+            }
+            return;
+        }
+
+        // GET: report current values, but never the token itself.
+        var payload = new
+        {
+            httpsHost = AppSettings.Get(AppSettings.HttpsHostKey) ?? "",
+            acmeEmail = AppSettings.Get(AppSettings.AcmeEmailKey) ?? "",
+            videoRoot = _media.Root,
+            cfTokenSet = !string.IsNullOrWhiteSpace(AppSettings.Get(AppSettings.CloudflareTokenKey))
+        };
+        WriteJson(context.Response, JsonSerializer.Serialize(payload));
     }
 
     /// <summary>
@@ -313,14 +377,7 @@ public class WebServer
                 //get path from the query string
       
                 string? path = QueryParameters.Get("path");
-                if (path == null)
-                {
-                    guts = returnAllFilesAsHtmlLinks("C:\\video\\");
-                }
-                else
-                {
-                    guts = returnAllFilesAsHtmlLinks(path);
-                }
+                guts = returnAllFilesAsHtmlLinks(string.IsNullOrEmpty(path) ? _media.Root : path);
 
                 responseString = responseString.Replace("{{GUTS}}", guts);
 
@@ -446,14 +503,16 @@ public class WebServer
     private string returnAllFilesAsHtmlLinks(string path)
     {
         var sb = new StringBuilder();
-        bool atRoot = path == @"C:\video\" || path == @"C:\video";
+        string root = _media.Root;
+        bool atRoot = string.Equals(path.TrimEnd('\\'), root.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
 
         // Sticky navigation bar: Screen, Up (when not at root), and the current path.
         sb.Append("<div class=\"topbar\">");
         sb.Append("<a class=\"navbtn\" href=\"/\">&#8962; Screen</a>");
+        sb.Append("<a class=\"navbtn\" href=\"/config.html\">&#9881; Settings</a>");
         if (!atRoot)
         {
-            string parentPath = Path.GetDirectoryName(path.TrimEnd('\\')) ?? @"C:\video\";
+            string parentPath = Path.GetDirectoryName(path.TrimEnd('\\')) ?? root;
             sb.Append("<a class=\"navbtn\" href=\"/list.html?path=" + HttpUtility.UrlEncode(parentPath) + "\">&#8593; Up</a>");
         }
         sb.Append("<span class=\"path\">" + HttpUtility.HtmlEncode(path) + "</span>");

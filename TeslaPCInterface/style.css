@@ -250,6 +250,34 @@ html, body {
     cursor: pointer;
 }
 
+/* ---------- Settings form ---------- */
+.settings {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    max-width: 640px;
+}
+.field { display: flex; flex-direction: column; gap: 8px; }
+.flabel { font-size: 1.05rem; font-weight: 600; color: var(--text); }
+.finput {
+    appearance: none;
+    -webkit-appearance: none;
+    min-height: var(--tap);
+    padding: 0 16px;
+    font-size: 1.1rem;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid rgba(255, 255, 255, .1);
+    border-radius: var(--radius-sm);
+    outline: none;
+}
+.finput:focus { border-color: var(--accent); }
+.finput::placeholder { color: var(--muted); }
+.fhint { font-size: .9rem; color: var(--muted); }
+.msg { margin: 18px 0 40px; font-size: 1.05rem; min-height: 1.4em; }
+.msg.ok { color: var(--folder); }
+.msg.err { color: var(--danger); }
+
 /* Tap-to-start-sound overlay (audio needs a user gesture). */
 .tap-overlay {
     position: fixed;

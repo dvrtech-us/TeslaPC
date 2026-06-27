@@ -36,6 +36,15 @@ internal sealed class TeslaPcService
     public List<string> ConnectUrls { get; } = new();
     public bool HotspotOn => HotspotManager.LastKnownOn;
     public int ClientCount => _imageServer?.ClientCount ?? 0;
+    /// <summary>The folder the file browser/media player is rooted at.</summary>
+    public string VideoRoot => _media?.Root ?? AppSettings.VideoRoot;
+
+    /// <summary>Applies a new video folder immediately (no restart needed) to the running media player.</summary>
+    public void SetVideoRoot(string path)
+    {
+        if (_media != null && !string.IsNullOrWhiteSpace(path))
+            _media.Root = path.Trim();
+    }
 
     public async Task StartAsync(string[] args)
     {
@@ -44,7 +53,7 @@ internal sealed class TeslaPcService
         _imageServer = new ImageStreamingServer(1280, 720, 30);
         _audioCapture = new AudioCapture();
         _audioCapture.StartCapturing();
-        _media = new MediaStreamer(_imageServer, _audioCapture);
+        _media = new MediaStreamer(_imageServer, _audioCapture) { Root = AppSettings.VideoRoot };
 
         BypassEnabled = !args.Contains("--no-tesla-bypass");
         if (BypassEnabled)
