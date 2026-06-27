@@ -41,9 +41,11 @@ web UI.
      returns the token).
    - The log-level field is a `<select name="logLevel">` with options `error`, `warn`,
      `info`, `debug`; pre-selected from the `logLevel` value returned by `GET /config`.
+   - The stream-resolution field is a `<select name="streamHeight">` with options `480`,
+     `720`, `1080`; pre-selected from the `streamHeight` value returned by `GET /config`.
 3. Edit any field and click **Save**. The page posts `application/x-www-form-urlencoded` to
    `POST /config` and shows one of:
-   - **Saved** — video folder or log-level change took effect immediately.
+   - **Saved** — video folder, log-level, or stream-resolution change took effect immediately.
    - **Saved — restart required** — host, token, or email changed; use the Dashboard
      **Restart** button to apply cert/ACME changes (no full process restart needed).
 
@@ -63,8 +65,14 @@ web UI.
 | `AcmeEmailKey` | `TESLAPC_ACME_EMAIL` |
 | `VideoRootKey` | `TESLAPC_VIDEO_ROOT` |
 | `LogLevelKey` | `TESLAPC_LOG_LEVEL` |
+| `StreamHeightKey` | `TESLAPC_STREAM_HEIGHT` |
 | `DefaultVideoRoot` | `C:\video\` |
+| `DefaultStreamHeight` | `1080` |
 | `EnvFilePath` | `%ProgramData%\TeslaPC\.env` (expanded at runtime) |
+
+**`StreamHeight` property** — reads `Get(StreamHeightKey)`, parses as an integer, clamps to
+`[240, 2160]`. Returns `DefaultStreamHeight` (1080) when the key is absent, unparseable, or
+out of range.
 
 **`Get(string key)`** — reads from `Environment.GetEnvironmentVariable(key)` (the live
 process environment that `Program.LoadDotEnv` has already populated).
@@ -105,17 +113,18 @@ is left intact.
 Returns a JSON object with the current non-secret settings:
 
 ```json
-{ "httpsHost": "my.example.com", "acmeEmail": "admin@example.com", "videoRoot": "C:\\video\\", "cfTokenSet": true, "logLevel": "info" }
+{ "httpsHost": "my.example.com", "acmeEmail": "admin@example.com", "videoRoot": "C:\\video\\", "cfTokenSet": true, "logLevel": "info", "streamHeight": 1080 }
 ```
 
 `cfTokenSet` is `true` when `TESLAPC_CF_TOKEN` is set to a non-empty value. **The token
 value is never included in the response.** `logLevel` is the current level as a lowercase
-string (`error`, `warn`, `info`, or `debug`) returned by `Log.LevelName`.
+string (`error`, `warn`, `info`, or `debug`) returned by `Log.LevelName`. `streamHeight` is
+the current `_imageStreamer.MaxHeight` integer (default `1080`).
 
 #### `POST /config`
 
 Accepts `application/x-www-form-urlencoded` with fields: `httpsHost`, `acmeEmail`,
-`videoRoot`, `logLevel`, and optionally `cfToken`.
+`videoRoot`, `logLevel`, `streamHeight`, and optionally `cfToken`.
 
 1. Builds a dictionary, adding `httpsHost`/`acmeEmail` when present and `videoRoot`/`cfToken`
    only when non-blank (so a blank token is omitted and the stored one is preserved).
@@ -123,9 +132,12 @@ Accepts `application/x-www-form-urlencoded` with fields: `httpsHost`, `acmeEmail
 3. If `videoRoot` was included, sets `_media.Root` to apply the new folder live.
 4. If `logLevel` was included, calls `Log.SetLevel(logLevel)` to apply the new threshold
    **immediately** (no restart needed).
-5. Sets `restartNeeded = true` if `httpsHost`, `cfToken`, or `acmeEmail` were saved.
-   `logLevel` is **not** in `restartNeeded` — it takes effect live.
-5. Returns JSON:
+5. If `streamHeight` was included and parses to a value in `[240, 2160]`, calls
+   `_imageStreamer.SetMaxResolution(h*4, h)` **immediately** (no restart needed). The new cap
+   takes effect on the next capture-session start (triggered automatically by the epoch bump).
+6. Sets `restartNeeded = true` if `httpsHost`, `cfToken`, or `acmeEmail` were saved.
+   `logLevel` and `streamHeight` are **not** in `restartNeeded` — both take effect live.
+7. Returns JSON:
 
 ```json
 { "saved": true, "restartNeeded": false }
@@ -176,6 +188,7 @@ A full process restart is not required; the in-app Restart is sufficient.
 | `AppSettings` | `TeslaPCInterface/AppSettings.cs` | Constants, `Get`, `VideoRoot`, `Save` |
 | `AppSettings.Save` | `TeslaPCInterface/AppSettings.cs` | Rewrite `%ProgramData%\TeslaPC\.env`; mirror values into live env |
 | `AppSettings.VideoRoot` | `TeslaPCInterface/AppSettings.cs` | Read video root from env or fall back to `C:\video\` |
+| `AppSettings.StreamHeight` | `TeslaPCInterface/AppSettings.cs` | Read and clamp `TESLAPC_STREAM_HEIGHT`; default `1080` |
 | `Program.LoadDotEnv` | `TeslaPCInterface/Program.cs` | Load app-dir `.env` then `%ProgramData%` `.env` at startup |
 | `WebServer.HandleConfig` | `TeslaPCInterface/WebServer.cs` | `GET /config` (safe read) and `POST /config` (write + apply) |
 | `TeslaPcService.VideoRoot` | `TeslaPCInterface/TeslaPcService.cs` | Exposes `_media.Root` |
@@ -192,8 +205,8 @@ A full process restart is not required; the in-app Restart is sufficient.
 
 | Route | Method | Protocol | Auth | Handler |
 |-------|--------|----------|------|---------|
-| `/config` | GET | HTTP/HTTPS | none | `WebServer.HandleConfig` — returns `{ httpsHost, acmeEmail, videoRoot, cfTokenSet, logLevel }` JSON |
-| `/config` | POST | HTTP/HTTPS | none | `WebServer.HandleConfig` — saves settings, applies video folder and log level live, returns `{ saved, restartNeeded }` JSON |
+| `/config` | GET | HTTP/HTTPS | none | `WebServer.HandleConfig` — returns `{ httpsHost, acmeEmail, videoRoot, cfTokenSet, logLevel, streamHeight }` JSON |
+| `/config` | POST | HTTP/HTTPS | none | `WebServer.HandleConfig` — saves settings, applies video folder / log level / stream height live, returns `{ saved, restartNeeded }` JSON |
 | `/config.html` | GET | HTTP/HTTPS | none | Static page served from `TeslaPCInterface/config.html` |
 
 ## Settings / Environment Keys
@@ -205,6 +218,7 @@ A full process restart is not required; the in-app Restart is sufficient.
 | `TESLAPC_ACME_EMAIL` | `AcmeEmailKey` | _(none)_ | Next server restart |
 | `TESLAPC_VIDEO_ROOT` | `VideoRootKey` | `C:\video\` | **Live** (immediate) |
 | `TESLAPC_LOG_LEVEL` | `LogLevelKey` | `info` | **Live** (immediate) |
+| `TESLAPC_STREAM_HEIGHT` | `StreamHeightKey` | `1080` | **Live** (immediate via `POST /config`; startup value used at next session restart) |
 
 ## Access Control
 

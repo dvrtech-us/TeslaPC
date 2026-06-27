@@ -22,9 +22,8 @@ namespace Media;
 /// </summary>
 public sealed class MediaStreamer : IDisposable
 {
-    // Output caps mirror the screen-capture path (see ImageStreamingServer / screen-capture docs).
-    private const int MaxWidth = 1280;
-    private const int MaxHeight = 720;
+    // Output pacing/quality. The vertical cap is shared with the screen-capture path via
+    // ImageStreamingServer.MaxHeight (configurable, default 1080), so media respects the same setting.
     private const int Fps = 30;
     private const int JpegQuality = 6; // ffmpeg -q:v (2 best .. 31 worst)
 
@@ -197,9 +196,10 @@ public sealed class MediaStreamer : IDisposable
         string ss = start.ToString("0.###", CultureInfo.InvariantCulture);
         string file = _file!;
 
+        int maxH = _img.MaxHeight > 0 ? _img.MaxHeight : 1080;
         string videoArgs =
             $"-hide_banner -loglevel error -re -ss {ss} -i \"{file}\" -an " +
-            $"-vf scale='min({MaxWidth},iw)':'min({MaxHeight},ih)':force_original_aspect_ratio=decrease,fps={Fps} " +
+            $"-vf scale=-2:'min({maxH},ih)',fps={Fps} " +
             $"-c:v mjpeg -q:v {JpegQuality} -f image2pipe pipe:1";
 
         string fmt = FfmpegSampleFormat(_audio.SampleFormat);

@@ -21,6 +21,7 @@ Each feature has its own directory under `features/<module>/<feature-name>/` con
 | server | [input-control](features/server/input-control/input-control.md) | Mouse (Win32 P/Invoke) and keyboard (SendKeys) over the `/ws/input` WebSocket | `WebServer.cs`, `Program.cs` |
 | streaming | [screen-capture](features/streaming/screen-capture/screen-capture.md) | MJPEG screen streaming with DXGI Desktop Duplication and GDI fallback | `ImageStreamingServer.cs`, `DxgiScreenCapture.cs`, `MjpegWriter.cs` |
 | streaming | [audio-capture](features/streaming/audio-capture/audio-capture.md) | WASAPI loopback system-audio streaming over `/ws/audio` | `AudioStreamingServer.cs`, `PCMPlayerProcessor.js` |
+| streaming | [display-control](features/streaming/display-control/display-control.md) | Browser-driven Windows display-resolution control; "Fit screen" aspect-match and explicit set via `/display/*` | `DisplayManager.cs`, `WebServer.cs` |
 | app | [control-panel](features/app/control-panel/control-panel.md) | WinForms desktop control panel (Dashboard + Log, status, large controls) | `Program.cs`, `MainForm.cs`, `TeslaPcService.cs` |
 | app | [configuration](features/app/configuration/configuration.md) | In-app settings editor (WinForms Config tab + `/config.html`); persists to `%ProgramData%\TeslaPC\.env` | `AppSettings.cs`, `WebServer.cs`, `MainForm.cs`, `config.html` |
 | client | [web-ui](features/client/web-ui/web-ui.md) | Single-page browser client (video, audio, input) | `index.html`, `PCMPlayerProcessor.js` |

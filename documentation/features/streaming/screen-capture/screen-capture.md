@@ -10,6 +10,8 @@ Duplication (GPU) and falls back to GDI `CopyFromScreen`.
 2. The browser opens the MJPEG stream; the server begins (or joins) the shared capture loop.
 3. Each captured frame is JPEG-encoded once and pushed to every connected client.
 4. When the last client disconnects, the capture loop stops and releases its resources.
+5. The Client can select a stream resolution (480p / 720p / 1080p) from a dropdown in the
+   main screen or the Settings page. Changes apply immediately without a stream reconnect.
 
 ## Technical Flow
 
@@ -22,19 +24,41 @@ Duplication (GPU) and falls back to GDI `CopyFromScreen`.
 
 ### Shared capture loop (`CaptureLoop` → `RunCaptureSession`)
 
-1. `using var dxgiCapture = new DxgiScreenCapture()`; check `IsAvailable`.
-2. Screen size from `dxgiCapture.CaptureSize` (DXGI) or `Screen.PrimaryScreen.Bounds` (GDI).
-3. Output size = the live screen scaled **uniformly** to fit the `1280×720` cap box, preserving
-   aspect ratio and never upscaling: `scale = min(1, 1280/screenW, 720/screenH)`. So a 1080p screen
-   streams 1280×720, a 16:10 screen 1152×720, and anything ≤ the box streams at native size.
-4. Allocate `srcImage` (`Format32bppArgb`) and, if resizing, `scaledImage` (`Format24bppRgb`).
-5. Resolve the JPEG codec (`GetJpegCodec`) and set `Encoder.Quality = 60L`.
-6. Per frame:
+1. Snapshot `_restartEpoch` and the current `MaxWidth`/`MaxHeight` cap.
+2. `using var dxgiCapture = new DxgiScreenCapture()`; check `IsAvailable`.
+3. Screen size from `dxgiCapture.CaptureSize` (DXGI) or `Screen.PrimaryScreen.Bounds` (GDI);
+   saved as `screenSize` for the session.
+4. Output size = the live screen scaled **uniformly** to fit the `MaxWidth × MaxHeight` cap box,
+   preserving aspect ratio and never upscaling:
+   `scale = min(1, MaxWidth/screenW, MaxHeight/screenH)`. So a 1080p screen with `MaxHeight=720`
+   streams 1280×720; the same screen with `MaxHeight=1080` streams at native 1920×1080; a 16:10
+   screen at 1200p with `MaxHeight=1080` streams 1728×1080.
+5. Allocate `srcImage` (`Format32bppArgb`) and, if resizing, `scaledImage` (`Format24bppRgb`).
+6. Resolve the JPEG codec (`GetJpegCodec`) and set `Encoder.Quality = 60L`.
+7. Per frame:
    - `dxgiCapture.TryCapture(srcImage)` or `srcGraphics.CopyFromScreen(...)`.
    - If resizing: `DrawImage` into `scaledImage`, then `scaledImage.Save(ms, jpegCodec, params)`. Else `srcImage.Save(...)`.
    - `PublishFrame(ms)`: copy bytes to `_currentFrame`, increment `_frameNumber`, `Monitor.PulseAll(_frameLock)`.
    - Pace: if `elapsed < Interval`, `Thread.Sleep(Interval - elapsed)` where `Interval = 1000 / fps`.
-7. The inner loop continues while `_clientCount > 0` and not cancelled. `RunCaptureSession` ultimately returns false, ending the thread.
+8. `RunCaptureSession` returns `true` (restart) when either:
+   - `_restartEpoch` has changed (bumped by `SetMaxResolution` or `RestartCapture`), **or**
+   - `Screen.PrimaryScreen.Bounds` no longer matches the session's `screenSize` (display
+     resolution changed mid-session).
+   A `true` return causes `CaptureLoop` to immediately start a fresh session with a new
+   `DxgiScreenCapture` and correctly-sized buffers. DXGI Desktop Duplication cannot survive a
+   display-mode switch (the staging-texture size check in `DxgiScreenCapture.EnsureStagingTexture`
+   throws on a size mismatch), so a new session is required after any resolution change.
+9. When no restart is needed, `RunCaptureSession` returns `false`, and the capture thread exits.
+
+### Resolution cap — mutable at runtime
+
+`_maxWidth` and `_maxHeight` are `volatile` fields on `ImageStreamingServer`. The public
+`MaxWidth` and `MaxHeight` properties read them. `SetMaxResolution(int w, int h)` sets both
+and increments `_restartEpoch` (via `Interlocked.Increment`), which causes the running session
+to detect the change and restart without dropping any connected clients.
+
+`RestartCapture()` increments `_restartEpoch` without changing the dimensions — used by
+display-control routes to force a fresh DXGI session after a desktop resolution change.
 
 ### Per-client send (`StreamToClient` → `TryWaitForLatestFrame`)
 
@@ -48,6 +72,7 @@ Duplication (GPU) and falls back to GDI `CopyFromScreen`.
 - Init: `CreateDXGIFactory1` → find the output whose `DesktopCoordinates` matches the primary screen origin → `D3D11CreateDevice` (`BgraSupport`) → `DuplicateOutput`.
 - `TryCapture`: `AcquireNextFrame(16ms)` → on `WaitTimeout` returns false; on `AccessLost`/`AccessDenied` calls `RecreateDuplication()` and returns false; copies the GPU texture to a cached CPU **staging texture**, maps it, and copies row-by-row (respecting `RowPitch`) into the target `Bitmap`.
 - On any init failure the constructor sets `IsAvailable = false` and logs that GDI fallback will be used.
+- `EnsureStagingTexture` checks that the existing staging texture matches the DXGI output dimensions; if not, it disposes and recreates it. After a display-mode switch the new session creates a fresh `DxgiScreenCapture`, so this check runs fresh.
 
 ### MJPEG framing (`MjpegWriter.cs`)
 
@@ -58,7 +83,7 @@ Duplication (GPU) and falls back to GDI `CopyFromScreen`.
 
 | Class | File | Responsibility |
 |-------|------|----------------|
-| `ImageStreamingServer` | `TeslaPCInterface/ImageStreamingServer.cs` | Shared capture loop, frame buffer, per-client send threads, JPEG encoding |
+| `ImageStreamingServer` | `TeslaPCInterface/ImageStreamingServer.cs` | Shared capture loop, frame buffer, per-client send threads, JPEG encoding; mutable `MaxWidth`/`MaxHeight`; `SetMaxResolution`/`RestartCapture` |
 | `DxgiScreenCapture` | `TeslaPCInterface/DxgiScreenCapture.cs` | DXGI Desktop Duplication capture; signals unavailability for GDI fallback |
 | `MjpegWriter` | `TeslaPCInterface/MjpegWriter.cs` | multipart/x-mixed-replace header + per-frame boundary framing |
 
@@ -66,15 +91,23 @@ Duplication (GPU) and falls back to GDI `CopyFromScreen`.
 
 | Constant | Value | Location |
 |----------|-------|----------|
-| Frame interval | `1000 / fps` ms (33 ms at 30 FPS) | `ImageStreamingServer.cs:42` |
-| JPEG quality | `60L` | `ImageStreamingServer.cs:157` |
-| DXGI acquire timeout | `16` ms | `DxgiScreenCapture.cs:130` |
-| Client wait timeout | `1000` ms | `ImageStreamingServer.cs:261` |
-| Boundary string | `"boundary"` | `ImageStreamingServer.cs:63` |
-| Source pixel format | `Format32bppArgb` | `ImageStreamingServer.cs:143` |
-| Scaled pixel format | `Format24bppRgb` | `ImageStreamingServer.cs:146` |
-| Scaling quality | `HighSpeed` / `Bilinear` / `SmoothingMode.None` | `ImageStreamingServer.cs:150-152` |
-| Max resolution / FPS | `1280×720`, `30` FPS (set in `Program.cs`) | `Program.cs:27,29` |
+| Frame interval | `1000 / fps` ms (33 ms at 30 FPS) | `ImageStreamingServer.cs` |
+| JPEG quality | `60L` | `ImageStreamingServer.cs` |
+| DXGI acquire timeout | `16` ms | `DxgiScreenCapture.cs` |
+| Client wait timeout | `1000` ms | `ImageStreamingServer.cs` |
+| Boundary string | `"boundary"` | `ImageStreamingServer.cs` |
+| Source pixel format | `Format32bppArgb` | `ImageStreamingServer.cs` |
+| Scaled pixel format | `Format24bppRgb` | `ImageStreamingServer.cs` |
+| Scaling quality | `HighSpeed` / `Bilinear` / `SmoothingMode.None` | `ImageStreamingServer.cs` |
+| Max resolution (default) | `4320×1080` (width = 4× height), `30` FPS | Constructed in `TeslaPcService` from `AppSettings.StreamHeight` |
+| `AppSettings.DefaultStreamHeight` | `1080` | `TeslaPCInterface/AppSettings.cs` |
+| Height clamp range | `[240, 2160]` | `AppSettings.StreamHeight` property |
+
+## Environment Variables
+
+| Variable | `AppSettings` constant | Default | Apply timing |
+|----------|----------------------|---------|--------------|
+| `TESLAPC_STREAM_HEIGHT` | `StreamHeightKey` | `1080` | Next capture-session restart (immediate if the server restarts the session) |
 
 ## Routes and Access Control
 
@@ -86,6 +119,17 @@ Duplication (GPU) and falls back to GDI `CopyFromScreen`.
 
 - Invoked by [web-server](../../server/web-server/web-server.md) routing for `/stream`.
 - Consumed by [web-ui](../../client/web-ui/web-ui.md) via a plain `<img>` tag.
+- Max-resolution cap is readable via `/config` (`streamHeight` field) and writable via
+  `POST /config` (`streamHeight`), as documented in
+  [configuration](../../app/configuration/configuration.md).
+- Display-resolution changes from [display-control](display-control/display-control.md) call
+  `RestartCapture()` after applying a new desktop mode.
+
+## Headless / Asleep Display Caveat
+
+DXGI Desktop Duplication requires an active display. On a headless or asleep laptop Windows
+falls back to 800×600 and DXGI captures nothing useful. A physical monitor or an HDMI dummy
+plug is required for the resolution features to work correctly.
 
 ## Database Schema
 

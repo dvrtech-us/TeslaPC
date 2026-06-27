@@ -18,6 +18,12 @@
             autocorrect="off" autocapitalize="off" spellcheck="false" />
         <button class="btn" onclick="window.location.assign('/list.html')">&#128193; Files</button>
         <button class="btn" onclick="window.location.assign('/config.html')">&#9881; Settings</button>
+        <select id="resSel" class="btn input" title="Stream resolution" onchange="setRes(this.value)">
+            <option value="480">480p</option>
+            <option value="720">720p</option>
+            <option value="1080">1080p</option>
+        </select>
+        <button class="btn" onclick="fitScreen()" title="Set the PC resolution to match this screen">&#9974; Fit screen</button>
     </div>
 
     <!-- Include the WebSocket JavaScript library -->
@@ -422,6 +428,35 @@
             if (document.activeElement === fakeKeyboard) fakeKeyboard.value = '';
         });
 
+    </script>
+    <script>
+        // Stream resolution selector + "Fit screen" (set PC display res to this viewport's aspect).
+        function setRes(h) {
+            var b = new URLSearchParams();
+            b.set('streamHeight', h);
+            fetch('/config', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: b.toString() });
+        }
+
+        function fitScreen() {
+            var s = document.querySelector('.screen');
+            var w = s ? s.clientWidth : window.innerWidth;
+            var h = s ? s.clientHeight : window.innerHeight;
+            var btn = event && event.target;
+            if (btn) { btn.disabled = true; setTimeout(function () { btn.disabled = false; }, 2500); }
+            fetch('/display/match?w=' + w + '&h=' + h)
+                .then(function (r) { return r.json(); })
+                .then(function (d) { console.log('Display now ' + d.width + 'x' + d.height + (d.changed ? ' (changed)' : '')); })
+                .catch(function () {});
+        }
+
+        // Reflect the current stream resolution in the selector.
+        fetch('/config').then(function (r) { return r.json(); }).then(function (c) {
+            if (!c || !c.streamHeight) return;
+            var opts = [480, 720, 1080], best = opts[0];
+            for (var i = 0; i < opts.length; i++)
+                if (Math.abs(opts[i] - c.streamHeight) < Math.abs(best - c.streamHeight)) best = opts[i];
+            document.getElementById('resSel').value = String(best);
+        }).catch(function () {});
     </script>
 </body>
 
