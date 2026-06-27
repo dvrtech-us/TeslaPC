@@ -1,5 +1,6 @@
 using Streaming;
 using AudioStreamingServer;
+using Media;
 using System.Net.WebSockets;
 using System.Net;
 using System.Text.Json;
@@ -16,11 +17,13 @@ public class WebServer
 
     private readonly ImageStreamingServer _imageStreamer;
     private readonly AudioCapture _audioCapture;
+    private readonly MediaStreamer _media;
 
-    public WebServer(ImageStreamingServer imageStreamer, AudioCapture audioCapture)
+    public WebServer(ImageStreamingServer imageStreamer, AudioCapture audioCapture, MediaStreamer media)
     {
         _imageStreamer = imageStreamer;
         _audioCapture = audioCapture;
+        _media = media;
     }
 
     public async Task StartWebServerAsync(
@@ -170,10 +173,70 @@ public class WebServer
         {
             _imageStreamer.HandleStreamRequest(context);
         }
+        else if (path.StartsWith("/media/", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleMedia(context, path);
+        }
         else
         {
             HandleHttpAsync(context);
         }
+    }
+
+    /// <summary>
+    /// Media player control endpoints. All return the current player state as JSON so the player
+    /// page can keep its controls in sync:
+    ///   /media/play?path=...   start playing a file (must be under the browse root)
+    ///   /media/pause           pause            /media/resume   resume
+    ///   /media/seek?t=SECONDS  seek             /media/stop     stop, restore live screen
+    ///   /media/status          current state
+    /// </summary>
+    private void HandleMedia(HttpListenerContext context, string path)
+    {
+        var query = HttpUtility.ParseQueryString(context.Request.Url?.Query ?? "");
+        string action = path.Substring("/media/".Length).TrimEnd('/').ToLowerInvariant();
+
+        switch (action)
+        {
+            case "play":
+                string? file = query.Get("path");
+                if (!string.IsNullOrEmpty(file))
+                    _media.Play(file);
+                break;
+            case "pause":
+                _media.Pause();
+                break;
+            case "resume":
+                _media.Resume();
+                break;
+            case "stop":
+                _media.Stop();
+                break;
+            case "seek":
+                if (double.TryParse(query.Get("t"), System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out var t))
+                    _media.Seek(t);
+                break;
+            case "status":
+                break;
+            default:
+                context.Response.StatusCode = 404;
+                context.Response.Close();
+                return;
+        }
+
+        WriteJson(context.Response, JsonSerializer.Serialize(_media.Status()));
+    }
+
+    private static void WriteJson(HttpListenerResponse response, string json)
+    {
+        byte[] buffer = Encoding.UTF8.GetBytes(json);
+        response.StatusCode = 200;
+        response.ContentType = "application/json";
+        response.ContentLength64 = buffer.Length;
+        response.OutputStream.Write(buffer, 0, buffer.Length);
+        response.OutputStream.Close();
+        response.Close();
     }
 
     private void HandleHttpAsync(HttpListenerContext context)
@@ -266,26 +329,26 @@ public class WebServer
             if (request.Url.LocalPath == "/play.html")
             {
                 string? requestFilePath = QueryParameters.Get("FILENAME");
-                if (requestFilePath == null)
+                if (string.IsNullOrEmpty(requestFilePath))
                 {
-                    responseString = responseString.Replace("{{VIDEO}}", "No video file specified");
+                    responseString = responseString.Replace("{{TITLE}}", "No video file specified");
+                }
+                else if (_media.IsFfmpegAvailable)
+                {
+                    // In-app playback: decode the file with ffmpeg into the MJPEG + audio streams,
+                    // then serve the player page (play.html). The Tesla never decodes "video", so it
+                    // keeps playing while the car is in motion.
+                    _media.Play(requestFilePath);
+                    responseString = responseString.Replace("{{TITLE}}",
+                        HttpUtility.HtmlEncode(Path.GetFileNameWithoutExtension(requestFilePath)));
                 }
                 else
                 {
-                    //kill all running copies of the vlc
-                    System.Diagnostics.Process.Start("taskkill", "/F /IM vlc.exe");
-                    //start the vlc with the file
-                    //    String path = """"-vvv "FILEPATH" :sout="#transcode{vcodec=MJPG,vb=auto,scale=Auto,width=800,height=auto,scodec=none}:duplicate{dst=http{mux=mpjpeg,dst=:8088/video.mpjpeg},dst=display}" :no-sout-all :sout-keep"""";
-                    String path = """" -vvv "FILEPATH" --fullscreen """";
-
-                    //replace the FILEPATH with the actual file path
-                    path = path.Replace("FILEPATH", requestFilePath).Trim();
-                    System.Threading.Thread.Sleep(2000);
-                    var happened = System.Diagnostics.Process.Start("C:\\Program Files\\VideoLAN\\VLC\\vlc.exe", path);
-                    Console.WriteLine("Starting VLC: " + happened);
-                    responseString = responseString.Replace("{{VIDEO}}", "Playing video " + happened);
+                    // Fallback when ffmpeg isn't installed: launch VLC full-screen on the host and let
+                    // the live screen-capture stream carry it (the original behavior).
+                    responseString = LaunchVlcFallbackHtml(requestFilePath);
                 }
-            }   
+            }
 
             //replace all instances of the string "localhost:8081" with the actual IP address of the server
 
@@ -308,6 +371,37 @@ public class WebServer
         output.Close();
         response.Close();
         return;
+    }
+
+    /// <summary>
+    /// Fallback used only when ffmpeg is not installed: kill any running VLC, launch the file
+    /// full-screen on the host, and return a small status card that bounces back to the screen view.
+    /// </summary>
+    private string LaunchVlcFallbackHtml(string filePath)
+    {
+        string status;
+        try
+        {
+            System.Diagnostics.Process.Start("taskkill", "/F /IM vlc.exe");
+            System.Threading.Thread.Sleep(2000);
+            System.Diagnostics.Process.Start("C:\\Program Files\\VideoLAN\\VLC\\vlc.exe", $" -vvv \"{filePath}\" --fullscreen");
+            status = "Playing on PC (ffmpeg not installed)";
+            Console.WriteLine($"[Media] VLC fallback launched for {filePath}");
+        }
+        catch (Exception ex)
+        {
+            status = "Could not start VLC: " + ex.Message;
+            Console.WriteLine($"[Media] VLC fallback failed: {ex.Message}");
+        }
+
+        return "<html><head><title>Now Playing</title>" +
+               "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no\">" +
+               "<link rel=\"stylesheet\" type=\"text/css\" href=\"/style.css\" />" +
+               "<meta http-equiv=\"refresh\" content=\"3; url=http://LOCALHOST:8080/\"></head>" +
+               "<body><div class=\"center\"><div class=\"card\">" +
+               "<div class=\"big-ic\">&#127916;</div><h1>" + HttpUtility.HtmlEncode(status) + "</h1>" +
+               "<a class=\"btn primary\" href=\"http://LOCALHOST:8080/\">&#9664; Back to Screen</a>" +
+               "</div></div></body></html>";
     }
 
     private string handleHTMLReplacements(string html, HttpListenerRequest request)

@@ -4,17 +4,96 @@
     <title>Now Playing</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <link rel="stylesheet" type="text/css" href="/style.css" />
-    <meta http-equiv="refresh" content="3; url=http://LOCALHOST:8080/">
 </head>
 
 <body>
-    <div class="center">
-        <div class="card">
-            <div class="big-ic">&#127916;</div>
-            <h1>{{VIDEO}}</h1>
-            <a class="btn primary" href="http://LOCALHOST:8080/">&#9664; Back to Screen</a>
+    <!-- The decoded video arrives as the MJPEG /stream (driven by MediaStreamer, not screen capture). -->
+    <div class="screen">
+        <img title="Now playing" src="/stream" />
+    </div>
+
+    <!-- Audio needs a user gesture to start, so cover the screen until the first tap. -->
+    <div id="tapstart" class="tap-overlay">
+        <div class="tap-inner">
+            <div class="big-ic">&#9658;</div>
+            <div class="tap-title">{{TITLE}}</div>
+            <div class="tap-sub">Tap to start sound</div>
         </div>
     </div>
+
+    <div class="controlbar mediabar">
+        <button id="playpause" class="btn primary" onclick="togglePlay()">&#10073;&#10073; Pause</button>
+        <span id="cur" class="time">0:00</span>
+        <input id="seek" class="seek" type="range" min="0" max="0" value="0" step="1" />
+        <span id="dur" class="time">0:00</span>
+        <button class="btn" onclick="stopPlayback()">&#9632; Stop</button>
+        <button class="btn" onclick="window.location.assign('/list.html')">&#128193; Files</button>
+    </div>
+
+    <script src="/audio-client.js"></script>
+    <script>
+        var paused = false;
+        var ended = false;
+        var dragging = false;
+        var seek = document.getElementById('seek');
+        var curEl = document.getElementById('cur');
+        var durEl = document.getElementById('dur');
+        var ppEl = document.getElementById('playpause');
+
+        function fmt(sec) {
+            sec = Math.max(0, Math.floor(sec || 0));
+            var m = Math.floor(sec / 60), s = sec % 60;
+            return m + ':' + (s < 10 ? '0' : '') + s;
+        }
+
+        function startSound() {
+            var o = document.getElementById('tapstart');
+            if (o) o.style.display = 'none';
+            startTeslaAudio();
+        }
+        document.getElementById('tapstart').addEventListener('click', startSound);
+
+        function togglePlay() {
+            if (ended) { window.location.assign('/'); return; }
+            fetch(paused ? '/media/resume' : '/media/pause').then(refreshSoon);
+            paused = !paused;
+            ppEl.innerHTML = paused ? '&#9658; Play' : '&#10073;&#10073; Pause';
+        }
+
+        function stopPlayback() {
+            fetch('/media/stop').then(function () { window.location.assign('/'); });
+        }
+
+        seek.addEventListener('input', function () { dragging = true; curEl.textContent = fmt(seek.value); });
+        seek.addEventListener('change', function () {
+            dragging = false;
+            fetch('/media/seek?t=' + encodeURIComponent(seek.value)).then(refreshSoon);
+        });
+
+        function applyStatus(st) {
+            if (!st) return;
+            paused = !!st.paused;
+            ended = !st.playing && !st.paused;
+            if (st.duration > 0) {
+                seek.max = Math.floor(st.duration);
+                durEl.textContent = fmt(st.duration);
+            }
+            if (!dragging) {
+                seek.value = Math.floor(st.position);
+                curEl.textContent = fmt(st.position);
+            }
+            if (ended) ppEl.innerHTML = '&#9664; Back to screen';
+            else ppEl.innerHTML = paused ? '&#9658; Play' : '&#10073;&#10073; Pause';
+        }
+
+        function refresh() {
+            fetch('/media/status').then(function (r) { return r.json(); }).then(applyStatus).catch(function () {});
+        }
+        function refreshSoon() { setTimeout(refresh, 250); }
+
+        refresh();
+        setInterval(refresh, 1000);
+    </script>
 </body>
 
 </html>
