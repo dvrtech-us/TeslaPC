@@ -18,12 +18,14 @@ public class WebServer
     private readonly ImageStreamingServer _imageStreamer;
     private readonly AudioCapture _audioCapture;
     private readonly MediaStreamer _media;
+    private readonly MediaLibrary _library;
 
-    public WebServer(ImageStreamingServer imageStreamer, AudioCapture audioCapture, MediaStreamer media)
+    public WebServer(ImageStreamingServer imageStreamer, AudioCapture audioCapture, MediaStreamer media, MediaLibrary library)
     {
         _imageStreamer = imageStreamer;
         _audioCapture = audioCapture;
         _media = media;
+        _library = library;
     }
 
     public async Task StartWebServerAsync(
@@ -185,6 +187,10 @@ public class WebServer
         {
             HandleDisplay(context, path);
         }
+        else if (path.Equals("/version", StringComparison.OrdinalIgnoreCase))
+        {
+            WriteJson(context.Response, JsonSerializer.Serialize(new { version = AppSettings.Version }));
+        }
         else
         {
             HandleHttpAsync(context);
@@ -259,6 +265,7 @@ public class WebServer
             videoRoot = _media.Root,
             logLevel = Log.LevelName,
             streamHeight = _imageStreamer.MaxHeight,
+            version = AppSettings.Version,
             cfTokenSet = !string.IsNullOrWhiteSpace(AppSettings.Get(AppSettings.CloudflareTokenKey))
         };
         WriteJson(context.Response, JsonSerializer.Serialize(payload));
@@ -614,27 +621,37 @@ public class WebServer
             return sb.ToString();
         }
 
-        sb.Append("<div class=\"grid\">");
+        // Look up watched/resume state for every file in one DB query.
+        var progressByPath = _library.GetAll();
+
+        sb.Append("<div class=\"list\">");
 
         // Folders first.
         foreach (string directory in directories)
         {
             string name = Path.GetFileName(directory.TrimEnd('\\'));
-            sb.Append("<a class=\"tile folder\" href=\"/list.html?path=" + HttpUtility.UrlEncode(directory) + "\">");
+            sb.Append("<a class=\"row folder\" href=\"/list.html?path=" + HttpUtility.UrlEncode(directory) + "\">");
             sb.Append("<span class=\"ic\">&#128193;</span>");
-            sb.Append("<span class=\"nm\">" + HttpUtility.HtmlEncode(name) + "</span></a>");
+            sb.Append("<span class=\"nm\">" + HttpUtility.HtmlEncode(name) + "</span>");
+            sb.Append("<span class=\"chev\">&#8250;</span></a>");
         }
 
-        // Then files (each opens VLC on the host via /play.html).
+        // Then files — full filename, with a Watched check (≥95% played) or resume percentage.
         foreach (string file in files)
         {
-            string name = Path.GetFileNameWithoutExtension(file);
-            string ext = Path.GetExtension(file).TrimStart('.').ToUpperInvariant();
-            sb.Append("<a class=\"tile file\" href=\"/play.html?FILENAME=" + HttpUtility.UrlEncode(file) + "\">");
-            sb.Append("<span class=\"ic\">&#127916;</span>");
+            string name = Path.GetFileName(file);   // full name including extension
+            progressByPath.TryGetValue(file.ToLowerInvariant(), out var prog);
+            bool watched = prog?.Watched ?? false;
+            int pct = prog?.Percent ?? 0;
+
+            sb.Append("<a class=\"row file" + (watched ? " watched" : "") + "\" href=\"/play.html?FILENAME="
+                + HttpUtility.UrlEncode(file) + "\">");
+            sb.Append("<span class=\"ic\">" + (watched ? "&#10003;" : "&#127916;") + "</span>");
             sb.Append("<span class=\"nm\">" + HttpUtility.HtmlEncode(name) + "</span>");
-            if (ext.Length > 0)
-                sb.Append("<span class=\"ext\">" + HttpUtility.HtmlEncode(ext) + "</span>");
+            if (watched)
+                sb.Append("<span class=\"badge done\">Watched</span>");
+            else if (pct > 0)
+                sb.Append("<span class=\"badge\">" + pct + "%</span>");
             sb.Append("</a>");
         }
 

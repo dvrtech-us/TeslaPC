@@ -6,11 +6,16 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- App version. Bump on release and tag git with "v<Version>" (see AGENTS.md / docs). -->
+    <Version>1.0.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Certes" Version="3.0.4" />
     <PackageReference Include="CSCore" Version="1.2.1.2" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
+    <!-- Pin the native SQLite bundle to a patched build (overrides the transitive 2.1.10 flagged by NU1903). -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.11" />
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="System.Net.WebSockets" Version="4.3.0" />
     <PackageReference Include="Vortice.Direct3D11" Version="2.4.2" />

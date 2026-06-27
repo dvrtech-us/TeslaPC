@@ -10,6 +10,7 @@
     --accent: #3b82f6;
     --accent-press: #2f6fd6;
     --folder: #f5b945;
+    --good: #37c871;
     --danger: #e2231a;
     --radius: 16px;
     --radius-sm: 12px;
@@ -197,6 +198,50 @@ html, body {
     font-size: 1.1rem;
     padding: 60px 20px;
 }
+
+/* ---------- File list view (full filenames + watched/resume state) ---------- */
+.list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-height: 64px;
+    padding: 12px 18px;
+    background: var(--surface);
+    border: 1px solid rgba(255, 255, 255, .05);
+    border-radius: var(--radius-sm);
+    text-decoration: none;
+    color: var(--text);
+    touch-action: manipulation;
+    transition: background-color .12s ease, transform .04s ease;
+}
+.row:active { background: var(--surface-press); transform: scale(.995); }
+.row .ic { font-size: 1.7rem; line-height: 1; flex: 0 0 auto; width: 30px; text-align: center; }
+.row.folder .ic { filter: drop-shadow(0 0 6px rgba(245, 185, 69, .25)); }
+.row.watched .ic { color: var(--good, #37c871); }
+.row .nm {
+    flex: 1 1 auto;
+    font-size: 1.1rem;
+    font-weight: 600;
+    word-break: break-word;          /* show the full filename; wrap rather than truncate */
+}
+.row.watched .nm { color: var(--muted); font-weight: 500; }
+.row .chev { color: var(--muted); font-size: 1.6rem; flex: 0 0 auto; }
+.row .badge {
+    flex: 0 0 auto;
+    font-size: .8rem;
+    font-weight: 700;
+    letter-spacing: .03em;
+    color: var(--muted);
+    background: var(--surface-2);
+    padding: 4px 10px;
+    border-radius: 999px;
+}
+.row .badge.done { color: #0b0d11; background: var(--good, #37c871); }
 
 /* ---------- Playback status page ---------- */
 .center { min-height: 100vh; display: flex; align-items: center; justify-content: center; }

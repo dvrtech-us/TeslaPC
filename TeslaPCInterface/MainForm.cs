@@ -105,12 +105,14 @@ internal sealed class MainForm : Form
 
         var tabBar = new Panel { Dock = DockStyle.Top, Height = 60, BackColor = Surface };
         var logo = new PictureBox { Image = MakeLogo(36), SizeMode = PictureBoxSizeMode.AutoSize, Left = 14, Top = 12 };
-        var wordmark = new Label { Text = "TeslaPC", AutoSize = true, ForeColor = TextC, Font = new Font("Segoe UI", 14F, FontStyle.Bold), Left = 58, Top = 16 };
+        var wordmark = new Label { Text = "TeslaPC", AutoSize = true, ForeColor = TextC, Font = new Font("Segoe UI", 14F, FontStyle.Bold), Left = 58, Top = 10 };
+        var version = new Label { Text = "v" + AppSettings.Version, AutoSize = true, ForeColor = Muted, Font = new Font("Segoe UI", 8.5F), Left = 60, Top = 36 };
         _tabDash = MakeTab("Dashboard", 200);
         _tabLog = MakeTab("Log", 360);
         _tabConfig = MakeTab("Config", 520);
         tabBar.Controls.Add(logo);
         tabBar.Controls.Add(wordmark);
+        tabBar.Controls.Add(version);
         tabBar.Controls.Add(_tabConfig);
         tabBar.Controls.Add(_tabLog);
         tabBar.Controls.Add(_tabDash);

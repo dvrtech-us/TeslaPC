@@ -67,6 +67,7 @@
         </form>
 
         <div id="msg" class="msg"></div>
+        <div id="verFooter" class="fhint" style="margin-top:8px"></div>
     </div>
 
     <script>
@@ -85,6 +86,7 @@
                         if (Math.abs(opts[i] - c.streamHeight) < Math.abs(best - c.streamHeight)) best = opts[i];
                     form.streamHeight.value = String(best);
                 }
+                document.getElementById('verFooter').textContent = c.version ? ('TeslaPC v' + c.version) : '';
                 document.getElementById('cfState').textContent = c.cfTokenSet
                     ? 'A token is saved. Leave blank to keep it, or type a new one to replace it.'
                     : 'No token saved yet. Paste your Cloudflare API token to enable trusted HTTPS.';
