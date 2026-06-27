@@ -11,18 +11,21 @@ web UI.
 ### WinForms Config tab (`MainForm`)
 
 1. Open the control panel. The third tab (after **Dashboard** and **Log**) is **Config**.
-2. The tab shows four fields:
+2. The tab shows five fields:
    - **Public URL (hostname)** — `TESLAPC_HTTPS_HOST`
    - **Cloudflare API token** — `TESLAPC_CF_TOKEN` (masked with `UseSystemPasswordChar`)
    - **Let's Encrypt email** — `TESLAPC_ACME_EMAIL`
    - **Video folder** — `TESLAPC_VIDEO_ROOT` with a **Browse…** button that opens a
      `FolderBrowserDialog`.
+   - **Log level** (`_cfgLog` `ComboBox`) — four options: `error`, `warn`, `info`, `debug`.
+     Pre-filled from `Log.LevelName` when the tab loads.
 3. Click **Save settings**:
    - Calls `AppSettings.Save` with a dictionary of the changed values. The hostname and email
      are always included; the video folder and the Cloudflare token are included **only when
      non-blank** — so leaving the token box empty keeps the existing token (the omitted key is
      never written).
    - Applies the new video folder live via `_service.SetVideoRoot(path)`.
+   - Calls `Log.SetLevel(selectedLevel)` to apply the new log level **immediately** (no restart).
    - Clears the token input box.
    - Displays a status message: settings saved; host/cert changes require the Dashboard
      **Restart** button (no full process restart needed).
@@ -32,13 +35,15 @@ web UI.
 1. From the main screen control bar or the file-browser top bar, click **Settings** →
    navigates to `/config.html`.
 2. On load, the page issues `GET /config` and pre-fills the form:
-   - Hostname, ACME email, and video folder are shown as text.
+   - Hostname, ACME email, video folder, and log level are shown.
    - The Cloudflare token field is a password input with placeholder
      `leave blank to keep current`; its value is **never pre-filled** (the server never
      returns the token).
+   - The log-level field is a `<select name="logLevel">` with options `error`, `warn`,
+     `info`, `debug`; pre-selected from the `logLevel` value returned by `GET /config`.
 3. Edit any field and click **Save**. The page posts `application/x-www-form-urlencoded` to
    `POST /config` and shows one of:
-   - **Saved** — video folder change took effect immediately.
+   - **Saved** — video folder or log-level change took effect immediately.
    - **Saved — restart required** — host, token, or email changed; use the Dashboard
      **Restart** button to apply cert/ACME changes (no full process restart needed).
 
@@ -57,6 +62,7 @@ web UI.
 | `CloudflareTokenKey` | `TESLAPC_CF_TOKEN` |
 | `AcmeEmailKey` | `TESLAPC_ACME_EMAIL` |
 | `VideoRootKey` | `TESLAPC_VIDEO_ROOT` |
+| `LogLevelKey` | `TESLAPC_LOG_LEVEL` |
 | `DefaultVideoRoot` | `C:\video\` |
 | `EnvFilePath` | `%ProgramData%\TeslaPC\.env` (expanded at runtime) |
 
@@ -99,27 +105,46 @@ is left intact.
 Returns a JSON object with the current non-secret settings:
 
 ```json
-{ "httpsHost": "my.example.com", "acmeEmail": "admin@example.com", "videoRoot": "C:\\video\\", "cfTokenSet": true }
+{ "httpsHost": "my.example.com", "acmeEmail": "admin@example.com", "videoRoot": "C:\\video\\", "cfTokenSet": true, "logLevel": "info" }
 ```
 
 `cfTokenSet` is `true` when `TESLAPC_CF_TOKEN` is set to a non-empty value. **The token
-value is never included in the response.**
+value is never included in the response.** `logLevel` is the current level as a lowercase
+string (`error`, `warn`, `info`, or `debug`) returned by `Log.LevelName`.
 
 #### `POST /config`
 
 Accepts `application/x-www-form-urlencoded` with fields: `httpsHost`, `acmeEmail`,
-`videoRoot`, and optionally `cfToken`.
+`videoRoot`, `logLevel`, and optionally `cfToken`.
 
 1. Builds a dictionary, adding `httpsHost`/`acmeEmail` when present and `videoRoot`/`cfToken`
    only when non-blank (so a blank token is omitted and the stored one is preserved).
 2. Calls `AppSettings.Save`.
 3. If `videoRoot` was included, sets `_media.Root` to apply the new folder live.
-4. Sets `restartNeeded = true` if `httpsHost`, `cfToken`, or `acmeEmail` were saved.
+4. If `logLevel` was included, calls `Log.SetLevel(logLevel)` to apply the new threshold
+   **immediately** (no restart needed).
+5. Sets `restartNeeded = true` if `httpsHost`, `cfToken`, or `acmeEmail` were saved.
+   `logLevel` is **not** in `restartNeeded` — it takes effect live.
 5. Returns JSON:
 
 ```json
 { "saved": true, "restartNeeded": false }
 ```
+
+### Log level — live application (no restart)
+
+`Log.SetLevel(string?)` (in `TeslaPCInterface/Log.cs`) parses the string (accepted values:
+`error`/`0`, `warn`/`warning`/`1`, `info`/`2`, `debug`/`verbose`/`3`, case-insensitive)
+and updates the global `Log.Level` threshold immediately. Messages logged at a level above
+the threshold are discarded before any `Console.WriteLine` call, so the change takes effect
+for all subsequent log output without a restart. The level is also persisted to
+`%ProgramData%\TeslaPC\.env` via `AppSettings.Save(LogLevelKey, …)` so it survives restarts.
+
+`Log.LevelName` returns the current threshold as lowercase: `error`, `warn`, `info`, or
+`debug`.
+
+At startup, `Program.LoadDotEnv` runs and `Log.SetLevel(AppSettings.Get(AppSettings.LogLevelKey))`
+is called before the server starts, so the env-file value is honoured from the first log line.
 
 ### Video folder — live application (no restart)
 
@@ -156,7 +181,10 @@ A full process restart is not required; the in-app Restart is sufficient.
 | `TeslaPcService.VideoRoot` | `TeslaPCInterface/TeslaPcService.cs` | Exposes `_media.Root` |
 | `TeslaPcService.SetVideoRoot` | `TeslaPCInterface/TeslaPcService.cs` | Sets `_media.Root` live |
 | `MediaStreamer.Root` | `TeslaPCInterface/MediaStreamer.cs` | Single source of truth for video browse root |
-| `MainForm` (Config tab) | `TeslaPCInterface/MainForm.cs` | WinForms Config tab (four fields + Browse… + Save settings) |
+| `Log` | `TeslaPCInterface/Log.cs` | Global leveled logger; `SetLevel`, `LevelName`, `Error`/`Warn`/`Info`/`Debug` methods |
+| `Log.SetLevel` | `TeslaPCInterface/Log.cs` | Parse and apply a new log-level threshold immediately |
+| `Log.LevelName` | `TeslaPCInterface/Log.cs` | Returns current threshold as lowercase string |
+| `MainForm` (Config tab) | `TeslaPCInterface/MainForm.cs` | WinForms Config tab (five fields incl. log level + Browse… + Save settings) |
 | `config.html` | `TeslaPCInterface/config.html` | Web settings page (form, `GET /config` pre-fill, `POST /config` submit) |
 | `style.css` | `TeslaPCInterface/style.css` | `.settings`, `.field`, `.finput`, `.fhint`, `.msg` classes for the settings form |
 
@@ -164,8 +192,8 @@ A full process restart is not required; the in-app Restart is sufficient.
 
 | Route | Method | Protocol | Auth | Handler |
 |-------|--------|----------|------|---------|
-| `/config` | GET | HTTP/HTTPS | none | `WebServer.HandleConfig` — returns `{ httpsHost, acmeEmail, videoRoot, cfTokenSet }` JSON |
-| `/config` | POST | HTTP/HTTPS | none | `WebServer.HandleConfig` — saves settings, applies video folder live, returns `{ saved, restartNeeded }` JSON |
+| `/config` | GET | HTTP/HTTPS | none | `WebServer.HandleConfig` — returns `{ httpsHost, acmeEmail, videoRoot, cfTokenSet, logLevel }` JSON |
+| `/config` | POST | HTTP/HTTPS | none | `WebServer.HandleConfig` — saves settings, applies video folder and log level live, returns `{ saved, restartNeeded }` JSON |
 | `/config.html` | GET | HTTP/HTTPS | none | Static page served from `TeslaPCInterface/config.html` |
 
 ## Settings / Environment Keys
@@ -176,6 +204,7 @@ A full process restart is not required; the in-app Restart is sufficient.
 | `TESLAPC_CF_TOKEN` | `CloudflareTokenKey` | _(none)_ | Next server restart |
 | `TESLAPC_ACME_EMAIL` | `AcmeEmailKey` | _(none)_ | Next server restart |
 | `TESLAPC_VIDEO_ROOT` | `VideoRootKey` | `C:\video\` | **Live** (immediate) |
+| `TESLAPC_LOG_LEVEL` | `LogLevelKey` | `info` | **Live** (immediate) |
 
 ## Access Control
 

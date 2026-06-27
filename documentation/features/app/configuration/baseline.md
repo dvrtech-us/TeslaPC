@@ -4,8 +4,9 @@ Known-good invariants. Update only when intended behavior changes.
 
 ## Invariants
 
-- The four settings (`TESLAPC_HTTPS_HOST`, `TESLAPC_CF_TOKEN`, `TESLAPC_ACME_EMAIL`,
-  `TESLAPC_VIDEO_ROOT`) are persisted to `%ProgramData%\TeslaPC\.env` by `AppSettings.Save`.
+- The five settings (`TESLAPC_HTTPS_HOST`, `TESLAPC_CF_TOKEN`, `TESLAPC_ACME_EMAIL`,
+  `TESLAPC_VIDEO_ROOT`, `TESLAPC_LOG_LEVEL`) are persisted to `%ProgramData%\TeslaPC\.env`
+  by `AppSettings.Save`.
 - `Program.LoadDotEnv` loads the app-directory `.env` first, then `%ProgramData%\TeslaPC\.env`.
   **Existing environment variables win** — neither file overwrites a key already set in the
   process environment.
@@ -33,3 +34,13 @@ Known-good invariants. Update only when intended behavior changes.
   `%ProgramData%\TeslaPC\.env` file via the same `AppSettings.Save` code path.
 - `AppSettings.VideoRoot` returns `Environment.GetEnvironmentVariable("TESLAPC_VIDEO_ROOT")`
   when non-empty; otherwise `C:\video\` (`AppSettings.DefaultVideoRoot`).
+- `TESLAPC_LOG_LEVEL` is read by `Log.SetLevel(AppSettings.Get(AppSettings.LogLevelKey))` at
+  startup (after `Program.LoadDotEnv`). Default threshold when the key is absent or
+  unrecognised is `Info`. Accepted parse values: `error`/`0`, `warn`/`warning`/`1`,
+  `info`/`2`, `debug`/`verbose`/`3` (case-insensitive).
+- `Log.SetLevel` applies the new threshold **immediately** — no restart required. It is called
+  by both `POST /config` (web) and the WinForms Config-tab Save handler.
+- `GET /config` returns `logLevel` (the current `Log.LevelName` lowercase string) alongside
+  the other settings. `logLevel` is **not** a secret and is always included in the response.
+- `logLevel` is **not** part of the `restartNeeded` flag returned by `POST /config`; it takes
+  effect live.
