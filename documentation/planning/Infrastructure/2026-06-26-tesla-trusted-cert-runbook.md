@@ -13,12 +13,15 @@ external tools (win-acme / scheduled task / rebind script) are involved.
 
 ## One-time setup on the laptop
 
-1. **Set the token as a machine env var** (the app reads it; keep it off the command line in
-   shared contexts). In an elevated shell on the laptop:
+1. **Create the `.env`** at `%ProgramData%\TeslaPC\.env` (loaded automatically; survives rebuilds;
+   gitignored). Copy `TeslaPCInterface/.env.example` and fill in:
    ```
-   setx TESLAPC_CF_TOKEN "<your-cloudflare-token>" /M
+   TESLAPC_HTTPS_HOST=my.thelpers.com
+   TESLAPC_CF_TOKEN=<your-cloudflare-token>
+   TESLAPC_ACME_EMAIL=you@example.com
+   # TESLAPC_ACME_STAGING=1   # optional, while testing
    ```
-   Optional: `setx TESLAPC_ACME_EMAIL "you@example.com" /M` (Let's Encrypt contact).
+   (A machine env var of the same name still overrides the file if you prefer that.)
 2. **Run TeslaPC with the host**: launcher passes `--https-host my.thelpers.com`
    (`run-full.bat` / desktop `Start-TeslaPC.bat`). On startup, if the cert is missing or has
    < 30 days left, the app runs the ACME DNS-01 flow, imports the cert, and binds it; otherwise

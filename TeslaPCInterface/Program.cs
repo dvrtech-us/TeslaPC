@@ -21,6 +21,34 @@ namespace PrimaryProcess
             const int httpPort = 8080;
             const int httpsPort = 8443;
 
+            // Load config/secrets from .env (app folder, then %ProgramData%\TeslaPC\.env which
+            // wins and survives rebuilds). Lines are KEY=VALUE; existing real env vars take
+            // precedence so a machine env var can still override the file.
+            static void LoadDotEnv()
+            {
+                var paths = new[]
+                {
+                    Path.Combine(AppContext.BaseDirectory, ".env"),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "TeslaPC", ".env")
+                };
+                foreach (var path in paths)
+                {
+                    if (!File.Exists(path)) continue;
+                    foreach (var raw in File.ReadAllLines(path))
+                    {
+                        var line = raw.Trim();
+                        if (line.Length == 0 || line.StartsWith("#")) continue;
+                        int eq = line.IndexOf('=');
+                        if (eq <= 0) continue;
+                        var key = line.Substring(0, eq).Trim();
+                        var val = line.Substring(eq + 1).Trim().Trim('"');
+                        if (key.Length > 0 && string.IsNullOrEmpty(Environment.GetEnvironmentVariable(key)))
+                            Environment.SetEnvironmentVariable(key, val);
+                    }
+                }
+            }
+            LoadDotEnv();
+
             Size size = new(System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width, System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
 
             //set resolution to the smaller of size or 1280x720
