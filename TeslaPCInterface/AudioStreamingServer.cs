@@ -25,6 +25,40 @@ namespace AudioStreamingServer
         private int _channels;
         private string _sampleFormat = "float";
 
+        // Media mode: while MediaStreamer plays a file it pushes the file's decoded PCM into the same
+        // queue via EnqueueMediaAudio, and loopback enqueuing is suppressed so the two don't mix.
+        private volatile bool _mediaMode;
+
+        /// <summary>Device sample rate (Hz) announced to audio clients.</summary>
+        public int SampleRate => _sampleRate;
+        /// <summary>Device channel count announced to audio clients.</summary>
+        public int Channels => _channels;
+        /// <summary>Device sample format ("float" | "pcm16" | "pcm24" | "pcm32") announced to clients.</summary>
+        public string SampleFormat => _sampleFormat;
+
+        /// <summary>
+        /// When true, system-loopback capture stops feeding the broadcast queue; MediaStreamer
+        /// supplies audio via <see cref="EnqueueMediaAudio"/> instead.
+        /// </summary>
+        public bool MediaMode
+        {
+            get => _mediaMode;
+            set => _mediaMode = value;
+        }
+
+        /// <summary>
+        /// Pushes a frame-aligned PCM buffer (in the announced device format) into the broadcast
+        /// queue. Used by MediaStreamer to stream a decoded video file's audio over /ws/audio.
+        /// Buffers are dropped when no client is connected so the queue can't grow unbounded.
+        /// </summary>
+        public void EnqueueMediaAudio(byte[] pcm)
+        {
+            if (pcm.Length == 0 || _clients.IsEmpty)
+                return;
+            _audioDataQueue.Enqueue(pcm);
+            _audioDataSignal.Release();
+        }
+
         /// <summary>
         /// Starts capturing audio from the default loopback device (system audio).
         /// Reads the actual device format so the client knows how to decode.
@@ -48,7 +82,9 @@ namespace AudioStreamingServer
 
             capture.DataAvailable += (s, e) =>
             {
-                if (e.ByteCount > 0 && !_clients.IsEmpty)
+                // In media mode the file's audio (from MediaStreamer) owns the queue; suppress
+                // loopback so the two sources don't interleave.
+                if (e.ByteCount > 0 && !_clients.IsEmpty && !_mediaMode)
                 {
                     // Copy the raw PCM data (no WaveWriter/WAV header)
                     byte[] buffer = new byte[e.ByteCount];

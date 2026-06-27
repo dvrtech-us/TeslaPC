@@ -26,11 +26,14 @@ internal sealed class MainForm : Form
     private TeslaPcService _service = new();
     private readonly System.Windows.Forms.Timer _statusTimer = new() { Interval = 2000 };
 
-    private Button _tabDash = null!, _tabLog = null!;
-    private Panel _dashPanel = null!, _logPanel = null!;
+    private Button _tabDash = null!, _tabLog = null!, _tabConfig = null!;
+    private Panel _dashPanel = null!, _logPanel = null!, _configPanel = null!;
     private RichTextBox _log = null!;
     private Label _serverDot = null!, _httpsDot = null!, _hotspotDot = null!, _clientsDot = null!, _clientsTxt = null!, _urlVal = null!;
     private Button _btnHotspot = null!;
+    private TextBox _cfgHost = null!, _cfgToken = null!, _cfgEmail = null!, _cfgVideo = null!;
+    private ComboBox _cfgLog = null!;
+    private Label _cfgTokenState = null!, _cfgMsg = null!;
 
     public MainForm(string[] args)
     {
@@ -92,24 +95,29 @@ internal sealed class MainForm : Form
         var content = new Panel { Dock = DockStyle.Fill, BackColor = Bg };
         _dashPanel = new Panel { Dock = DockStyle.Fill, BackColor = Bg, Visible = true };
         _logPanel = new Panel { Dock = DockStyle.Fill, BackColor = Bg, Visible = false, Padding = new Padding(10) };
+        _configPanel = new Panel { Dock = DockStyle.Fill, BackColor = Bg, Visible = false, AutoScroll = true, Padding = new Padding(28, 22, 28, 22) };
         BuildDashboard();
         BuildLog();
+        BuildConfig();
         content.Controls.Add(_dashPanel);
         content.Controls.Add(_logPanel);
+        content.Controls.Add(_configPanel);
 
         var tabBar = new Panel { Dock = DockStyle.Top, Height = 60, BackColor = Surface };
         var logo = new PictureBox { Image = MakeLogo(36), SizeMode = PictureBoxSizeMode.AutoSize, Left = 14, Top = 12 };
         var wordmark = new Label { Text = "TeslaPC", AutoSize = true, ForeColor = TextC, Font = new Font("Segoe UI", 14F, FontStyle.Bold), Left = 58, Top = 16 };
         _tabDash = MakeTab("Dashboard", 200);
         _tabLog = MakeTab("Log", 360);
+        _tabConfig = MakeTab("Config", 520);
         tabBar.Controls.Add(logo);
         tabBar.Controls.Add(wordmark);
+        tabBar.Controls.Add(_tabConfig);
         tabBar.Controls.Add(_tabLog);
         tabBar.Controls.Add(_tabDash);
 
         Controls.Add(content);
         Controls.Add(tabBar);
-        ShowTab(true);
+        ShowTab(_tabDash);
     }
 
     private Button MakeTab(string text, int x)
@@ -126,18 +134,23 @@ internal sealed class MainForm : Form
             TextAlign = ContentAlignment.MiddleCenter
         };
         b.FlatAppearance.BorderSize = 0;
-        b.Click += (s, _) => ShowTab(s == _tabDash);
+        b.Click += (s, _) => ShowTab((Button)s!);
         return b;
     }
 
-    private void ShowTab(bool dash)
+    private void ShowTab(Button active)
     {
-        _dashPanel.Visible = dash;
-        _logPanel.Visible = !dash;
-        _tabDash.BackColor = dash ? Bg : Surface;
-        _tabDash.ForeColor = dash ? Accent : Muted;
-        _tabLog.BackColor = dash ? Surface : Bg;
-        _tabLog.ForeColor = dash ? Muted : Accent;
+        _dashPanel.Visible = active == _tabDash;
+        _logPanel.Visible = active == _tabLog;
+        _configPanel.Visible = active == _tabConfig;
+        foreach (var tab in new[] { _tabDash, _tabLog, _tabConfig })
+        {
+            bool on = tab == active;
+            tab.BackColor = on ? Bg : Surface;
+            tab.ForeColor = on ? Accent : Muted;
+        }
+        if (active == _tabConfig) LoadConfigFields();
+        if (active == _tabLog) ShowLogBuffer();
     }
 
     private void BuildDashboard()
@@ -220,6 +233,130 @@ internal sealed class MainForm : Form
         _logPanel.Controls.Add(_log);
     }
 
+    private void BuildConfig()
+    {
+        var root = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            AutoScroll = true
+        };
+
+        root.Controls.Add(new Label { Text = "Settings", AutoSize = true, ForeColor = TextC, Font = new Font("Segoe UI", 18F, FontStyle.Bold), Margin = new Padding(0, 0, 0, 16) });
+
+        _cfgHost = AddField(root, "Public URL (hostname)", "The hostname your trusted HTTPS certificate is issued for.", false);
+        _cfgToken = AddField(root, "Cloudflare API token", "Used to issue the certificate via DNS. Stored on this PC; leave blank to keep the current one.", true);
+        _cfgTokenState = new Label { Text = "", AutoSize = true, ForeColor = Muted, Font = new Font("Segoe UI", 9F), Margin = new Padding(2, 0, 0, 10) };
+        root.Controls.Add(_cfgTokenState);
+        _cfgEmail = AddField(root, "Let's Encrypt email (optional)", "", false);
+
+        _cfgVideo = AddField(root, "Video folder", "Folder the Files browser and media player read from.", false);
+        var browse = MakeButton("Browse…", Surface2, OnBrowseVideo);
+        browse.Width = 140; browse.Height = 48; browse.Margin = new Padding(0, 0, 0, 16);
+        root.Controls.Add(browse);
+
+        root.Controls.Add(new Label { Text = "Log level", AutoSize = true, ForeColor = TextC, Font = new Font("Segoe UI", 11F, FontStyle.Bold), Margin = new Padding(0, 0, 0, 4) });
+        _cfgLog = new ComboBox
+        {
+            Width = 260,
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Surface,
+            ForeColor = TextC,
+            Font = new Font("Segoe UI", 12F),
+            Margin = new Padding(0, 0, 0, 2)
+        };
+        _cfgLog.Items.AddRange(new object[] { "error", "warn", "info", "debug" });
+        root.Controls.Add(_cfgLog);
+        root.Controls.Add(new Label { Text = "Applies immediately. 'debug' logs every input and request — use only when troubleshooting.", AutoSize = true, ForeColor = Muted, Font = new Font("Segoe UI", 9F), Margin = new Padding(2, 0, 0, 16), MaximumSize = new Size(620, 0) });
+
+        var save = MakeButton("Save settings", Accent, OnSaveConfig);
+        root.Controls.Add(save);
+
+        _cfgMsg = new Label { Text = "", AutoSize = true, ForeColor = Muted, Font = new Font("Segoe UI", 11F), Margin = new Padding(0, 14, 0, 0), MaximumSize = new Size(620, 0) };
+        root.Controls.Add(_cfgMsg);
+
+        _configPanel.Controls.Add(root);
+    }
+
+    // A labeled text field (optionally masked) for the Config tab.
+    private TextBox AddField(FlowLayoutPanel parent, string label, string hint, bool secret)
+    {
+        parent.Controls.Add(new Label { Text = label, AutoSize = true, ForeColor = TextC, Font = new Font("Segoe UI", 11F, FontStyle.Bold), Margin = new Padding(0, 0, 0, 4) });
+        var tb = new TextBox
+        {
+            Width = 560,
+            Font = new Font("Segoe UI", 12F),
+            BackColor = Surface,
+            ForeColor = TextC,
+            BorderStyle = BorderStyle.FixedSingle,
+            UseSystemPasswordChar = secret,
+            Margin = new Padding(0, 0, 0, hint.Length > 0 ? 2 : 14)
+        };
+        parent.Controls.Add(tb);
+        if (hint.Length > 0)
+            parent.Controls.Add(new Label { Text = hint, AutoSize = true, ForeColor = Muted, Font = new Font("Segoe UI", 9F), Margin = new Padding(2, 0, 0, 14), MaximumSize = new Size(620, 0) });
+        return tb;
+    }
+
+    private void LoadConfigFields()
+    {
+        _cfgHost.Text = AppSettings.Get(AppSettings.HttpsHostKey) ?? "";
+        _cfgEmail.Text = AppSettings.Get(AppSettings.AcmeEmailKey) ?? "";
+        _cfgVideo.Text = _service.VideoRoot;
+        _cfgLog.SelectedItem = Log.LevelName;
+        _cfgToken.Text = "";
+        bool tokenSet = !string.IsNullOrWhiteSpace(AppSettings.Get(AppSettings.CloudflareTokenKey));
+        _cfgTokenState.Text = tokenSet
+            ? "A token is saved. Leave blank to keep it, or type a new one to replace it."
+            : "No token saved yet.";
+        _cfgMsg.Text = "";
+    }
+
+    private void OnBrowseVideo(object? sender, EventArgs e)
+    {
+        using var dlg = new FolderBrowserDialog { Description = "Select the video folder", UseDescriptionForTitle = true };
+        if (Directory.Exists(_cfgVideo.Text)) dlg.SelectedPath = _cfgVideo.Text;
+        if (dlg.ShowDialog(this) == DialogResult.OK)
+            _cfgVideo.Text = dlg.SelectedPath.EndsWith("\\") ? dlg.SelectedPath : dlg.SelectedPath + "\\";
+    }
+
+    private void OnSaveConfig(object? sender, EventArgs e)
+    {
+        var toSave = new Dictionary<string, string>
+        {
+            [AppSettings.HttpsHostKey] = _cfgHost.Text.Trim(),
+            [AppSettings.AcmeEmailKey] = _cfgEmail.Text.Trim()
+        };
+        if (!string.IsNullOrWhiteSpace(_cfgVideo.Text)) toSave[AppSettings.VideoRootKey] = _cfgVideo.Text.Trim();
+        if (_cfgLog.SelectedItem is string lvl) toSave[AppSettings.LogLevelKey] = lvl;
+        if (!string.IsNullOrWhiteSpace(_cfgToken.Text)) toSave[AppSettings.CloudflareTokenKey] = _cfgToken.Text.Trim();
+
+        try
+        {
+            AppSettings.Save(toSave);
+            if (toSave.ContainsKey(AppSettings.VideoRootKey))
+                _service.SetVideoRoot(toSave[AppSettings.VideoRootKey]);
+            if (toSave.ContainsKey(AppSettings.LogLevelKey))
+                Log.SetLevel(toSave[AppSettings.LogLevelKey]);
+            _cfgToken.Text = "";
+            bool restartNeeded = toSave.ContainsKey(AppSettings.HttpsHostKey)
+                || toSave.ContainsKey(AppSettings.CloudflareTokenKey)
+                || toSave.ContainsKey(AppSettings.AcmeEmailKey);
+            _cfgMsg.ForeColor = Good;
+            _cfgMsg.Text = restartNeeded
+                ? "Saved. The video folder applies now; click Restart on the Dashboard to apply the HTTPS/host changes."
+                : "Saved. Changes applied.";
+            Console.WriteLine("[Config] Settings saved from the control panel.");
+        }
+        catch (Exception ex)
+        {
+            _cfgMsg.ForeColor = Bad;
+            _cfgMsg.Text = "Save failed: " + ex.Message;
+        }
+    }
+
     [System.Runtime.InteropServices.DllImport("kernel32.dll")]
     private static extern uint SetThreadExecutionState(uint esFlags);
     private const uint ES_CONTINUOUS = 0x80000000, ES_SYSTEM_REQUIRED = 0x00000001, ES_DISPLAY_REQUIRED = 0x00000002;
@@ -285,12 +422,40 @@ internal sealed class MainForm : Form
         dot.ForeColor = color;
     }
 
+    private readonly object _logLock = new();
+    private readonly StringBuilder _logBuffer = new();
+    private const int LogBufferCap = 120000;
+
     private void AppendLog(string text)
     {
+        // Always keep a cheap, bounded in-memory copy so the Log tab can show recent history.
+        lock (_logLock)
+        {
+            _logBuffer.Append(text);
+            if (_logBuffer.Length > LogBufferCap)
+                _logBuffer.Remove(0, _logBuffer.Length - 90000);
+        }
+        // Only update the (expensive) RichTextBox while the Log tab is actually visible.
+        if (_logPanel.Visible) AppendToBox(text);
+    }
+
+    private void AppendToBox(string text)
+    {
         if (_log.IsDisposed) return;
-        if (_log.InvokeRequired) { try { _log.BeginInvoke(new Action(() => AppendLog(text))); } catch { } return; }
+        if (_log.InvokeRequired) { try { _log.BeginInvoke(new Action(() => AppendToBox(text))); } catch { } return; }
         if (_log.TextLength > 120000) _log.Text = _log.Text.Substring(_log.TextLength - 90000);
         _log.AppendText(text);
+        _log.SelectionStart = _log.TextLength;
+        _log.ScrollToCaret();
+    }
+
+    // Rebuild the RichTextBox from the buffer when the Log tab is opened (it isn't kept in sync while hidden).
+    private void ShowLogBuffer()
+    {
+        if (_log.IsDisposed) return;
+        string snapshot;
+        lock (_logLock) { snapshot = _logBuffer.ToString(); }
+        _log.Text = snapshot;
         _log.SelectionStart = _log.TextLength;
         _log.ScrollToCaret();
     }

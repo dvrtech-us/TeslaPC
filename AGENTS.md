@@ -43,6 +43,8 @@ behavior, not aspirations. This project has **no database**, so there are no `sq
 | server | input-control | `WebServer.cs`, `Program.cs` |
 | streaming | screen-capture | `ImageStreamingServer.cs`, `DxgiScreenCapture.cs`, `MjpegWriter.cs` |
 | streaming | audio-capture | `AudioStreamingServer.cs`, `PCMPlayerProcessor.js` |
+| app | control-panel | `Program.cs`, `MainForm.cs`, `TeslaPcService.cs` |
+| app | configuration | `AppSettings.cs`, `WebServer.cs`, `MainForm.cs`, `config.html` |
 | client | web-ui | `index.html`, `PCMPlayerProcessor.js` |
 | infrastructure | tesla-browser-bypass | `TeslaBrowserBypass.cs` |
 | infrastructure | firewall-bootstrap | `FirewallBootstrap.cs` |

@@ -1,5 +1,6 @@
 using Streaming;
 using AudioStreamingServer;
+using Media;
 using System.Net.WebSockets;
 using System.Net;
 using System.Text.Json;
@@ -16,11 +17,13 @@ public class WebServer
 
     private readonly ImageStreamingServer _imageStreamer;
     private readonly AudioCapture _audioCapture;
+    private readonly MediaStreamer _media;
 
-    public WebServer(ImageStreamingServer imageStreamer, AudioCapture audioCapture)
+    public WebServer(ImageStreamingServer imageStreamer, AudioCapture audioCapture, MediaStreamer media)
     {
         _imageStreamer = imageStreamer;
         _audioCapture = audioCapture;
+        _media = media;
     }
 
     public async Task StartWebServerAsync(
@@ -140,7 +143,7 @@ public class WebServer
     private async Task ProcessRequestAsync(HttpListenerContext context)
     {
         string path = context.Request.Url?.LocalPath ?? "/";
-        Console.WriteLine($"[HTTP] {context.Request.HttpMethod} {path}");
+        Log.Debug($"[HTTP] {context.Request.HttpMethod} {path}");
         await HandleRequest(context);
     }
 
@@ -170,10 +173,139 @@ public class WebServer
         {
             _imageStreamer.HandleStreamRequest(context);
         }
+        else if (path.StartsWith("/media/", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleMedia(context, path);
+        }
+        else if (path.Equals("/config", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleConfig(context);
+        }
         else
         {
             HandleHttpAsync(context);
         }
+    }
+
+    /// <summary>
+    /// Configuration endpoint backing the web Settings page.
+    ///   GET  /config  -> current values as JSON. The Cloudflare token is **never** returned (only a
+    ///                    `cfTokenSet` flag), so the secret can't be read back over the network.
+    ///   POST /config  -> save (application/x-www-form-urlencoded): httpsHost, acmeEmail, videoRoot,
+    ///                    and optionally cfToken (blank = keep existing). The video folder applies
+    ///                    immediately; host/token/email changes take effect on the next server restart.
+    /// </summary>
+    private void HandleConfig(HttpListenerContext context)
+    {
+        if (context.Request.HttpMethod == "POST")
+        {
+            string body;
+            using (var reader = new StreamReader(context.Request.InputStream, context.Request.ContentEncoding))
+                body = reader.ReadToEnd();
+            var form = HttpUtility.ParseQueryString(body);
+
+            var toSave = new Dictionary<string, string>();
+            string? host = form.Get("httpsHost");
+            string? email = form.Get("acmeEmail");
+            string? videoRoot = form.Get("videoRoot");
+            string? cfToken = form.Get("cfToken");
+            string? logLevel = form.Get("logLevel");
+
+            if (host != null) toSave[AppSettings.HttpsHostKey] = host.Trim();
+            if (email != null) toSave[AppSettings.AcmeEmailKey] = email.Trim();
+            if (videoRoot != null && !string.IsNullOrWhiteSpace(videoRoot)) toSave[AppSettings.VideoRootKey] = videoRoot.Trim();
+            if (Log.Parse(logLevel) is { } _) toSave[AppSettings.LogLevelKey] = logLevel!.Trim().ToLowerInvariant();
+            // Only overwrite the token when a non-blank value is supplied (the form leaves it blank to keep).
+            if (!string.IsNullOrWhiteSpace(cfToken)) toSave[AppSettings.CloudflareTokenKey] = cfToken.Trim();
+
+            try
+            {
+                AppSettings.Save(toSave);
+                // The video folder and log level apply live; host/cert settings need a restart.
+                if (toSave.ContainsKey(AppSettings.VideoRootKey))
+                    _media.Root = toSave[AppSettings.VideoRootKey];
+                if (toSave.ContainsKey(AppSettings.LogLevelKey))
+                    Log.SetLevel(toSave[AppSettings.LogLevelKey]);
+                bool restartNeeded = toSave.ContainsKey(AppSettings.HttpsHostKey)
+                    || toSave.ContainsKey(AppSettings.CloudflareTokenKey)
+                    || toSave.ContainsKey(AppSettings.AcmeEmailKey);
+                Console.WriteLine("[Config] Saved settings via web UI.");
+                WriteJson(context.Response, JsonSerializer.Serialize(new { saved = true, restartNeeded }));
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Config] Save failed: {ex.Message}");
+                WriteJson(context.Response, JsonSerializer.Serialize(new { saved = false, error = ex.Message }));
+            }
+            return;
+        }
+
+        // GET: report current values, but never the token itself.
+        var payload = new
+        {
+            httpsHost = AppSettings.Get(AppSettings.HttpsHostKey) ?? "",
+            acmeEmail = AppSettings.Get(AppSettings.AcmeEmailKey) ?? "",
+            videoRoot = _media.Root,
+            logLevel = Log.LevelName,
+            cfTokenSet = !string.IsNullOrWhiteSpace(AppSettings.Get(AppSettings.CloudflareTokenKey))
+        };
+        WriteJson(context.Response, JsonSerializer.Serialize(payload));
+    }
+
+    /// <summary>
+    /// Media player control endpoints. All return the current player state as JSON so the player
+    /// page can keep its controls in sync:
+    ///   /media/play?path=...   start playing a file (must be under the browse root)
+    ///   /media/pause           pause            /media/resume   resume
+    ///   /media/seek?t=SECONDS  seek             /media/stop     stop, restore live screen
+    ///   /media/status          current state
+    /// </summary>
+    private void HandleMedia(HttpListenerContext context, string path)
+    {
+        var query = HttpUtility.ParseQueryString(context.Request.Url?.Query ?? "");
+        string action = path.Substring("/media/".Length).TrimEnd('/').ToLowerInvariant();
+
+        switch (action)
+        {
+            case "play":
+                string? file = query.Get("path");
+                if (!string.IsNullOrEmpty(file))
+                    _media.Play(file);
+                break;
+            case "pause":
+                _media.Pause();
+                break;
+            case "resume":
+                _media.Resume();
+                break;
+            case "stop":
+                _media.Stop();
+                break;
+            case "seek":
+                if (double.TryParse(query.Get("t"), System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out var t))
+                    _media.Seek(t);
+                break;
+            case "status":
+                break;
+            default:
+                context.Response.StatusCode = 404;
+                context.Response.Close();
+                return;
+        }
+
+        WriteJson(context.Response, JsonSerializer.Serialize(_media.Status()));
+    }
+
+    private static void WriteJson(HttpListenerResponse response, string json)
+    {
+        byte[] buffer = Encoding.UTF8.GetBytes(json);
+        response.StatusCode = 200;
+        response.ContentType = "application/json";
+        response.ContentLength64 = buffer.Length;
+        response.OutputStream.Write(buffer, 0, buffer.Length);
+        response.OutputStream.Close();
+        response.Close();
     }
 
     private void HandleHttpAsync(HttpListenerContext context)
@@ -250,14 +382,7 @@ public class WebServer
                 //get path from the query string
       
                 string? path = QueryParameters.Get("path");
-                if (path == null)
-                {
-                    guts = returnAllFilesAsHtmlLinks("C:\\video\\");
-                }
-                else
-                {
-                    guts = returnAllFilesAsHtmlLinks(path);
-                }
+                guts = returnAllFilesAsHtmlLinks(string.IsNullOrEmpty(path) ? _media.Root : path);
 
                 responseString = responseString.Replace("{{GUTS}}", guts);
 
@@ -266,26 +391,26 @@ public class WebServer
             if (request.Url.LocalPath == "/play.html")
             {
                 string? requestFilePath = QueryParameters.Get("FILENAME");
-                if (requestFilePath == null)
+                if (string.IsNullOrEmpty(requestFilePath))
                 {
-                    responseString = responseString.Replace("{{VIDEO}}", "No video file specified");
+                    responseString = responseString.Replace("{{TITLE}}", "No video file specified");
+                }
+                else if (_media.IsFfmpegAvailable)
+                {
+                    // In-app playback: decode the file with ffmpeg into the MJPEG + audio streams,
+                    // then serve the player page (play.html). The Tesla never decodes "video", so it
+                    // keeps playing while the car is in motion.
+                    _media.Play(requestFilePath);
+                    responseString = responseString.Replace("{{TITLE}}",
+                        HttpUtility.HtmlEncode(Path.GetFileNameWithoutExtension(requestFilePath)));
                 }
                 else
                 {
-                    //kill all running copies of the vlc
-                    System.Diagnostics.Process.Start("taskkill", "/F /IM vlc.exe");
-                    //start the vlc with the file
-                    //    String path = """"-vvv "FILEPATH" :sout="#transcode{vcodec=MJPG,vb=auto,scale=Auto,width=800,height=auto,scodec=none}:duplicate{dst=http{mux=mpjpeg,dst=:8088/video.mpjpeg},dst=display}" :no-sout-all :sout-keep"""";
-                    String path = """" -vvv "FILEPATH" --fullscreen """";
-
-                    //replace the FILEPATH with the actual file path
-                    path = path.Replace("FILEPATH", requestFilePath).Trim();
-                    System.Threading.Thread.Sleep(2000);
-                    var happened = System.Diagnostics.Process.Start("C:\\Program Files\\VideoLAN\\VLC\\vlc.exe", path);
-                    Console.WriteLine("Starting VLC: " + happened);
-                    responseString = responseString.Replace("{{VIDEO}}", "Playing video " + happened);
+                    // Fallback when ffmpeg isn't installed: launch VLC full-screen on the host and let
+                    // the live screen-capture stream carry it (the original behavior).
+                    responseString = LaunchVlcFallbackHtml(requestFilePath);
                 }
-            }   
+            }
 
             //replace all instances of the string "localhost:8081" with the actual IP address of the server
 
@@ -308,6 +433,37 @@ public class WebServer
         output.Close();
         response.Close();
         return;
+    }
+
+    /// <summary>
+    /// Fallback used only when ffmpeg is not installed: kill any running VLC, launch the file
+    /// full-screen on the host, and return a small status card that bounces back to the screen view.
+    /// </summary>
+    private string LaunchVlcFallbackHtml(string filePath)
+    {
+        string status;
+        try
+        {
+            System.Diagnostics.Process.Start("taskkill", "/F /IM vlc.exe");
+            System.Threading.Thread.Sleep(2000);
+            System.Diagnostics.Process.Start("C:\\Program Files\\VideoLAN\\VLC\\vlc.exe", $" -vvv \"{filePath}\" --fullscreen");
+            status = "Playing on PC (ffmpeg not installed)";
+            Console.WriteLine($"[Media] VLC fallback launched for {filePath}");
+        }
+        catch (Exception ex)
+        {
+            status = "Could not start VLC: " + ex.Message;
+            Console.WriteLine($"[Media] VLC fallback failed: {ex.Message}");
+        }
+
+        return "<html><head><title>Now Playing</title>" +
+               "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no\">" +
+               "<link rel=\"stylesheet\" type=\"text/css\" href=\"/style.css\" />" +
+               "<meta http-equiv=\"refresh\" content=\"3; url=http://LOCALHOST:8080/\"></head>" +
+               "<body><div class=\"center\"><div class=\"card\">" +
+               "<div class=\"big-ic\">&#127916;</div><h1>" + HttpUtility.HtmlEncode(status) + "</h1>" +
+               "<a class=\"btn primary\" href=\"http://LOCALHOST:8080/\">&#9664; Back to Screen</a>" +
+               "</div></div></body></html>";
     }
 
     private string handleHTMLReplacements(string html, HttpListenerRequest request)
@@ -352,25 +508,48 @@ public class WebServer
     private string returnAllFilesAsHtmlLinks(string path)
     {
         var sb = new StringBuilder();
-        bool atRoot = path == @"C:\video\" || path == @"C:\video";
+        string root = _media.Root;
+        bool atRoot = string.Equals(path.TrimEnd('\\'), root.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
 
         // Sticky navigation bar: Screen, Up (when not at root), and the current path.
         sb.Append("<div class=\"topbar\">");
         sb.Append("<a class=\"navbtn\" href=\"/\">&#8962; Screen</a>");
+        sb.Append("<a class=\"navbtn\" href=\"/config.html\">&#9881; Settings</a>");
         if (!atRoot)
         {
-            string parentPath = Path.GetDirectoryName(path.TrimEnd('\\')) ?? @"C:\video\";
+            string parentPath = Path.GetDirectoryName(path.TrimEnd('\\')) ?? root;
             sb.Append("<a class=\"navbtn\" href=\"/list.html?path=" + HttpUtility.UrlEncode(parentPath) + "\">&#8593; Up</a>");
         }
         sb.Append("<span class=\"path\">" + HttpUtility.HtmlEncode(path) + "</span>");
         sb.Append("</div>");
 
-        string[] directories = Directory.GetDirectories(path);
-        var videoExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            { ".mp4", ".mkv", ".avi", ".mov", ".m4v", ".wmv", ".flv", ".webm", ".mpg", ".mpeg", ".ts", ".m2ts" };
-        string[] files = Directory.GetFiles(path)
-            .Where(f => videoExts.Contains(Path.GetExtension(f)))
-            .ToArray();
+        // A missing or unreadable folder must not 500 the request — show a friendly message instead.
+        if (!Directory.Exists(path))
+        {
+            sb.Append("<div class=\"empty\">This folder doesn't exist:<br>"
+                + HttpUtility.HtmlEncode(path)
+                + "<br><br>Pick a valid <b>Video folder</b> in <a class=\"navbtn\" href=\"/config.html\">&#9881; Settings</a>.</div>");
+            return sb.ToString();
+        }
+
+        string[] directories;
+        string[] files;
+        try
+        {
+            directories = Directory.GetDirectories(path);
+            var videoExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                { ".mp4", ".mkv", ".avi", ".mov", ".m4v", ".wmv", ".flv", ".webm", ".mpg", ".mpeg", ".ts", ".m2ts" };
+            files = Directory.GetFiles(path)
+                .Where(f => videoExts.Contains(Path.GetExtension(f)))
+                .ToArray();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[Files] Could not read '{path}': {ex.Message}");
+            sb.Append("<div class=\"empty\">Couldn't read this folder:<br>"
+                + HttpUtility.HtmlEncode(ex.Message) + "</div>");
+            return sb.ToString();
+        }
 
         sb.Append("<div class=\"grid\">");
 
@@ -449,10 +628,9 @@ public class WebServer
                     break;
                 }
 
-                Console.WriteLine($"Received message: {Encoding.UTF8.GetString(buffer, 0, receiveResult.Count)}");
-
                 //decode the message
                 var message = Encoding.UTF8.GetString(buffer, 0, receiveResult.Count);
+                Log.Debug($"Received input: {message}");
 
                 try
                 {
@@ -465,10 +643,9 @@ public class WebServer
                     else
                     {
                         var inputData = JsonSerializer.Deserialize<InputData>(message);
-                        Console.WriteLine($"Mouse position: {inputData.X}, {inputData.Y}");
                         //move the mouse
                         inputData = inputData.GetAdjusted();
-                        Console.WriteLine($"Adjusted Mouse position: {inputData.X}, {inputData.Y}");
+                        Log.Debug($"Mouse {inputData.Type} -> {inputData.X},{inputData.Y}");
 
                         Win32.SetCursorPos(inputData.X, inputData.Y);
                         if (inputData.Type == "down")

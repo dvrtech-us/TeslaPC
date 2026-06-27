@@ -206,3 +206,96 @@ html, body {
 }
 .card .big-ic { font-size: 4rem; margin-bottom: 8px; }
 .card h1 { font-size: 1.4rem; font-weight: 600; margin: 8px 0 28px; }
+
+/* ---------- Media player ---------- */
+.mediabar {
+    gap: 12px;
+    flex-wrap: nowrap;
+}
+.mediabar .time {
+    color: var(--muted);
+    font-size: .95rem;
+    font-variant-numeric: tabular-nums;
+    min-width: 44px;
+    text-align: center;
+    flex: 0 0 auto;
+}
+.seek {
+    -webkit-appearance: none;
+    appearance: none;
+    flex: 1 1 auto;
+    min-width: 80px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    outline: none;
+    touch-action: manipulation;
+}
+.seek::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: none;
+    cursor: pointer;
+}
+.seek::-moz-range-thumb {
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+}
+
+/* ---------- Settings form ---------- */
+.settings {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    max-width: 640px;
+}
+.field { display: flex; flex-direction: column; gap: 8px; }
+.flabel { font-size: 1.05rem; font-weight: 600; color: var(--text); }
+.finput {
+    appearance: none;
+    -webkit-appearance: none;
+    min-height: var(--tap);
+    padding: 0 16px;
+    font-size: 1.1rem;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid rgba(255, 255, 255, .1);
+    border-radius: var(--radius-sm);
+    outline: none;
+}
+.finput:focus { border-color: var(--accent); }
+.finput::placeholder { color: var(--muted); }
+.fhint { font-size: .9rem; color: var(--muted); }
+.msg { margin: 18px 0 40px; font-size: 1.05rem; min-height: 1.4em; }
+.msg.ok { color: var(--folder); }
+.msg.err { color: var(--danger); }
+
+/* Tap-to-start-sound overlay (audio needs a user gesture). */
+.tap-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(11, 13, 17, .82);
+    backdrop-filter: blur(4px);
+    cursor: pointer;
+}
+.tap-inner { text-align: center; padding: 24px; }
+.tap-inner .big-ic { font-size: 5rem; color: var(--accent); }
+.tap-title {
+    font-size: 1.3rem;
+    font-weight: 600;
+    margin: 12px 0 4px;
+    word-break: break-word;
+}
+.tap-sub { color: var(--muted); font-size: 1.05rem; }

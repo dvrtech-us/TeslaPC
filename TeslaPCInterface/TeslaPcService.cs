@@ -1,5 +1,6 @@
 using System.Net.NetworkInformation;
 using AudioStreamingServer;
+using Media;
 using Streaming;
 
 namespace PrimaryProcess;
@@ -17,6 +18,7 @@ internal sealed class TeslaPcService
     private readonly CancellationTokenSource _cts = new();
     private ImageStreamingServer? _imageServer;
     private AudioCapture? _audioCapture;
+    private MediaStreamer? _media;
     private WebServer? _webServer;
     private TeslaBrowserBypass.TeslaBrowserBypass? _bypass;
 
@@ -34,6 +36,15 @@ internal sealed class TeslaPcService
     public List<string> ConnectUrls { get; } = new();
     public bool HotspotOn => HotspotManager.LastKnownOn;
     public int ClientCount => _imageServer?.ClientCount ?? 0;
+    /// <summary>The folder the file browser/media player is rooted at.</summary>
+    public string VideoRoot => _media?.Root ?? AppSettings.VideoRoot;
+
+    /// <summary>Applies a new video folder immediately (no restart needed) to the running media player.</summary>
+    public void SetVideoRoot(string path)
+    {
+        if (_media != null && !string.IsNullOrWhiteSpace(path))
+            _media.Root = path.Trim();
+    }
 
     public async Task StartAsync(string[] args)
     {
@@ -42,6 +53,7 @@ internal sealed class TeslaPcService
         _imageServer = new ImageStreamingServer(1280, 720, 30);
         _audioCapture = new AudioCapture();
         _audioCapture.StartCapturing();
+        _media = new MediaStreamer(_imageServer, _audioCapture) { Root = AppSettings.VideoRoot };
 
         BypassEnabled = !args.Contains("--no-tesla-bypass");
         if (BypassEnabled)
@@ -71,7 +83,7 @@ internal sealed class TeslaPcService
             EnableHttps = SslCertificateBootstrap.TryEnsureHttpsReady(HttpsPort, HttpPort, _httpsHost);
         }
 
-        _webServer = new WebServer(_imageServer, _audioCapture);
+        _webServer = new WebServer(_imageServer, _audioCapture, _media);
         var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var serverTask = _webServer.StartWebServerAsync(HttpPort, HttpsPort, LocalhostOnly, EnableHttps, started);
         try { await started.Task.WaitAsync(TimeSpan.FromSeconds(10)); }
@@ -195,6 +207,7 @@ internal sealed class TeslaPcService
         _cts.Cancel();
         try { _bypass?.Dispose(); } catch { }
         if (_webServer != null) { try { await _webServer.StopAsync(); } catch { } }
+        try { _media?.Stop(); } catch { }
         try { _imageServer?.Stop(); _imageServer?.Dispose(); } catch { }
         try { _audioCapture?.Dispose(); } catch { }
         IsRunning = false;

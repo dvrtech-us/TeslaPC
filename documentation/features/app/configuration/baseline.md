@@ -1,0 +1,35 @@
+# Configuration / Settings — Behavior Baseline
+
+Known-good invariants. Update only when intended behavior changes.
+
+## Invariants
+
+- The four settings (`TESLAPC_HTTPS_HOST`, `TESLAPC_CF_TOKEN`, `TESLAPC_ACME_EMAIL`,
+  `TESLAPC_VIDEO_ROOT`) are persisted to `%ProgramData%\TeslaPC\.env` by `AppSettings.Save`.
+- `Program.LoadDotEnv` loads the app-directory `.env` first, then `%ProgramData%\TeslaPC\.env`.
+  **Existing environment variables win** — neither file overwrites a key already set in the
+  process environment.
+- `GET /config` **never returns the Cloudflare token value**. It returns only `cfTokenSet:
+  bool` (true when the env var is non-empty). The token is treated as write-only from the
+  network's perspective.
+- A blank `cfToken` leaves the existing token unchanged. This is enforced by the **callers**
+  (the WinForms Save handler and `WebServer.HandleConfig`), which add `TESLAPC_CF_TOKEN` to the
+  save dictionary only when the submitted value is non-blank. `AppSettings.Save` itself has no
+  token special-case — it writes exactly the keys it is given, so an empty token must never be
+  passed to it.
+- `AppSettings.Save` preserves all unrelated lines and comments in `%ProgramData%\TeslaPC\.env`.
+  It replaces existing `KEY=value` lines in-place and appends new keys; it does not truncate
+  or reformat the file.
+- The video folder (`TESLAPC_VIDEO_ROOT`) applies **immediately** after save without a server
+  restart. `TeslaPcService.SetVideoRoot` sets `MediaStreamer.Root` live; subsequent requests
+  to `/list.html` and `/play.html` use the new path.
+- `MediaStreamer.Root` is the **single source of truth** for the video browse root. Neither
+  `WebServer` nor any other component holds its own copy of the path.
+- Host, Cloudflare token, and ACME email changes are **mirrored into the live process
+  environment** by `AppSettings.Save` but are not re-read by `TeslaPcService` until it is
+  re-constructed. The Dashboard **Restart** button triggers that reconstruction; a full process
+  exit is not required.
+- Both the WinForms Config tab and the web `/config.html` page edit the same
+  `%ProgramData%\TeslaPC\.env` file via the same `AppSettings.Save` code path.
+- `AppSettings.VideoRoot` returns `Environment.GetEnvironmentVariable("TESLAPC_VIDEO_ROOT")`
+  when non-empty; otherwise `C:\video\` (`AppSettings.DefaultVideoRoot`).

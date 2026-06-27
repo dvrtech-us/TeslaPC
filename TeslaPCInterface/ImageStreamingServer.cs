@@ -29,6 +29,14 @@ namespace Streaming
         public int ClientCount => Volatile.Read(ref _clientCount);
         private Thread? _captureThread;
 
+        // Media mode: while a video file is playing, MediaStreamer publishes decoded JPEG frames
+        // into the shared buffer via PublishMediaFrame, and the screen-capture loop stands down so
+        // the two sources never fight over _currentFrame. Client send threads are source-agnostic —
+        // they keep streaming whatever the latest published frame is.
+        private volatile bool _mediaMode;
+        /// <summary>True while an external source (MediaStreamer) is driving the frame buffer.</summary>
+        public bool MediaMode => _mediaMode;
+
 
         /// <summary>
         /// constructor that takes in the size of the screen
@@ -74,11 +82,59 @@ namespace Streaming
         {
             lock (_frameLock)
             {
+                // In media mode the frame buffer is driven by MediaStreamer, not screen capture.
+                if (_mediaMode)
+                    return;
                 if (_captureThread == null || !_captureThread.IsAlive)
                 {
                     _captureThread = new Thread(CaptureLoop) { IsBackground = true, Name = "ScreenCapture" };
                     _captureThread.Start();
                 }
+            }
+        }
+
+        /// <summary>
+        /// Switches the frame buffer over to an external producer (MediaStreamer). The screen-capture
+        /// loop exits on its next check; client send threads stay connected and start showing the
+        /// frames published via <see cref="PublishMediaFrame"/>.
+        /// </summary>
+        public void EnterMediaMode()
+        {
+            lock (_frameLock)
+            {
+                _mediaMode = true;
+                Monitor.PulseAll(_frameLock);
+            }
+        }
+
+        /// <summary>
+        /// Returns control of the frame buffer to screen capture. If clients are still connected the
+        /// capture loop is restarted so the live screen resumes immediately.
+        /// </summary>
+        public void ExitMediaMode()
+        {
+            lock (_frameLock)
+            {
+                _mediaMode = false;
+                Monitor.PulseAll(_frameLock);
+            }
+            if (Volatile.Read(ref _clientCount) > 0)
+                EnsureCaptureRunning();
+        }
+
+        /// <summary>
+        /// Publishes a pre-encoded JPEG frame from an external source (MediaStreamer). Ignored unless
+        /// media mode is active, so a late reader thread can't clobber the live screen after stop.
+        /// </summary>
+        public void PublishMediaFrame(byte[] jpeg)
+        {
+            if (!_mediaMode || jpeg.Length == 0)
+                return;
+            lock (_frameLock)
+            {
+                _currentFrame = jpeg;
+                _frameNumber++;
+                Monitor.PulseAll(_frameLock);
             }
         }
 
@@ -103,7 +159,8 @@ namespace Streaming
                 SetProcessDpiAwareness(ProcessDPIAwareness.ProcessPerMonitorDPIAware);
 
                 while (!_cancellationTokenSource.Token.IsCancellationRequested
-                       && Volatile.Read(ref _clientCount) > 0)
+                       && Volatile.Read(ref _clientCount) > 0
+                       && !_mediaMode)
                 {
                     if (!RunCaptureSession())
                         break;
@@ -164,7 +221,8 @@ namespace Streaming
             using var ms = new MemoryStream();
             int lastStart = Environment.TickCount;
             while (!_cancellationTokenSource.Token.IsCancellationRequested
-                   && Volatile.Read(ref _clientCount) > 0)
+                   && Volatile.Read(ref _clientCount) > 0
+                   && !_mediaMode)
             {
                 bool captured = false;
                 if (useDxgi)
@@ -260,12 +318,13 @@ namespace Streaming
             {
                 while (_frameNumber == lastFrame)
                 {
-                    if (_captureThread == null || !_captureThread.IsAlive)
+                    // Source is alive if either screen capture is running or media is driving frames.
+                    if (!_mediaMode && (_captureThread == null || !_captureThread.IsAlive))
                         return false;
 
                     if (!Monitor.Wait(_frameLock, 1000))
                     {
-                        if (_captureThread == null || !_captureThread.IsAlive)
+                        if (!_mediaMode && (_captureThread == null || !_captureThread.IsAlive))
                             return false;
                         continue;
                     }

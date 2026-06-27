@@ -1,0 +1,115 @@
+<html>
+
+<head>
+    <title>TeslaPC Settings</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+</head>
+
+<body>
+    <div class="page">
+        <div class="topbar">
+            <a class="navbtn" href="/">&#8962; Screen</a>
+            <a class="navbtn" href="/list.html">&#128193; Files</a>
+            <span class="path">Settings</span>
+        </div>
+
+        <form id="cfg" class="settings" autocomplete="off">
+            <label class="field">
+                <span class="flabel">Public URL (hostname)</span>
+                <input class="finput" name="httpsHost" type="text" placeholder="my.example.com"
+                    autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+                <span class="fhint">The hostname your trusted HTTPS certificate is issued for (DNS &rarr; the hotspot IP).</span>
+            </label>
+
+            <label class="field">
+                <span class="flabel">Cloudflare API token</span>
+                <input class="finput" name="cfToken" type="password" placeholder="leave blank to keep current"
+                    autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" />
+                <span class="fhint" id="cfState">Used to issue the certificate via DNS. Stored on the PC; never shown back here.</span>
+            </label>
+
+            <label class="field">
+                <span class="flabel">Let's Encrypt email (optional)</span>
+                <input class="finput" name="acmeEmail" type="email" placeholder="you@example.com"
+                    autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+            </label>
+
+            <label class="field">
+                <span class="flabel">Video folder</span>
+                <input class="finput" name="videoRoot" type="text" placeholder="C:\video\"
+                    autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+                <span class="fhint">Folder the Files browser and media player read from.</span>
+            </label>
+
+            <label class="field">
+                <span class="flabel">Log level</span>
+                <select class="finput" name="logLevel">
+                    <option value="error">Error (quietest)</option>
+                    <option value="warn">Warn</option>
+                    <option value="info">Info (default)</option>
+                    <option value="debug">Debug (every input/request)</option>
+                </select>
+                <span class="fhint">Applies immediately. Debug logs every mouse move and request — use only when troubleshooting.</span>
+            </label>
+
+            <button class="btn primary" type="submit">Save settings</button>
+        </form>
+
+        <div id="msg" class="msg"></div>
+    </div>
+
+    <script>
+        var form = document.getElementById('cfg');
+        var msg = document.getElementById('msg');
+
+        function load() {
+            fetch('/config').then(function (r) { return r.json(); }).then(function (c) {
+                form.httpsHost.value = c.httpsHost || '';
+                form.acmeEmail.value = c.acmeEmail || '';
+                form.videoRoot.value = c.videoRoot || '';
+                if (c.logLevel) form.logLevel.value = c.logLevel;
+                document.getElementById('cfState').textContent = c.cfTokenSet
+                    ? 'A token is saved. Leave blank to keep it, or type a new one to replace it.'
+                    : 'No token saved yet. Paste your Cloudflare API token to enable trusted HTTPS.';
+            }).catch(function () {
+                msg.className = 'msg err'; msg.textContent = 'Could not load current settings.';
+            });
+        }
+
+        form.addEventListener('submit', function (e) {
+            e.preventDefault();
+            var body = new URLSearchParams();
+            body.set('httpsHost', form.httpsHost.value);
+            body.set('acmeEmail', form.acmeEmail.value);
+            body.set('videoRoot', form.videoRoot.value);
+            body.set('logLevel', form.logLevel.value);
+            if (form.cfToken.value) body.set('cfToken', form.cfToken.value);
+
+            msg.className = 'msg'; msg.textContent = 'Saving…';
+            fetch('/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: body.toString()
+            }).then(function (r) { return r.json(); }).then(function (res) {
+                if (res.saved) {
+                    form.cfToken.value = '';
+                    msg.className = 'msg ok';
+                    msg.textContent = res.restartNeeded
+                        ? 'Saved. Restart the server (on the PC, or it applies on next start) for the HTTPS/host changes to take effect. The video folder applies now.'
+                        : 'Saved. Changes applied.';
+                    load();
+                } else {
+                    msg.className = 'msg err';
+                    msg.textContent = 'Save failed: ' + (res.error || 'unknown error');
+                }
+            }).catch(function () {
+                msg.className = 'msg err'; msg.textContent = 'Save failed (network error).';
+            });
+        });
+
+        load();
+    </script>
+</body>
+
+</html>
