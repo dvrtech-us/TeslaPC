@@ -47,8 +47,28 @@ curl https://my.thelpers.com:8443/              # 200, no -k, valid chain
 ```
 On the Tesla (on the hotspot): browse `https://my.thelpers.com:8443/` → padlock, no warning.
 
+## Required: non-filtering DNS (DNS-rebind protection)
+
+The hostname's A record points at a **CGNAT IP (`100.64.0.1`)**. Many routers (here, the gateway
+`172.16.1.1`) apply **DNS-rebind protection** and strip public-name→private/CGNAT answers, so the
+name fails to resolve. Because the Tesla resolves through the PC's upstream DNS over the hotspot
+(ICS), the PC must use a resolver that does **not** filter:
+
+```
+Set-DnsClientServerAddress -InterfaceAlias Ethernet -ServerAddresses ('1.1.1.1','1.0.0.1')
+ipconfig /flushdns
+```
+Verified: `Resolve-DnsName my.thelpers.com` then returns `100.64.0.1`, and
+`Invoke-WebRequest https://my.thelpers.com:8443/` validates with no override. Revert with
+`Set-DnsClientServerAddress -InterfaceAlias Ethernet -ResetServerAddresses` (back to DHCP).
+(Alternative if you can't change the PC's DNS: run a local DNS responder on the hotspot mapping
+the host → `100.64.0.1`.)
+
 ## Notes
 
+- **Restarting ICS / Mobile Hotspot drops the bypass `100.64.0.1` secondary IP** (TeslaBrowserBypass
+  adds it at startup). If you toggle the hotspot or restart the `SharedAccess` service, **restart
+  TeslaPC** afterward so it re-adds the IP + portproxy.
 - Renewal needs the laptop to have internet at check time (DNS-01, no inbound). Offline > 90 days
   → cert expires until the next successful renewal; self-signed remains the fallback.
 - Test safely with `TESLAPC_ACME_STAGING=1` first to avoid LE production rate limits, then unset it.
