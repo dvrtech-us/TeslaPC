@@ -8,6 +8,8 @@ namespace PrimaryProcess;
 /// app on its current target framework, consistent with the other shell-outs in this project).
 /// Requires the connection being shared to have an active internet profile, and elevation.
 /// </summary>
+internal enum HotspotResult { AlreadyOn, TurnedOn, Failed }
+
 internal static class HotspotManager
 {
     // Fire StartTetheringAsync (it begins immediately) and poll the operational state until On.
@@ -29,8 +31,8 @@ Write-Output ('STATE:' + $mgr.TetheringOperationalState)
 exit 2
 ";
 
-    /// <summary>Ensures Mobile Hotspot is on. Returns true if it is on afterward.</summary>
-    public static bool EnsureHotspotOn()
+    /// <summary>Ensures Mobile Hotspot is on. Reports whether it was already on, was turned on, or failed.</summary>
+    public static HotspotResult EnsureHotspotOn()
     {
         try
         {
@@ -49,7 +51,7 @@ exit 2
             if (process == null)
             {
                 Console.WriteLine("[Hotspot] Could not start PowerShell to enable Mobile Hotspot.");
-                return false;
+                return HotspotResult.Failed;
             }
 
             string output = process.StandardOutput.ReadToEnd().Trim();
@@ -59,23 +61,22 @@ exit 2
             switch (output)
             {
                 case "ALREADYON":
-                    Console.WriteLine("[Hotspot] Mobile Hotspot already on.");
-                    return true;
+                    return HotspotResult.AlreadyOn;
                 case "TURNEDON":
                     Console.WriteLine("[Hotspot] Turned Mobile Hotspot on.");
-                    return true;
+                    return HotspotResult.TurnedOn;
                 case "NOPROFILE":
                     Console.WriteLine("[Hotspot] No internet connection profile to share; cannot enable Mobile Hotspot.");
-                    return false;
+                    return HotspotResult.Failed;
                 default:
                     Console.WriteLine($"[Hotspot] Could not enable Mobile Hotspot ({output}{(string.IsNullOrEmpty(error) ? "" : "; " + error)}).");
-                    return false;
+                    return HotspotResult.Failed;
             }
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[Hotspot] Error enabling Mobile Hotspot: {ex.Message}");
-            return false;
+            return HotspotResult.Failed;
         }
     }
 }

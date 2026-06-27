@@ -65,7 +65,7 @@ namespace PrimaryProcess
             {
                 // Turn Mobile Hotspot on if it's off, so the bypass has an adapter to attach to,
                 // then give the virtual adapter a moment to come up before configuring it.
-                if (HotspotManager.EnsureHotspotOn())
+                if (HotspotManager.EnsureHotspotOn() == HotspotResult.TurnedOn)
                     System.Threading.Thread.Sleep(2000);
 
                 bypass = new TeslaBrowserBypass.TeslaBrowserBypass();
@@ -197,6 +197,45 @@ namespace PrimaryProcess
                 {
                     Console.ReadKey(intercept: true);
                     shutdown.Set();
+                });
+            }
+
+            // Hotspot watchdog: Windows auto-disables Mobile Hotspot after a few minutes with no
+            // connected device. Re-enable it (and re-attach the bypass IP, since the virtual adapter
+            // is recreated) so the Tesla can connect at any time.
+            if (bypassEnabled && bypass != null)
+            {
+                var bp = bypass;
+                static bool HasBypassIp()
+                {
+                    try
+                    {
+                        foreach (var nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                            foreach (var ua in nic.GetIPProperties().UnicastAddresses)
+                                if (ua.Address.ToString() == TeslaBrowserBypass.TeslaBrowserBypass.BypassIP)
+                                    return true;
+                    }
+                    catch { }
+                    return false;
+                }
+                _ = Task.Run(async () =>
+                {
+                    while (!shutdown.IsSet)
+                    {
+                        try
+                        {
+                            await Task.Delay(TimeSpan.FromSeconds(60));
+                            if (shutdown.IsSet) break;
+                            var r = HotspotManager.EnsureHotspotOn();
+                            if (r == HotspotResult.TurnedOn || !HasBypassIp())
+                            {
+                                await Task.Delay(2000);
+                                bp.Setup(httpPort, httpsPort);
+                                Console.WriteLine("[Hotspot] Watchdog re-attached the Tesla bypass.");
+                            }
+                        }
+                        catch (Exception ex) { Console.WriteLine($"[Hotspot] Watchdog error: {ex.Message}"); }
+                    }
                 });
             }
 
