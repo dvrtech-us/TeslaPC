@@ -262,35 +262,49 @@
         // Get the image element
         var img = document.querySelector('img');
 
-        function sendMouseEvent(type, event) {
+        // Map a viewport point to host-screen coords. The stream is letterboxed inside the element
+        // (object-fit: contain), so use the frame's natural aspect ratio to find the real video
+        // rectangle; returns null for points in the black bars.
+        function mapPoint(clientX, clientY) {
             var rect = img.getBoundingClientRect();
-            // The stream is letterboxed inside the element (object-fit: contain). Map the click to
-            // the actual video area using the frame's natural aspect ratio, so coordinates stay
-            // correct at any scale and ignore taps in the black bars.
             var natW = img.naturalWidth || rect.width;
             var natH = img.naturalHeight || rect.height;
             var scale = Math.min(rect.width / natW, rect.height / natH);
             var dispW = natW * scale, dispH = natH * scale;
             var offX = (rect.width - dispW) / 2, offY = (rect.height - dispH) / 2;
-            var x = event.clientX - rect.left - offX;
-            var y = event.clientY - rect.top - offY;
-            if (x < 0 || y < 0 || x > dispW || y > dispH) return; // tap landed in the letterbox
+            var x = clientX - rect.left - offX;
+            var y = clientY - rect.top - offY;
+            if (x < 0 || y < 0 || x > dispW || y > dispH) return null;
+            return { x: parseInt(x), y: parseInt(y), w: parseInt(dispW), h: parseInt(dispH) };
+        }
 
+        function sendInput(type, clientX, clientY) {
+            if (mouseSocket.readyState !== WebSocket.OPEN) return;
+            var p = mapPoint(clientX, clientY);
+            if (!p) return;
             mouseSocket.send(JSON.stringify({
-                Type: type,
-                X: parseInt(x),
-                Y: parseInt(y),
-                DisplaySize: {
-                    width: parseInt(dispW),
-                    height: parseInt(dispH)
-                }
+                Type: type, X: p.x, Y: p.y, DisplaySize: { width: p.w, height: p.h }
             }));
         }
 
-        img.addEventListener('click', function (event) { sendMouseEvent('click', event); });
-        img.addEventListener('mousemove', function (event) { sendMouseEvent('move', event); });
-        img.addEventListener('mousedown', function (event) { sendMouseEvent('down', event); });
-        img.addEventListener('mouseup', function (event) { sendMouseEvent('up', event); });
+        // Mouse (desktop).
+        img.addEventListener('click', function (e) { sendInput('click', e.clientX, e.clientY); });
+        img.addEventListener('mousemove', function (e) { sendInput('move', e.clientX, e.clientY); });
+        img.addEventListener('mousedown', function (e) { sendInput('down', e.clientX, e.clientY); });
+        img.addEventListener('mouseup', function (e) { sendInput('up', e.clientX, e.clientY); });
+
+        // Touch (Tesla / tablets): map touchstart→down, touchmove→move, touchend→up to drive
+        // press-and-drag. preventDefault stops page scroll/zoom and the synthesized mouse events
+        // (so input isn't sent twice). passive:false is required for preventDefault on touchmove.
+        img.addEventListener('touchstart', function (e) {
+            var t = e.changedTouches[0]; sendInput('down', t.clientX, t.clientY); e.preventDefault();
+        }, { passive: false });
+        img.addEventListener('touchmove', function (e) {
+            var t = e.changedTouches[0]; sendInput('move', t.clientX, t.clientY); e.preventDefault();
+        }, { passive: false });
+        img.addEventListener('touchend', function (e) {
+            var t = e.changedTouches[0]; sendInput('up', t.clientX, t.clientY); e.preventDefault();
+        }, { passive: false });
 
         // Keyboard input -> /ws/input (backend handleKey replays via SendKeys).
         // The visible #fakeKeyboard input lets touch devices (e.g. the Tesla
