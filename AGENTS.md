@@ -74,9 +74,14 @@ dotnet build TeslaPCInterface.sln
 dotnet run --project TeslaPCInterface/TeslaPCInterface.csproj
 ```
 
-Runtime flags:
+Runtime flags / env:
 - `--localhost` — bind to local wildcard only; **skips** firewall + HTTPS bootstrap.
 - `--no-tesla-bypass` — disable the Tesla CGNAT bypass (firewall + HTTPS bootstrap still run).
+- `--https-host <host>` (or `TESLAPC_HTTPS_HOST`) — hostname for a publicly-trusted cert; when set
+  with `TESLAPC_CF_TOKEN`, the app issues/renews a Let's Encrypt cert in-process (Certes + Cloudflare
+  DNS-01) so the Tesla browser trusts HTTPS. See `documentation/features/infrastructure/https-bootstrap`.
+- `TESLAPC_CF_TOKEN` — Cloudflare API token (Zone:Read + DNS:Edit) for the DNS-01 challenge.
+- `TESLAPC_ACME_EMAIL` (optional) — Let's Encrypt account contact. `TESLAPC_ACME_STAGING=1` — LE staging.
 
 HTTPS, the firewall rule, and the Tesla bypass all require **administrator** privileges. Without
 elevation those steps return false and the app degrades gracefully (HTTP-only, no remote rule,

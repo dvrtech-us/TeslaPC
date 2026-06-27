@@ -1,69 +1,53 @@
-# Runbook: Tesla-trusted HTTPS cert (Let's Encrypt + Cloudflare DNS-01)
+# Runbook: Tesla-trusted HTTPS cert (in-app Let's Encrypt + Cloudflare DNS-01)
 
-Provisions a publicly-trusted certificate for **`my.thelpers.com`** and binds it to `0.0.0.0:8443`
-so the Tesla in-car browser loads TeslaPC over HTTPS with no warning. The app then prefers this
-cert automatically (`--https-host my.thelpers.com`); it never creates or deletes it.
+TeslaPC obtains and renews a publicly-trusted **Let's Encrypt** certificate for
+**`my.thelpers.com`** **in-process** (`AcmeCertificateManager`, Certes + Cloudflare API, DNS-01),
+imports it to `LocalMachine\My`, and binds it to `0.0.0.0:8443`. The Tesla browses
+`https://my.thelpers.com:8443/` (DNS A → `100.64.0.1` over the hotspot) with no warning. No
+external tools (win-acme / scheduled task / rebind script) are involved.
 
 ## Prerequisites (done)
 
-- Cloudflare DNS: `my.thelpers.com` **A → 100.64.0.1**, **DNS-only (grey cloud)**, not proxied.
-- Cloudflare API token with **DNS edit** on `thelpers.com`. Store it only where noted below;
-  never commit it. (Token has no expiry — rotate after setup.)
+- Cloudflare DNS: `my.thelpers.com` **A → 100.64.0.1**, **DNS-only (grey cloud)**.
+- Cloudflare API token with **Zone:Read** + **DNS:Edit** on `thelpers.com`.
 
-## 1. Install win-acme (laptop, elevated)
+## One-time setup on the laptop
 
-```
-winget install --id WinAcme.win-acme   # or download wacs.exe from win-acme.com
-```
+1. **Set the token as a machine env var** (the app reads it; keep it off the command line in
+   shared contexts). In an elevated shell on the laptop:
+   ```
+   setx TESLAPC_CF_TOKEN "<your-cloudflare-token>" /M
+   ```
+   Optional: `setx TESLAPC_ACME_EMAIL "you@example.com" /M` (Let's Encrypt contact).
+2. **Run TeslaPC with the host**: launcher passes `--https-host my.thelpers.com`
+   (`run-full.bat` / desktop `Start-TeslaPC.bat`). On startup, if the cert is missing or has
+   < 30 days left, the app runs the ACME DNS-01 flow, imports the cert, and binds it; otherwise
+   it no-ops. A background timer re-checks every 12 h and renews near expiry.
 
-## 2. Post-renewal rebind script
+## Configuration reference
 
-Save as `C:\teslapc\rebind-cert.ps1` (outside the repo):
+| Setting | Source | Purpose |
+|---------|--------|---------|
+| host | `--https-host` or `TESLAPC_HTTPS_HOST` | cert hostname (`my.thelpers.com`) |
+| Cloudflare token | `TESLAPC_CF_TOKEN` | DNS-01 TXT record create/delete |
+| ACME email | `TESLAPC_ACME_EMAIL` (optional) | Let's Encrypt account contact |
+| staging | `TESLAPC_ACME_STAGING=1` (optional) | use LE staging for testing (untrusted) |
 
-```powershell
-param([Parameter(Mandatory=$true)][string]$Thumbprint)
-$ipport = '0.0.0.0:8443'
-$appid  = '{A253521A-C31E-457C-AADD-C0E42A87EA0F}'   # same AppId TeslaPC uses
-& netsh http delete sslcert ipport=$ipport 2>$null | Out-Null
-& netsh http add sslcert ipport=$ipport certhash=$Thumbprint appid=$appid
-```
+State: ACME account key persists at `%ProgramData%\TeslaPC\acme-account.pem`; the issued cert
+lives in `LocalMachine\My` (friendly name `TeslaPC LE (<host>)`).
 
-## 3. Issue the certificate (elevated)
-
-Run `wacs.exe` once to create the order + auto-renew scheduled task. Provide the Cloudflare token
-at the prompt (or via the parameter shown). The token is stored in win-acme's encrypted config.
-
-```
-wacs.exe --source manual --host my.thelpers.com ^
-  --validation cloudflare --cloudflareapitoken <TOKEN> ^
-  --store certificatestore --certificatestore My ^
-  --installation script ^
-  --script "C:\teslapc\rebind-cert.ps1" --scriptparameters "{CertThumbprint}" ^
-  --accepttos --emailaddress <you@example.com>
-```
-
-win-acme installs the cert into `LocalMachine\My`, runs the rebind script, and registers a
-scheduled task ("win-acme renew ...") that renews ~every 60 days and re-runs the script.
-
-## 4. Run TeslaPC with the host
-
-Add `--https-host my.thelpers.com` to the launcher (`run-full.bat` / desktop `Start-TeslaPC.bat`).
-On startup `SslCertificateBootstrap.TryUseTrustedCertificate` finds and binds the cert; if it's not
-present yet it falls back to self-signed.
-
-## 5. Verify
+## Verify
 
 ```
-netsh http show sslcert ipport=0.0.0.0:8443           # thumbprint = the LE cert
-curl https://my.thelpers.com:8443/                    # 200, no -k, valid chain
+netsh http show sslcert ipport=0.0.0.0:8443     # thumbprint = the LE cert
+curl https://my.thelpers.com:8443/              # 200, no -k, valid chain
 ```
 On the Tesla (on the hotspot): browse `https://my.thelpers.com:8443/` → padlock, no warning.
 
-## Renewal / failure notes
+## Notes
 
-- Renewal is DNS-01 (no inbound needed) but requires the laptop to have internet at renewal time.
-- Force a test renewal: `wacs.exe --renew --force` then re-verify the binding.
-- If a specific (old) Tesla still distrusts Let's Encrypt, switch the ACME CA to ZeroSSL
-  (`--baseuri https://acme.zerossl.com/v2/DV90` + EAB creds) — same flow.
-- DNS-rebind protection on the Tesla's resolver could strip the private-IP answer; if so, add a
-  local DNS resolver on the hotspot mapping `my.thelpers.com → 100.64.0.1`.
+- Renewal needs the laptop to have internet at check time (DNS-01, no inbound). Offline > 90 days
+  → cert expires until the next successful renewal; self-signed remains the fallback.
+- Test safely with `TESLAPC_ACME_STAGING=1` first to avoid LE production rate limits, then unset it.
+- Old Tesla firmware that distrusts Let's Encrypt would need a different ACME CA (e.g. ZeroSSL);
+  `AcmeCertificateManager` uses `WellKnownServers.LetsEncryptV2` today.

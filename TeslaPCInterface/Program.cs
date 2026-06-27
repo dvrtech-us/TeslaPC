@@ -59,10 +59,18 @@ namespace PrimaryProcess
             if (string.IsNullOrWhiteSpace(httpsHost)) httpsHost = Environment.GetEnvironmentVariable("TESLAPC_HTTPS_HOST");
             if (string.IsNullOrWhiteSpace(httpsHost)) httpsHost = null;
 
+            // Cloudflare token / ACME contact for the in-app Let's Encrypt client (read from the
+            // environment so the secret never lives on a command line or in the repo).
+            string? cfToken = Environment.GetEnvironmentVariable("TESLAPC_CF_TOKEN");
+            string? acmeEmail = Environment.GetEnvironmentVariable("TESLAPC_ACME_EMAIL");
+            bool acmeEnabled = httpsHost != null && !string.IsNullOrWhiteSpace(cfToken);
+
             bool enableHttps = false;
             if (!localhostOnly)
             {
                 FirewallBootstrap.TryEnsureFirewallOpen(httpPort, httpsPort);
+                if (acmeEnabled)
+                    await AcmeCertificateManager.TryEnsureCertificateAsync(httpsHost!, acmeEmail, cfToken);
                 enableHttps = SslCertificateBootstrap.TryEnsureHttpsReady(httpsPort, httpPort, httpsHost);
             }
 
@@ -156,6 +164,25 @@ namespace PrimaryProcess
                 {
                     Console.ReadKey(intercept: true);
                     shutdown.Set();
+                });
+            }
+
+            // Auto-renew the Let's Encrypt certificate in the background. The manager no-ops while
+            // the cert has > 30 days left; when it renews, re-bind the new cert to the HTTPS port.
+            if (!localhostOnly && acmeEnabled)
+            {
+                _ = Task.Run(async () =>
+                {
+                    while (!shutdown.IsSet)
+                    {
+                        try
+                        {
+                            await Task.Delay(TimeSpan.FromHours(12));
+                            if (await AcmeCertificateManager.TryEnsureCertificateAsync(httpsHost!, acmeEmail, cfToken))
+                                SslCertificateBootstrap.TryEnsureHttpsReady(httpsPort, httpPort, httpsHost);
+                        }
+                        catch (Exception ex) { Console.WriteLine($"[ACME] Renewal check error: {ex.Message}"); }
+                    }
                 });
             }
 

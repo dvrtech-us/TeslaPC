@@ -8,10 +8,11 @@ value gates whether [web-server](../../server/web-server/web-server.md) binds th
 **Two certificate modes:**
 
 - **Trusted (production)** — when a hostname is configured via `--https-host <host>` (or env
-  `TESLAPC_HTTPS_HOST`) and a matching, publicly-trusted certificate is installed in
-  `LocalMachine\My` (issued externally by **win-acme / Let's Encrypt DNS-01** — see the runbook
-  in `documentation/planning/Infrastructure/`), the bootstrap binds **that** cert. The Tesla
-  browses `https://<host>:8443/` (DNS A record → `100.64.0.1`) and gets **no warning**.
+  `TESLAPC_HTTPS_HOST`) the app obtains/renews a **Let's Encrypt** certificate **in-process** via
+  [`AcmeCertificateManager`](../../../../TeslaPCInterface/AcmeCertificateManager.cs) (Certes,
+  DNS-01, Cloudflare API) and imports it to `LocalMachine\My`; the bootstrap then binds it. The
+  Tesla browses `https://<host>:8443/` (DNS A record → `100.64.0.1`) and gets **no warning**.
+  See the runbook in `documentation/planning/Infrastructure/`.
 - **Self-signed (fallback)** — when no host is set, or no trusted cert is present yet (first boot,
   localhost/dev), the bootstrap generates and binds the self-signed `TeslaPC Dev Cert` as before.
 
