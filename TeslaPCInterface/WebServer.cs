@@ -282,9 +282,9 @@ public class WebServer
         {
             if (int.TryParse(query.Get("w"), out var vw) && int.TryParse(query.Get("h"), out var vh) && vw > 0 && vh > 0)
             {
-                // Cap the target height at twice the stream height so we don't switch to a resolution
-                // far larger than what we actually stream.
-                int maxH = Math.Max(720, _imageStreamer.MaxHeight * 2);
+                // Target a desktop resolution near the stream height so what we capture is ~1:1 with
+                // what we stream (crisp, no extra down/upscaling) rather than an oversized mode.
+                int maxH = Math.Max(480, _imageStreamer.MaxHeight);
                 var best = DisplayManager.BestForAspect((double)vw / vh, maxH);
                 if (best is { } m && (DisplayManager.Current() is var cur && (cur.Width != m.Width || cur.Height != m.Height)))
                 {
