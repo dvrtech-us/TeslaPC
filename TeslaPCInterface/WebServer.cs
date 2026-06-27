@@ -143,7 +143,7 @@ public class WebServer
     private async Task ProcessRequestAsync(HttpListenerContext context)
     {
         string path = context.Request.Url?.LocalPath ?? "/";
-        Console.WriteLine($"[HTTP] {context.Request.HttpMethod} {path}");
+        Log.Debug($"[HTTP] {context.Request.HttpMethod} {path}");
         await HandleRequest(context);
     }
 
@@ -209,19 +209,23 @@ public class WebServer
             string? email = form.Get("acmeEmail");
             string? videoRoot = form.Get("videoRoot");
             string? cfToken = form.Get("cfToken");
+            string? logLevel = form.Get("logLevel");
 
             if (host != null) toSave[AppSettings.HttpsHostKey] = host.Trim();
             if (email != null) toSave[AppSettings.AcmeEmailKey] = email.Trim();
             if (videoRoot != null && !string.IsNullOrWhiteSpace(videoRoot)) toSave[AppSettings.VideoRootKey] = videoRoot.Trim();
+            if (Log.Parse(logLevel) is { } _) toSave[AppSettings.LogLevelKey] = logLevel!.Trim().ToLowerInvariant();
             // Only overwrite the token when a non-blank value is supplied (the form leaves it blank to keep).
             if (!string.IsNullOrWhiteSpace(cfToken)) toSave[AppSettings.CloudflareTokenKey] = cfToken.Trim();
 
             try
             {
                 AppSettings.Save(toSave);
-                // The video folder can apply live; host/cert settings need a restart.
+                // The video folder and log level apply live; host/cert settings need a restart.
                 if (toSave.ContainsKey(AppSettings.VideoRootKey))
                     _media.Root = toSave[AppSettings.VideoRootKey];
+                if (toSave.ContainsKey(AppSettings.LogLevelKey))
+                    Log.SetLevel(toSave[AppSettings.LogLevelKey]);
                 bool restartNeeded = toSave.ContainsKey(AppSettings.HttpsHostKey)
                     || toSave.ContainsKey(AppSettings.CloudflareTokenKey)
                     || toSave.ContainsKey(AppSettings.AcmeEmailKey);
@@ -242,6 +246,7 @@ public class WebServer
             httpsHost = AppSettings.Get(AppSettings.HttpsHostKey) ?? "",
             acmeEmail = AppSettings.Get(AppSettings.AcmeEmailKey) ?? "",
             videoRoot = _media.Root,
+            logLevel = Log.LevelName,
             cfTokenSet = !string.IsNullOrWhiteSpace(AppSettings.Get(AppSettings.CloudflareTokenKey))
         };
         WriteJson(context.Response, JsonSerializer.Serialize(payload));
@@ -518,12 +523,33 @@ public class WebServer
         sb.Append("<span class=\"path\">" + HttpUtility.HtmlEncode(path) + "</span>");
         sb.Append("</div>");
 
-        string[] directories = Directory.GetDirectories(path);
-        var videoExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            { ".mp4", ".mkv", ".avi", ".mov", ".m4v", ".wmv", ".flv", ".webm", ".mpg", ".mpeg", ".ts", ".m2ts" };
-        string[] files = Directory.GetFiles(path)
-            .Where(f => videoExts.Contains(Path.GetExtension(f)))
-            .ToArray();
+        // A missing or unreadable folder must not 500 the request — show a friendly message instead.
+        if (!Directory.Exists(path))
+        {
+            sb.Append("<div class=\"empty\">This folder doesn't exist:<br>"
+                + HttpUtility.HtmlEncode(path)
+                + "<br><br>Pick a valid <b>Video folder</b> in <a class=\"navbtn\" href=\"/config.html\">&#9881; Settings</a>.</div>");
+            return sb.ToString();
+        }
+
+        string[] directories;
+        string[] files;
+        try
+        {
+            directories = Directory.GetDirectories(path);
+            var videoExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                { ".mp4", ".mkv", ".avi", ".mov", ".m4v", ".wmv", ".flv", ".webm", ".mpg", ".mpeg", ".ts", ".m2ts" };
+            files = Directory.GetFiles(path)
+                .Where(f => videoExts.Contains(Path.GetExtension(f)))
+                .ToArray();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[Files] Could not read '{path}': {ex.Message}");
+            sb.Append("<div class=\"empty\">Couldn't read this folder:<br>"
+                + HttpUtility.HtmlEncode(ex.Message) + "</div>");
+            return sb.ToString();
+        }
 
         sb.Append("<div class=\"grid\">");
 
@@ -602,10 +628,9 @@ public class WebServer
                     break;
                 }
 
-                Console.WriteLine($"Received message: {Encoding.UTF8.GetString(buffer, 0, receiveResult.Count)}");
-
                 //decode the message
                 var message = Encoding.UTF8.GetString(buffer, 0, receiveResult.Count);
+                Log.Debug($"Received input: {message}");
 
                 try
                 {
@@ -618,10 +643,9 @@ public class WebServer
                     else
                     {
                         var inputData = JsonSerializer.Deserialize<InputData>(message);
-                        Console.WriteLine($"Mouse position: {inputData.X}, {inputData.Y}");
                         //move the mouse
                         inputData = inputData.GetAdjusted();
-                        Console.WriteLine($"Adjusted Mouse position: {inputData.X}, {inputData.Y}");
+                        Log.Debug($"Mouse {inputData.Type} -> {inputData.X},{inputData.Y}");
 
                         Win32.SetCursorPos(inputData.X, inputData.Y);
                         if (inputData.Type == "down")

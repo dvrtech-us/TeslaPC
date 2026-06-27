@@ -32,6 +32,7 @@ internal sealed class MainForm : Form
     private Label _serverDot = null!, _httpsDot = null!, _hotspotDot = null!, _clientsDot = null!, _clientsTxt = null!, _urlVal = null!;
     private Button _btnHotspot = null!;
     private TextBox _cfgHost = null!, _cfgToken = null!, _cfgEmail = null!, _cfgVideo = null!;
+    private ComboBox _cfgLog = null!;
     private Label _cfgTokenState = null!, _cfgMsg = null!;
 
     public MainForm(string[] args)
@@ -149,6 +150,7 @@ internal sealed class MainForm : Form
             tab.ForeColor = on ? Accent : Muted;
         }
         if (active == _tabConfig) LoadConfigFields();
+        if (active == _tabLog) ShowLogBuffer();
     }
 
     private void BuildDashboard()
@@ -254,6 +256,21 @@ internal sealed class MainForm : Form
         browse.Width = 140; browse.Height = 48; browse.Margin = new Padding(0, 0, 0, 16);
         root.Controls.Add(browse);
 
+        root.Controls.Add(new Label { Text = "Log level", AutoSize = true, ForeColor = TextC, Font = new Font("Segoe UI", 11F, FontStyle.Bold), Margin = new Padding(0, 0, 0, 4) });
+        _cfgLog = new ComboBox
+        {
+            Width = 260,
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Surface,
+            ForeColor = TextC,
+            Font = new Font("Segoe UI", 12F),
+            Margin = new Padding(0, 0, 0, 2)
+        };
+        _cfgLog.Items.AddRange(new object[] { "error", "warn", "info", "debug" });
+        root.Controls.Add(_cfgLog);
+        root.Controls.Add(new Label { Text = "Applies immediately. 'debug' logs every input and request — use only when troubleshooting.", AutoSize = true, ForeColor = Muted, Font = new Font("Segoe UI", 9F), Margin = new Padding(2, 0, 0, 16), MaximumSize = new Size(620, 0) });
+
         var save = MakeButton("Save settings", Accent, OnSaveConfig);
         root.Controls.Add(save);
 
@@ -288,6 +305,7 @@ internal sealed class MainForm : Form
         _cfgHost.Text = AppSettings.Get(AppSettings.HttpsHostKey) ?? "";
         _cfgEmail.Text = AppSettings.Get(AppSettings.AcmeEmailKey) ?? "";
         _cfgVideo.Text = _service.VideoRoot;
+        _cfgLog.SelectedItem = Log.LevelName;
         _cfgToken.Text = "";
         bool tokenSet = !string.IsNullOrWhiteSpace(AppSettings.Get(AppSettings.CloudflareTokenKey));
         _cfgTokenState.Text = tokenSet
@@ -312,6 +330,7 @@ internal sealed class MainForm : Form
             [AppSettings.AcmeEmailKey] = _cfgEmail.Text.Trim()
         };
         if (!string.IsNullOrWhiteSpace(_cfgVideo.Text)) toSave[AppSettings.VideoRootKey] = _cfgVideo.Text.Trim();
+        if (_cfgLog.SelectedItem is string lvl) toSave[AppSettings.LogLevelKey] = lvl;
         if (!string.IsNullOrWhiteSpace(_cfgToken.Text)) toSave[AppSettings.CloudflareTokenKey] = _cfgToken.Text.Trim();
 
         try
@@ -319,6 +338,8 @@ internal sealed class MainForm : Form
             AppSettings.Save(toSave);
             if (toSave.ContainsKey(AppSettings.VideoRootKey))
                 _service.SetVideoRoot(toSave[AppSettings.VideoRootKey]);
+            if (toSave.ContainsKey(AppSettings.LogLevelKey))
+                Log.SetLevel(toSave[AppSettings.LogLevelKey]);
             _cfgToken.Text = "";
             bool restartNeeded = toSave.ContainsKey(AppSettings.HttpsHostKey)
                 || toSave.ContainsKey(AppSettings.CloudflareTokenKey)
@@ -401,12 +422,40 @@ internal sealed class MainForm : Form
         dot.ForeColor = color;
     }
 
+    private readonly object _logLock = new();
+    private readonly StringBuilder _logBuffer = new();
+    private const int LogBufferCap = 120000;
+
     private void AppendLog(string text)
     {
+        // Always keep a cheap, bounded in-memory copy so the Log tab can show recent history.
+        lock (_logLock)
+        {
+            _logBuffer.Append(text);
+            if (_logBuffer.Length > LogBufferCap)
+                _logBuffer.Remove(0, _logBuffer.Length - 90000);
+        }
+        // Only update the (expensive) RichTextBox while the Log tab is actually visible.
+        if (_logPanel.Visible) AppendToBox(text);
+    }
+
+    private void AppendToBox(string text)
+    {
         if (_log.IsDisposed) return;
-        if (_log.InvokeRequired) { try { _log.BeginInvoke(new Action(() => AppendLog(text))); } catch { } return; }
+        if (_log.InvokeRequired) { try { _log.BeginInvoke(new Action(() => AppendToBox(text))); } catch { } return; }
         if (_log.TextLength > 120000) _log.Text = _log.Text.Substring(_log.TextLength - 90000);
         _log.AppendText(text);
+        _log.SelectionStart = _log.TextLength;
+        _log.ScrollToCaret();
+    }
+
+    // Rebuild the RichTextBox from the buffer when the Log tab is opened (it isn't kept in sync while hidden).
+    private void ShowLogBuffer()
+    {
+        if (_log.IsDisposed) return;
+        string snapshot;
+        lock (_logLock) { snapshot = _logBuffer.ToString(); }
+        _log.Text = snapshot;
         _log.SelectionStart = _log.TextLength;
         _log.ScrollToCaret();
     }

@@ -16,6 +16,7 @@ public static class AppSettings
     public const string CloudflareTokenKey = "TESLAPC_CF_TOKEN";
     public const string AcmeEmailKey = "TESLAPC_ACME_EMAIL";
     public const string VideoRootKey = "TESLAPC_VIDEO_ROOT";
+    public const string LogLevelKey = "TESLAPC_LOG_LEVEL";
 
     public const string DefaultVideoRoot = @"C:\video\";
 
