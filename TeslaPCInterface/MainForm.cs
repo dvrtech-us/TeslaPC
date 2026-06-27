@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Text;
 using System.Windows.Forms;
 
@@ -6,7 +7,8 @@ namespace PrimaryProcess;
 
 /// <summary>
 /// Touch-friendly control panel for TeslaPC. Borderless, fills the desktop work area (leaves the
-/// taskbar), with a Dashboard tab (status + large controls) and a Log tab (console output).
+/// taskbar). A compact top bar carries the logo + Dashboard/Log tabs; the Dashboard shows a single
+/// status row (dots/checks) plus the connect URL and large controls; the Log tab shows console output.
 /// </summary>
 internal sealed class MainForm : Form
 {
@@ -27,8 +29,8 @@ internal sealed class MainForm : Form
     private Button _tabDash = null!, _tabLog = null!;
     private Panel _dashPanel = null!, _logPanel = null!;
     private RichTextBox _log = null!;
-    private Label _serverVal = null!, _httpsVal = null!, _hotspotVal = null!, _clientsVal = null!, _urlVal = null!;
-    private Button _btnHotspot = null!, _btnRestart = null!, _btnMin = null!, _btnQuit = null!;
+    private Label _serverDot = null!, _httpsDot = null!, _hotspotDot = null!, _clientsDot = null!, _clientsTxt = null!, _urlVal = null!;
+    private Button _btnHotspot = null!;
 
     public MainForm(string[] args)
     {
@@ -39,8 +41,9 @@ internal sealed class MainForm : Form
         Bounds = Screen.PrimaryScreen!.WorkingArea;  // fill desktop, keep the taskbar
         BackColor = Bg;
         ForeColor = TextC;
-        Font = new Font("Segoe UI", 12F);
+        Font = new Font("Segoe UI", 11F);
         ShowInTaskbar = true;
+        try { Icon = Icon.FromHandle(((Bitmap)MakeLogo(32)).GetHicon()); } catch { }
 
         BuildUi();
 
@@ -50,20 +53,57 @@ internal sealed class MainForm : Form
         _statusTimer.Tick += (_, _) => UpdateStatus();
     }
 
+    // ---- Logo: an accent rounded square with a white play triangle (streaming) ----
+    private static Image MakeLogo(int size)
+    {
+        var bmp = new Bitmap(size, size);
+        using var g = Graphics.FromImage(bmp);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.Clear(Color.Transparent);
+        float r = size * 0.22f;
+        using (var path = RoundRect(new RectangleF(0, 0, size - 1, size - 1), r))
+        using (var b = new SolidBrush(Accent))
+            g.FillPath(b, path);
+        var tri = new PointF[]
+        {
+            new(size * 0.40f, size * 0.30f),
+            new(size * 0.40f, size * 0.70f),
+            new(size * 0.72f, size * 0.50f)
+        };
+        using (var w = new SolidBrush(Color.White))
+            g.FillPolygon(w, tri);
+        return bmp;
+    }
+
+    private static GraphicsPath RoundRect(RectangleF r, float radius)
+    {
+        var p = new GraphicsPath();
+        float d = radius * 2;
+        p.AddArc(r.X, r.Y, d, d, 180, 90);
+        p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+        p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        p.CloseFigure();
+        return p;
+    }
+
     private void BuildUi()
     {
         var content = new Panel { Dock = DockStyle.Fill, BackColor = Bg };
-
         _dashPanel = new Panel { Dock = DockStyle.Fill, BackColor = Bg, Visible = true };
-        _logPanel = new Panel { Dock = DockStyle.Fill, BackColor = Bg, Visible = false };
+        _logPanel = new Panel { Dock = DockStyle.Fill, BackColor = Bg, Visible = false, Padding = new Padding(10) };
         BuildDashboard();
         BuildLog();
         content.Controls.Add(_dashPanel);
         content.Controls.Add(_logPanel);
 
-        var tabBar = new Panel { Dock = DockStyle.Top, Height = 76, BackColor = Surface };
-        _tabDash = MakeTab("Dashboard", 0, true);
-        _tabLog = MakeTab("Log", 220, false);
+        var tabBar = new Panel { Dock = DockStyle.Top, Height = 60, BackColor = Surface };
+        var logo = new PictureBox { Image = MakeLogo(36), SizeMode = PictureBoxSizeMode.AutoSize, Left = 14, Top = 12 };
+        var wordmark = new Label { Text = "TeslaPC", AutoSize = true, ForeColor = TextC, Font = new Font("Segoe UI", 14F, FontStyle.Bold), Left = 58, Top = 16 };
+        _tabDash = MakeTab("Dashboard", 200);
+        _tabLog = MakeTab("Log", 360);
+        tabBar.Controls.Add(logo);
+        tabBar.Controls.Add(wordmark);
         tabBar.Controls.Add(_tabLog);
         tabBar.Controls.Add(_tabDash);
 
@@ -72,17 +112,17 @@ internal sealed class MainForm : Form
         ShowTab(true);
     }
 
-    private Button MakeTab(string text, int x, bool _)
+    private Button MakeTab(string text, int x)
     {
         var b = new Button
         {
             Text = text,
             Left = x,
             Top = 0,
-            Width = 220,
-            Height = 76,
+            Width = 160,
+            Height = 60,
             FlatStyle = FlatStyle.Flat,
-            Font = new Font("Segoe UI", 15F, FontStyle.Bold),
+            Font = new Font("Segoe UI", 13F, FontStyle.Bold),
             TextAlign = ContentAlignment.MiddleCenter
         };
         b.FlatAppearance.BorderSize = 0;
@@ -108,50 +148,42 @@ internal sealed class MainForm : Form
             FlowDirection = FlowDirection.TopDown,
             WrapContents = false,
             AutoScroll = true,
-            Padding = new Padding(48, 36, 48, 36)
+            Padding = new Padding(28, 22, 28, 22)
         };
 
-        root.Controls.Add(new Label
-        {
-            Text = "TeslaPC",
-            AutoSize = true,
-            Font = new Font("Segoe UI", 34F, FontStyle.Bold),
-            ForeColor = TextC,
-            Margin = new Padding(0, 0, 0, 24)
-        });
+        // Single compact status row.
+        var status = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = true, Margin = new Padding(0, 0, 0, 18) };
+        _serverDot = AddIndicator(status, "Server", out _);
+        _httpsDot = AddIndicator(status, "HTTPS", out _);
+        _hotspotDot = AddIndicator(status, "Hotspot", out _);
+        _clientsDot = AddIndicator(status, "", out _clientsTxt);
+        root.Controls.Add(status);
 
-        _serverVal = AddStatusRow(root, "Server");
-        _httpsVal = AddStatusRow(root, "HTTPS");
-        _hotspotVal = AddStatusRow(root, "Hotspot");
-        _clientsVal = AddStatusRow(root, "Connected");
-
-        var urlCaption = new Label { Text = "Open on the Tesla", AutoSize = true, ForeColor = Muted, Font = new Font("Segoe UI", 12F), Margin = new Padding(0, 28, 0, 4) };
-        root.Controls.Add(urlCaption);
-        _urlVal = new Label { Text = "—", AutoSize = true, ForeColor = Accent, Font = new Font("Segoe UI", 20F, FontStyle.Bold), Margin = new Padding(0, 0, 0, 28) };
+        root.Controls.Add(new Label { Text = "Open on the Tesla", AutoSize = true, ForeColor = Muted, Font = new Font("Segoe UI", 11F), Margin = new Padding(0, 0, 0, 2) });
+        _urlVal = new Label { Text = "—", AutoSize = true, ForeColor = Accent, Font = new Font("Segoe UI", 18F, FontStyle.Bold), Margin = new Padding(0, 0, 0, 22) };
         root.Controls.Add(_urlVal);
 
         var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, WrapContents = true, AutoSize = true, Margin = new Padding(0) };
         _btnHotspot = MakeButton("Toggle Hotspot", Surface2, OnToggleHotspot);
-        _btnRestart = MakeButton("Restart", Surface2, OnRestart);
-        _btnMin = MakeButton("Minimize", Surface2, (_, _) => WindowState = FormWindowState.Minimized);
-        _btnQuit = MakeButton("Quit", Bad, (_, _) => Close());
         buttons.Controls.Add(_btnHotspot);
-        buttons.Controls.Add(_btnRestart);
-        buttons.Controls.Add(_btnMin);
-        buttons.Controls.Add(_btnQuit);
+        buttons.Controls.Add(MakeButton("Restart", Surface2, OnRestart));
+        buttons.Controls.Add(MakeButton("Minimize", Surface2, (_, _) => WindowState = FormWindowState.Minimized));
+        buttons.Controls.Add(MakeButton("Quit", Bad, (_, _) => Close()));
         root.Controls.Add(buttons);
 
         _dashPanel.Controls.Add(root);
     }
 
-    private Label AddStatusRow(FlowLayoutPanel parent, string name)
+    // One status item: a colored symbol label (dot/check) + a name label, grouped horizontally.
+    private Label AddIndicator(FlowLayoutPanel parent, string name, out Label nameLabel)
     {
-        var row = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = false, Margin = new Padding(0, 6, 0, 6) };
-        row.Controls.Add(new Label { Text = name, AutoSize = true, ForeColor = Muted, Font = new Font("Segoe UI", 16F), Width = 220, Margin = new Padding(0, 6, 24, 0), MinimumSize = new Size(220, 0) });
-        var val = new Label { Text = "…", AutoSize = true, ForeColor = TextC, Font = new Font("Segoe UI", 16F, FontStyle.Bold), Margin = new Padding(0, 6, 0, 0) };
-        row.Controls.Add(val);
-        parent.Controls.Add(row);
-        return val;
+        var group = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 28, 0) };
+        var dot = new Label { Text = "●", AutoSize = true, ForeColor = Muted, Font = new Font("Segoe UI", 17F), Margin = new Padding(0, 2, 6, 0) };
+        nameLabel = new Label { Text = name, AutoSize = true, ForeColor = TextC, Font = new Font("Segoe UI", 15F), Margin = new Padding(0, 6, 0, 0) };
+        group.Controls.Add(dot);
+        group.Controls.Add(nameLabel);
+        parent.Controls.Add(group);
+        return dot;
     }
 
     private Button MakeButton(string text, Color back, EventHandler onClick)
@@ -159,13 +191,13 @@ internal sealed class MainForm : Form
         var b = new Button
         {
             Text = text,
-            Width = 280,
-            Height = 84,
+            Width = 178,
+            Height = 66,
             FlatStyle = FlatStyle.Flat,
             BackColor = back,
             ForeColor = TextC,
-            Font = new Font("Segoe UI", 16F, FontStyle.Bold),
-            Margin = new Padding(0, 0, 16, 16)
+            Font = new Font("Segoe UI", 13F, FontStyle.Bold),
+            Margin = new Padding(0, 0, 12, 12)
         };
         b.FlatAppearance.BorderSize = 0;
         b.Click += onClick;
@@ -181,17 +213,13 @@ internal sealed class MainForm : Form
             ForeColor = Color.FromArgb(200, 210, 220),
             BorderStyle = BorderStyle.None,
             ReadOnly = true,
-            Font = new Font("Consolas", 11F),
+            Font = new Font("Consolas", 10F),
             WordWrap = false,
             DetectUrls = false
         };
         _logPanel.Controls.Add(_log);
-        _logPanel.Padding = new Padding(12);
     }
 
-    // Keep the system and display awake while running — an always-on streaming appliance must not
-    // let the monitor sleep, or DXGI screen capture stalls (the desktop drops to a basic 800x600
-    // surface and stops delivering frames).
     [System.Runtime.InteropServices.DllImport("kernel32.dll")]
     private static extern uint SetThreadExecutionState(uint esFlags);
     private const uint ES_CONTINUOUS = 0x80000000, ES_SYSTEM_REQUIRED = 0x00000001, ES_DISPLAY_REQUIRED = 0x00000002;
@@ -224,7 +252,6 @@ internal sealed class MainForm : Form
 
     private async void OnRestart(object? sender, EventArgs e)
     {
-        _btnRestart.Enabled = false;
         Console.WriteLine("[UI] Restarting server...");
         var old = _service;
         await Task.Run(async () =>
@@ -234,25 +261,29 @@ internal sealed class MainForm : Form
             try { await fresh.StartAsync(_args); } catch (Exception ex) { Console.WriteLine("[Restart] " + ex.Message); }
             _service = fresh;
         });
-        _btnRestart.Enabled = true;
         UpdateStatus();
     }
 
     private void UpdateStatus()
     {
         var s = _service;
-        SetStatus(_serverVal, s.IsRunning ? "Running" : "Starting…", s.IsRunning ? Good : Warn);
-        if (s.LocalhostOnly) SetStatus(_httpsVal, "localhost only", Muted);
-        else if (!s.EnableHttps) SetStatus(_httpsVal, "HTTP only", Warn);
-        else if (s.HttpsHost != null) SetStatus(_httpsVal, "Trusted (Let's Encrypt)", Good);
-        else SetStatus(_httpsVal, "Self-signed", Warn);
-        SetStatus(_hotspotVal, s.HotspotOn ? "On" : "Off", s.HotspotOn ? Good : Bad);
-        SetStatus(_clientsVal, s.ClientCount.ToString(), s.ClientCount > 0 ? Good : Muted);
+        SetDot(_serverDot, null, s.IsRunning ? Good : Warn);
+        // HTTPS: green check when trusted (Let's Encrypt), amber dot for self-signed, red for off.
+        if (s.LocalhostOnly || !s.EnableHttps) SetDot(_httpsDot, "●", Bad);
+        else if (s.HttpsHost != null) SetDot(_httpsDot, "✔", Good);
+        else SetDot(_httpsDot, "●", Warn);
+        SetDot(_hotspotDot, null, s.HotspotOn ? Good : Bad);
+        SetDot(_clientsDot, null, s.ClientCount > 0 ? Good : Muted);
+        _clientsTxt.Text = s.ClientCount == 1 ? "1 viewer" : $"{s.ClientCount} viewers";
         _urlVal.Text = string.IsNullOrEmpty(s.PrimaryUrl) ? "—" : s.PrimaryUrl;
         _btnHotspot.Visible = s.BypassEnabled;
     }
 
-    private static void SetStatus(Label l, string text, Color color) { l.Text = text; l.ForeColor = color; }
+    private static void SetDot(Label dot, string? symbol, Color color)
+    {
+        if (symbol != null) dot.Text = symbol;
+        dot.ForeColor = color;
+    }
 
     private void AppendLog(string text)
     {
@@ -264,7 +295,7 @@ internal sealed class MainForm : Form
         _log.ScrollToCaret();
     }
 
-    /// <summary>Tees console output to the Log tab (and the original stream, e.g. the redirected log file).</summary>
+    /// <summary>Tees console output to the Log tab (and the original stream, e.g. a redirected log file).</summary>
     private sealed class ControlWriter : TextWriter
     {
         private readonly Action<string> _append;
