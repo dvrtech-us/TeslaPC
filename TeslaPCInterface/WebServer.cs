@@ -618,7 +618,7 @@ public class WebServer
 
         // Sticky navigation bar: Screen, Up (when not at root), and the current path.
         sb.Append("<div class=\"topbar\">");
-        sb.Append("<a class=\"navbtn\" href=\"/\">&#8962; Screen</a>");
+        sb.Append("<a class=\"navbtn\" href=\"/\"><svg viewBox=\"0 0 24 24\" class=\"btn-ic\" aria-hidden=\"true\" focusable=\"false\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"12\" rx=\"2\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"/><line x1=\"12\" y1=\"16\" x2=\"12\" y2=\"19\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"/><line x1=\"8\" y1=\"19\" x2=\"16\" y2=\"19\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"/></svg>Screen</a>");
         sb.Append("<a class=\"navbtn\" href=\"/config.html\">&#9881; Settings</a>");
         if (!atRoot)
         {

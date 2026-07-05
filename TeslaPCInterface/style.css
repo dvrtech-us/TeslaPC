@@ -56,6 +56,16 @@ html, body {
     touch-action: manipulation;
 }
 .btn:active { background-color: var(--surface-press); transform: scale(.97); }
+.btn-ic {
+    width: 1.15em;
+    height: 1.15em;
+    flex-shrink: 0;
+    display: block;
+}
+.navbtn .btn-ic {
+    width: 1.1em;
+    height: 1.1em;
+}
 .btn.primary { background-color: var(--accent); border-color: transparent; }
 .btn.primary:active { background-color: var(--accent-press); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
