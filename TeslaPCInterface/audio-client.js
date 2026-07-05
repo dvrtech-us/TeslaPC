@@ -15,7 +15,23 @@
     var useWorklet = true;
     var scheduledTime = 0;
     var connecting = false;
+    var audioBoost = 1.0;
     var AUDIO_PTS_BYTES = 8;
+
+    function clampAudioBoost(value) {
+        var gain = Number(value);
+        if (!Number.isFinite(gain)) return 1.0;
+        return Math.min(6, Math.max(0.25, gain));
+    }
+
+    function applyAudioBoostToSamples(floatSamples) {
+        if (audioBoost === 1.0) return floatSamples;
+        for (var i = 0; i < floatSamples.length; i++) {
+            var boosted = floatSamples[i] * audioBoost;
+            floatSamples[i] = boosted < -1 ? -1 : boosted > 1 ? 1 : boosted;
+        }
+        return floatSamples;
+    }
 
     function stripAudioPcm(arrayBuffer) {
         if (!audioFormat || (audioFormat.formatVersion || 1) < 2) return arrayBuffer;
@@ -44,6 +60,17 @@
         if (audioContext != null) teardown();
         connecting = true;
 
+        fetch('/config').then(function (r) { return r.json(); }).then(function (cfg) {
+            if (cfg && cfg.audioBoost != null) {
+                audioBoost = clampAudioBoost(cfg.audioBoost);
+            }
+            openAudioSocket();
+        }).catch(function () {
+            openAudioSocket();
+        });
+    }
+
+    function openAudioSocket() {
         audioSocket = new WebSocket(getWsUrl('/ws/audio'));
         audioSocket.binaryType = 'arraybuffer';
         audioSocket.onclose = function () { connecting = false; };
@@ -67,7 +94,8 @@
                             channels: audioFormat.channels,
                             bitsPerSample: audioFormat.bitsPerSample,
                             sampleFormat: audioFormat.sampleFormat || (audioFormat.bitsPerSample === 16 ? 'pcm16' : 'float'),
-                            sourceSampleRate: audioFormat.sampleRate
+                            sourceSampleRate: audioFormat.sampleRate,
+                            audioBoost: audioBoost
                         }
                     });
                     pcmPlayerNode.connect(audioContext.destination);
@@ -152,6 +180,7 @@
 
         var floatSamples = decodePcmToFloat32(arrayBuffer, audioFormat);
         floatSamples = resampleFloat32(floatSamples, channels, sourceRate, playbackRate);
+        floatSamples = applyAudioBoostToSamples(floatSamples);
         var frames = Math.floor(floatSamples.length / channels);
         if (frames === 0) return;
 

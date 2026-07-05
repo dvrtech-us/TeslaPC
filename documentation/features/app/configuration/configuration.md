@@ -49,6 +49,8 @@ web UI.
    - The stream-resolution field is a three-button choice group (`#resChoices`, values `480` /
      `720` / `1080`) plus a hidden `streamHeight` input; pre-selected from `GET /config`
      (native `<select>` popups are unreliable on the Tesla in-car browser).
+   - The **Audio boost** slider (`0.5`–`6.0`, default `1.0`) pre-fills from `audioBoost` on
+     `GET /config`. Applies on the next tap-to-connect (or page refresh).
 3. Edit any field and click **Save**. The page posts `application/x-www-form-urlencoded` to
    `POST /config` and shows one of:
    - **Saved** — video folder, log-level, or stream-resolution change took effect immediately.
@@ -74,11 +76,18 @@ web UI.
 | `StreamHeightKey` | `TESLAPC_STREAM_HEIGHT` |
 | `DisplayRendererKey` | `TESLAPC_DISPLAY_RENDERER` |
 | `DisplayTransportKey` | `TESLAPC_DISPLAY_TRANSPORT` |
+| `AudioBoostKey` | `TESLAPC_AUDIO_BOOST` |
 | `DefaultVideoRoot` | `C:\video\` |
 | `DefaultStreamHeight` | `1080` |
 | `DefaultDisplayRenderer` | `mjpeg` |
 | `DefaultDisplayTransport` | `websocket` |
+| `DefaultAudioBoost` | `1.0` |
+| `MinAudioBoost` / `MaxAudioBoost` | `0.25` / `6.0` |
 | `EnvFilePath` | `%ProgramData%\TeslaPC\.env` (expanded at runtime) |
+
+**`AudioBoost` property** — reads `Get(AudioBoostKey)`, parses as invariant-culture `double`,
+clamps to `[0.25, 6.0]`. Returns `DefaultAudioBoost` (1.0) when absent or unparseable. Applied
+client-side in `PCMPlayerProcessor.js` and the `index.html` / `audio-client.js` fallbacks.
 
 **`StreamHeight` property** — reads `Get(StreamHeightKey)`, parses as an integer, clamps to
 `[240, 2160]`. Returns `DefaultStreamHeight` (1080) when the key is absent, unparseable, or
@@ -129,7 +138,7 @@ is left intact.
 Returns a JSON object with the current non-secret settings:
 
 ```json
-{ "httpsHost": "my.example.com", "acmeEmail": "admin@example.com", "videoRoot": "C:\\video\\", "cfTokenSet": true, "logLevel": "info", "streamHeight": 1080, "displayRenderer": "mjpeg", "displayTransport": "websocket", "h264Available": true, "version": "1.0.0" }
+{ "httpsHost": "my.example.com", "acmeEmail": "admin@example.com", "videoRoot": "C:\\video\\", "cfTokenSet": true, "logLevel": "info", "streamHeight": 1080, "displayRenderer": "mjpeg", "displayTransport": "websocket", "h264Available": true, "audioBoost": 1.0, "version": "1.0.0" }
 ```
 
 `cfTokenSet` is `true` when `TESLAPC_CF_TOKEN` is set to a non-empty value. **The token
@@ -144,8 +153,8 @@ display settings from `AppSettings`. `h264Available` is true when
 #### `POST /config`
 
 Accepts `application/x-www-form-urlencoded` with fields: `httpsHost`, `acmeEmail`,
-`videoRoot`, `logLevel`, `streamHeight`, `displayRenderer`, `displayTransport`, and optionally
-`cfToken`.
+`videoRoot`, `logLevel`, `streamHeight`, `displayRenderer`, `displayTransport`, `audioBoost`,
+and optionally `cfToken`.
 
 1. Builds a dictionary, adding `httpsHost`/`acmeEmail` when present and `videoRoot`/`cfToken`
    only when non-blank (so a blank token is omitted and the stored one is preserved).
@@ -280,6 +289,7 @@ surfaced in:
 | `TESLAPC_STREAM_HEIGHT` | `StreamHeightKey` | `1080` | **Live** (immediate via `POST /config`; startup value used at next session restart) |
 | `TESLAPC_DISPLAY_RENDERER` | `DisplayRendererKey` | `mjpeg` | Next display connection |
 | `TESLAPC_DISPLAY_TRANSPORT` | `DisplayTransportKey` | `websocket` | Next display connection |
+| `TESLAPC_AUDIO_BOOST` | `AudioBoostKey` | `1.0` | Next audio connect (`index.html` tap or `play.html` start) |
 
 ## Access Control
 

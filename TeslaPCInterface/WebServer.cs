@@ -229,6 +229,7 @@ public class WebServer
             string? streamHeight = form.Get("streamHeight");
             string? displayRenderer = form.Get("displayRenderer");
             string? displayTransport = form.Get("displayTransport");
+            string? audioBoost = form.Get("audioBoost");
 
             if (host != null) toSave[AppSettings.HttpsHostKey] = host.Trim();
             if (email != null) toSave[AppSettings.AcmeEmailKey] = email.Trim();
@@ -244,6 +245,13 @@ public class WebServer
             {
                 var t = displayTransport.Trim().ToLowerInvariant();
                 if (t == "http" || t == "websocket") toSave[AppSettings.DisplayTransportKey] = t;
+            }
+            if (audioBoost != null
+                && double.TryParse(audioBoost.Trim(), System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var gain))
+            {
+                gain = Math.Clamp(gain, AppSettings.MinAudioBoost, AppSettings.MaxAudioBoost);
+                toSave[AppSettings.AudioBoostKey] = gain.ToString(System.Globalization.CultureInfo.InvariantCulture);
             }
             // Only overwrite the token when a non-blank value is supplied (the form leaves it blank to keep).
             if (!string.IsNullOrWhiteSpace(cfToken)) toSave[AppSettings.CloudflareTokenKey] = cfToken.Trim();
@@ -291,6 +299,7 @@ public class WebServer
             displayRenderer = AppSettings.DisplayRenderer,
             displayTransport = AppSettings.DisplayTransport,
             h264Available = H264MediaFoundationEncoder.IsAvailable,
+            audioBoost = AppSettings.AudioBoost,
             version = AppSettings.Version,
             cfTokenSet = !string.IsNullOrWhiteSpace(AppSettings.Get(AppSettings.CloudflareTokenKey))
         };

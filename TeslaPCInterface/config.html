@@ -65,6 +65,12 @@
             </div>
 
             <label class="field">
+                <span class="flabel">Audio boost</span>
+                <input class="finput" name="audioBoost" type="range" min="0.5" max="6" step="0.1" value="1" />
+                <span class="fhint" id="audioBoostHint">100% (1.0&times;) — client playback volume. Applies on next connect.</span>
+            </label>
+
+            <label class="field">
                 <span class="flabel">Log level</span>
                 <select class="finput" name="logLevel">
                     <option value="error">Error (quietest)</option>
@@ -108,6 +114,20 @@
                 choices[i].classList.toggle('active', choices[i].getAttribute('data-codec') === codec);
         }
 
+        function formatAudioBoostLabel(value) {
+            var gain = Number(value);
+            if (!Number.isFinite(gain)) gain = 1;
+            return Math.round(gain * 100) + '% (' + gain.toFixed(1) + '\u00d7) \u2014 client playback volume. Applies on next connect.';
+        }
+
+        function setAudioBoost(value) {
+            var gain = Number(value);
+            if (!Number.isFinite(gain)) gain = 1;
+            gain = Math.min(6, Math.max(0.5, gain));
+            form.audioBoost.value = String(gain);
+            document.getElementById('audioBoostHint').textContent = formatAudioBoostLabel(gain);
+        }
+
         document.getElementById('resChoices').addEventListener('click', function (e) {
             var btn = e.target.closest('.res-choice');
             if (!btn) return;
@@ -120,6 +140,10 @@
             setDisplayRenderer(btn.getAttribute('data-codec'));
         });
 
+        form.audioBoost.addEventListener('input', function () {
+            document.getElementById('audioBoostHint').textContent = formatAudioBoostLabel(form.audioBoost.value);
+        });
+
         function load() {
             fetch('/config').then(function (r) { return r.json(); }).then(function (c) {
                 form.httpsHost.value = c.httpsHost || '';
@@ -128,6 +152,7 @@
                 if (c.logLevel) form.logLevel.value = c.logLevel;
                 if (c.streamHeight) setStreamHeight(nearestRes(c.streamHeight));
                 if (c.displayRenderer) setDisplayRenderer(c.displayRenderer);
+                if (c.audioBoost != null) setAudioBoost(c.audioBoost);
                 if (c.h264Available === false)
                     document.getElementById('h264Hint').textContent = 'H264 unavailable — native Windows Media Foundation encoder was not found on the PC.';
                 document.getElementById('verFooter').textContent = c.version ? ('TeslaPC v' + c.version) : '';
@@ -149,6 +174,7 @@
             body.set('streamHeight', form.streamHeight.value);
             body.set('displayRenderer', form.displayRenderer.value);
             body.set('displayTransport', form.displayTransport.value);
+            body.set('audioBoost', form.audioBoost.value);
             if (form.cfToken.value) body.set('cfToken', form.cfToken.value);
 
             msg.className = 'msg'; msg.textContent = 'Saving…';

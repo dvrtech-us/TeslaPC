@@ -21,11 +21,28 @@ public static class AppSettings
     public const string StreamHeightKey = "TESLAPC_STREAM_HEIGHT";
     public const string DisplayRendererKey = "TESLAPC_DISPLAY_RENDERER";
     public const string DisplayTransportKey = "TESLAPC_DISPLAY_TRANSPORT";
+    public const string AudioBoostKey = "TESLAPC_AUDIO_BOOST";
 
     public const string DefaultVideoRoot = @"C:\video\";
     public const int DefaultStreamHeight = 1080;
     public const string DefaultDisplayRenderer = "mjpeg";
     public const string DefaultDisplayTransport = "websocket";
+    public const double DefaultAudioBoost = 1.0;
+    public const double MinAudioBoost = 0.25;
+    public const double MaxAudioBoost = 6.0;
+
+    /// <summary>Client playback gain multiplier (0.25–6.0; 1.0 = unity).</summary>
+    public static double AudioBoost
+    {
+        get
+        {
+            var v = Get(AudioBoostKey);
+            if (double.TryParse(v, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var gain))
+                return Math.Clamp(gain, MinAudioBoost, MaxAudioBoost);
+            return DefaultAudioBoost;
+        }
+    }
 
     /// <summary>Display codec for WebSocket transport: <c>mjpeg</c> or <c>h264</c>.</summary>
     public static string DisplayRenderer

@@ -7,16 +7,44 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
         this.sampleFormat = (options.processorOptions && options.processorOptions.sampleFormat) || 'float';
         this.sourceSampleRate = (options.processorOptions && options.processorOptions.sourceSampleRate) || sampleRate;
         this.playbackSampleRate = sampleRate;
+        this.audioBoost = this.clampBoost(
+            options.processorOptions && options.processorOptions.audioBoost,
+        );
         this.port.onmessage = this.handleMessage.bind(this);
+    }
+
+    clampBoost(value) {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed)) {
+            return 1.0;
+        }
+        return Math.min(6.0, Math.max(0.25, parsed));
+    }
+
+    applyBoost(floatSamples) {
+        if (this.audioBoost === 1.0) {
+            return floatSamples;
+        }
+        for (let i = 0; i < floatSamples.length; i++) {
+            const boosted = floatSamples[i] * this.audioBoost;
+            floatSamples[i] = boosted < -1 ? -1 : boosted > 1 ? 1 : boosted;
+        }
+        return floatSamples;
     }
 
     handleMessage(event) {
         const data = event.data;
 
+        if (data && typeof data === 'object' && data.type === 'gain') {
+            this.audioBoost = this.clampBoost(data.value);
+            return;
+        }
+
         let floatSamples = this.decodeToFloat32(data);
         if (this.sourceSampleRate !== this.playbackSampleRate) {
             floatSamples = this.resample(floatSamples);
         }
+        floatSamples = this.applyBoost(floatSamples);
 
         const maxSamples = this.playbackSampleRate * this.channels * 2;
         const totalSamples = this.samples.length + floatSamples.length;
