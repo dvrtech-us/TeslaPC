@@ -15,6 +15,10 @@ A `#tapstart` `.screen-tap` overlay covers the video area (not the control bar),
 removed (refresh the browser for a full reset). The overlay returns if the audio socket drops
 so the user can tap to reconnect.
 
+**Update:** disconnect now shows `#disconnectPanel` (“Connection lost” + **Refresh page**)
+when `/ws/audio` or `/ws/input` drops after `sessionStarted`; initial connect stays on
+`#connectPanel`.
+
 ## Constraint
 
 Still MJPEG via `<img>` only — no `<video>` element.

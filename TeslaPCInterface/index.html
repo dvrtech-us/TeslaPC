@@ -11,8 +11,8 @@
     <!-- MJPEG starts only after tap-to-connect (phase 1 A/V session align; no <video> tag). -->
     <div class="screen">
         <img id="streamImg" title="playback" alt="" />
-        <div id="tapstart" class="screen-tap" role="button" tabindex="0" aria-label="Tap to connect">
-            <div class="tap-inner">
+        <div id="screenOverlay" class="screen-tap">
+            <div id="connectPanel" class="tap-inner" role="button" tabindex="0" aria-label="Tap to connect">
                 <div class="big-ic play-icon" aria-hidden="true">
                     <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" focusable="false">
                         <polygon points="22,14 22,50 50,32" fill="currentColor" />
@@ -20,6 +20,18 @@
                 </div>
                 <div class="tap-title">Remote Desktop</div>
                 <div class="tap-sub">Tap to connect</div>
+            </div>
+            <div id="disconnectPanel" class="tap-inner disconnect-panel" hidden>
+                <div class="big-ic warn-icon" aria-hidden="true">
+                    <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" focusable="false">
+                        <path d="M32 6 L58 54 H6 Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round" />
+                        <line x1="32" y1="24" x2="32" y2="38" stroke="currentColor" stroke-width="4" stroke-linecap="round" />
+                        <circle cx="32" cy="46" r="2.5" fill="currentColor" />
+                    </svg>
+                </div>
+                <div class="tap-title">Connection lost</div>
+                <div class="tap-sub">The link to the PC dropped. Refresh the page to reconnect.</div>
+                <button type="button" class="btn primary" onclick="location.reload()">Refresh page</button>
             </div>
         </div>
     </div>
@@ -61,20 +73,37 @@
         let scheduledTime = 0; // for fallback buffer scheduling
         let audioConnecting = false;
         let intentionalAudioClose = false;
+        let sessionStarted = false;
 
-        function resetAudioConnection() {
+        function showConnectOverlay() {
+            var root = document.getElementById('screenOverlay');
+            var connect = document.getElementById('connectPanel');
+            var lost = document.getElementById('disconnectPanel');
+            if (!root || !connect || !lost) return;
+            root.style.display = '';
+            connect.hidden = false;
+            lost.hidden = true;
+        }
+
+        function showDisconnectOverlay() {
+            var root = document.getElementById('screenOverlay');
+            var connect = document.getElementById('connectPanel');
+            var lost = document.getElementById('disconnectPanel');
+            if (!root || !connect || !lost) return;
+            root.style.display = '';
+            connect.hidden = true;
+            lost.hidden = false;
+        }
+
+        function hideScreenOverlay() {
+            var root = document.getElementById('screenOverlay');
+            if (root) root.style.display = 'none';
+        }
+
+        function onSessionLost() {
+            if (!sessionStarted) return;
             audioConnecting = false;
-            showTapOverlay();
-        }
-
-        function hideTapOverlay() {
-            var o = document.getElementById('tapstart');
-            if (o) o.style.display = 'none';
-        }
-
-        function showTapOverlay() {
-            var o = document.getElementById('tapstart');
-            if (o) o.style.display = '';
+            showDisconnectOverlay();
         }
 
         // Connect MJPEG /stream in the same user gesture as audio (avoids seconds of video-ahead-of-audio).
@@ -105,7 +134,7 @@
             }
 
             audioConnecting = true;
-            hideTapOverlay();
+            hideScreenOverlay();
 
             startVideoStream();
 
@@ -117,12 +146,12 @@
                     intentionalAudioClose = false;
                     return;
                 }
-                resetAudioConnection();
+                onSessionLost();
             };
 
             audioSocket.onerror = function (event) {
                 console.error('Audio WebSocket error:', event);
-                resetAudioConnection();
+                onSessionLost();
             };
 
             audioSocket.onmessage = async function (event) {
@@ -166,6 +195,7 @@
                     await audioContext.resume();
 
                     audioConnecting = false;
+                    sessionStarted = true;
                     console.log('Audio playback started');
                     return;
                 }
@@ -301,19 +331,27 @@
 
 
         (function () {
-            var tap = document.getElementById('tapstart');
-            if (!tap) return;
+            var panel = document.getElementById('connectPanel');
+            if (!panel) return;
             function onTapConnect(e) {
                 e.preventDefault();
                 e.stopPropagation();
                 startAudioPlayback();
             }
-            tap.addEventListener('click', onTapConnect);
-            tap.addEventListener('touchstart', onTapConnect, { passive: false });
+            panel.addEventListener('click', onTapConnect);
+            panel.addEventListener('touchstart', onTapConnect, { passive: false });
         })();
 
         // Input WebSocket — same origin
         var mouseSocket = new WebSocket(getWsUrl('/ws/input'));
+        mouseSocket.onclose = function () {
+            console.warn('Input WebSocket closed');
+            onSessionLost();
+        };
+        mouseSocket.onerror = function () {
+            console.warn('Input WebSocket error');
+            onSessionLost();
+        };
 
         var img = document.getElementById('streamImg');
 

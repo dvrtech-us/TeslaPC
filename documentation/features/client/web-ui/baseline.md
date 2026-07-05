@@ -28,5 +28,5 @@ Known-good invariants for the browser client. Update only when intended behavior
 - The `AudioContext` is created at the server's reported sample rate; if the browser clamps it, a warning is logged and client-side resampling engages.
 ## Failure Behavior
 
-- Audio socket `onerror`/`onclose` → `resetAudioConnection()` shows the tap overlay again; user may tap to reconnect or refresh the page.
+- After a session has started, audio or input socket `onerror`/`onclose` → `#disconnectPanel` (“Connection lost” + **Refresh page** button). Initial connect uses `#connectPanel` (“Tap to connect”).
 - The input socket and MJPEG `<img>` have **no reconnect logic**; a dropped connection fails silently / shows a broken image until reload.
