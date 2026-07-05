@@ -17,7 +17,7 @@ and JS are inline; the only external module is `PCMPlayerProcessor.js` (loaded a
 
 - `<title>Remote Desktop</title>`; styling comes from the shared `/style.css` (dark in-car touch theme), not inline styles; a no-zoom `viewport` meta is set for touch.
 - Video: `<img title="playback" src="/stream">` inside `<div class="screen">` (flex-centered, `object-fit: contain`). There is **no `<canvas>`** — MJPEG renders directly into the `<img>`.
-- Controls live in a fixed bottom `<div class="controlbar">` with large `.btn` targets: **Start playback** (`#startPlayback`, primary), the **Keyboard** input (`#fakeKeyboard`), and **Files** (→ `/list.html`). See the [file-browser-vlc](../../media/file-browser-vlc/file-browser-vlc.md) feature.
+- Controls live in a fixed bottom `<div class="controlbar">` with large `.btn` targets: **Start playback** (`#startPlayback`, primary), the **Keyboard** input (`#fakeKeyboard`), **Files** (→ `/list.html`), **Settings** (→ `/config.html`), **stream resolution** (`#resBtn` opens `#resPicker` with 480p/720p/1080p buttons — not a native `<select>`; Tesla browser breaks those), and **Fit screen**. See the [file-browser-vlc](../../media/file-browser-vlc/file-browser-vlc.md) feature.
 
 ### URL helper
 

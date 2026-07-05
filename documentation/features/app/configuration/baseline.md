@@ -50,8 +50,9 @@ Known-good invariants. Update only when intended behavior changes.
   `streamHeight` is **not** part of `restartNeeded` — it takes effect live.
 - `AppSettings.StreamHeight` clamps the env-var value to `[240, 2160]`; values outside the
   range or absent/unparseable fall back to `AppSettings.DefaultStreamHeight` (1080).
-- The stream-resolution dropdown (480p / 720p / 1080p) appears in both `index.html` and
-  `config.html` and posts to `POST /config` as `streamHeight`.
+- Stream resolution (480p / 720p / 1080p) is chosen via touch button pickers in `index.html`
+  (`#resBtn` opens `#resPicker`) and `config.html` (`#resChoices`); both post `streamHeight` to
+  `POST /config`. Native `<select>` elements are not used (Tesla browser shows blank popups).
 - `GET /config` includes a `version` field (string) — the value of `AppSettings.Version`.
   The version is read-only; it cannot be changed via `POST /config` and is not part of
   `restartNeeded`.

@@ -42,15 +42,16 @@
                 <span class="fhint">Folder the Files browser and media player read from.</span>
             </label>
 
-            <label class="field">
+            <div class="field">
                 <span class="flabel">Stream resolution</span>
-                <select class="finput" name="streamHeight">
-                    <option value="480">480p (lowest bandwidth)</option>
-                    <option value="720">720p</option>
-                    <option value="1080">1080p (best quality)</option>
-                </select>
+                <div class="res-choices" id="resChoices">
+                    <button type="button" class="btn res-choice" data-h="480">480p</button>
+                    <button type="button" class="btn res-choice" data-h="720">720p</button>
+                    <button type="button" class="btn res-choice" data-h="1080">1080p</button>
+                </div>
+                <input type="hidden" name="streamHeight" value="1080" />
                 <span class="fhint">Max vertical pixels streamed (live screen and video). Higher is sharper but uses more bandwidth. Applies immediately.</span>
-            </label>
+            </div>
 
             <label class="field">
                 <span class="flabel">Log level</span>
@@ -73,6 +74,27 @@
     <script>
         var form = document.getElementById('cfg');
         var msg = document.getElementById('msg');
+        var RES_OPTS = [480, 720, 1080];
+
+        function nearestRes(h) {
+            var best = RES_OPTS[0];
+            for (var i = 0; i < RES_OPTS.length; i++)
+                if (Math.abs(RES_OPTS[i] - h) < Math.abs(best - h)) best = RES_OPTS[i];
+            return best;
+        }
+
+        function setStreamHeight(h) {
+            form.streamHeight.value = String(h);
+            var choices = document.querySelectorAll('#resChoices .res-choice');
+            for (var i = 0; i < choices.length; i++)
+                choices[i].classList.toggle('active', Number(choices[i].getAttribute('data-h')) === h);
+        }
+
+        document.getElementById('resChoices').addEventListener('click', function (e) {
+            var btn = e.target.closest('.res-choice');
+            if (!btn) return;
+            setStreamHeight(Number(btn.getAttribute('data-h')));
+        });
 
         function load() {
             fetch('/config').then(function (r) { return r.json(); }).then(function (c) {
@@ -80,12 +102,7 @@
                 form.acmeEmail.value = c.acmeEmail || '';
                 form.videoRoot.value = c.videoRoot || '';
                 if (c.logLevel) form.logLevel.value = c.logLevel;
-                if (c.streamHeight) {
-                    var opts = [480, 720, 1080], best = opts[0];
-                    for (var i = 0; i < opts.length; i++)
-                        if (Math.abs(opts[i] - c.streamHeight) < Math.abs(best - c.streamHeight)) best = opts[i];
-                    form.streamHeight.value = String(best);
-                }
+                if (c.streamHeight) setStreamHeight(nearestRes(c.streamHeight));
                 document.getElementById('verFooter').textContent = c.version ? ('TeslaPC v' + c.version) : '';
                 document.getElementById('cfState').textContent = c.cfTokenSet
                     ? 'A token is saved. Leave blank to keep it, or type a new one to replace it.'

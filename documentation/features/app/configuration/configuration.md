@@ -41,8 +41,9 @@ web UI.
      returns the token).
    - The log-level field is a `<select name="logLevel">` with options `error`, `warn`,
      `info`, `debug`; pre-selected from the `logLevel` value returned by `GET /config`.
-   - The stream-resolution field is a `<select name="streamHeight">` with options `480`,
-     `720`, `1080`; pre-selected from the `streamHeight` value returned by `GET /config`.
+   - The stream-resolution field is a three-button choice group (`#resChoices`, values `480` /
+     `720` / `1080`) plus a hidden `streamHeight` input; pre-selected from `GET /config`
+     (native `<select>` popups are unreliable on the Tesla in-car browser).
 3. Edit any field and click **Save**. The page posts `application/x-www-form-urlencoded` to
    `POST /config` and shows one of:
    - **Saved** — video folder, log-level, or stream-resolution change took effect immediately.
