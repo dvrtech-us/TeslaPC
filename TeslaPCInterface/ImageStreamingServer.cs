@@ -333,10 +333,15 @@ namespace Streaming
                     List<byte[]>? h264 = null;
                     if (needH264)
                     {
-                        byte[] bgr = needsResize
-                            ? BitmapToBgr24(scaledImage!)
-                            : BitmapToBgr24From32bpp(srcImage, outWidth, outHeight);
-                        h264 = _displayWebSocket.EncodeH264(bgr, outWidth, outHeight, _fps);
+                        if (needsResize)
+                        {
+                            byte[] bgr = BitmapToBgr24(scaledImage!);
+                            h264 = _displayWebSocket.EncodeH264(bgr, outWidth, outHeight, _fps);
+                        }
+                        else
+                        {
+                            h264 = EncodeH264FromBgra32(srcImage, outWidth, outHeight);
+                        }
                     }
                     else
                     {
@@ -397,12 +402,18 @@ namespace Streaming
             }
         }
 
-        private static byte[] BitmapToBgr24From32bpp(Bitmap src, int width, int height)
+        private List<byte[]> EncodeH264FromBgra32(Bitmap src, int width, int height)
         {
-            using var rgb = new Bitmap(width, height, PixelFormat.Format24bppRgb);
-            using (var g = Graphics.FromImage(rgb))
-                g.DrawImage(src, 0, 0, width, height);
-            return BitmapToBgr24(rgb);
+            var rect = new Rectangle(0, 0, width, height);
+            var data = src.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            try
+            {
+                return _displayWebSocket.EncodeH264Bgra32(data.Scan0, width, height, data.Stride, _fps);
+            }
+            finally
+            {
+                src.UnlockBits(data);
+            }
         }
 
         /// <summary>

@@ -50,6 +50,11 @@ streaming. Update only when intended behavior changes.
   stopping connected clients.
 - H264 uses `MFVideoFormat_NV12` input and `MFVideoFormat_H264` output through the native Windows
   Media Foundation H264 encoder MFT; ffmpeg is not used for the live display encoder.
+- When capture does not resize, H264 encoding reads locked `Format32bppArgb` pixels directly via
+  `EncodeH264Bgra32` (no BGR24 pack step). Resized H264 still uses tightly-packed BGR24 from
+  `scaledImage` via `BitmapToBgr24`.
+- NV12 conversion is centralized in `Bgr24ToNv12Converter`; `H264MediaFoundationEncoder` reuses
+  one `_nv12Scratch` buffer per encoder session.
 - H264 baseline profile (`eAVEncH264VProfile_Base`) is used. Bitrate is clamped to
   `1_500_000..12_000_000` bps by `H264MediaFoundationEncoder.EstimateBitrate`.
 - `H264MediaFoundationEncoder` must not marshal `MFT_OUTPUT_DATA_BUFFER[]` through .NET COM

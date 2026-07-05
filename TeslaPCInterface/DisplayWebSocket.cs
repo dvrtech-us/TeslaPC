@@ -159,6 +159,18 @@ internal sealed class DisplayWebSocket
         }
     }
 
+    public List<byte[]> EncodeH264Bgra32(IntPtr scan0, int width, int height, int stride, int fps)
+    {
+        if (!_needH264 || scan0 == IntPtr.Zero)
+            return [];
+
+        lock (_h264Lock)
+        {
+            EnsureH264Encoder(width, height, fps);
+            return _h264Encoder?.EncodeBgra32Frame(scan0, stride) ?? [];
+        }
+    }
+
     public void StopH264Encoder()
     {
         lock (_h264Lock)

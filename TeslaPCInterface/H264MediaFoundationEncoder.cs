@@ -53,6 +53,7 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
     private int _height;
     private int _fps;
     private int _inputBufferLength;
+    private byte[] _nv12Scratch = Array.Empty<byte>();
     private long _sampleTimeHns;
     private long _sampleDurationHns;
     private bool _disposed;
@@ -75,7 +76,8 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
         _width = width;
         _height = height;
         _fps = Math.Max(1, fps);
-        _inputBufferLength = width * height * 3 / 2;
+        _inputBufferLength = Bgr24ToNv12Converter.GetNv12Length(width, height);
+        _nv12Scratch = new byte[_inputBufferLength];
         _sampleTimeHns = 0;
         _sampleDurationHns = 10_000_000L / _fps;
         _framesFed = 0;
@@ -110,13 +112,31 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
         if (_transform == null || bgr24.Length < _width * _height * 3)
             return [];
 
+        EnsureNv12Scratch();
+        Bgr24ToNv12Converter.ConvertBgr24(bgr24, _width, _height, _nv12Scratch);
+        return EncodePreparedNv12();
+    }
+
+    /// <summary>Feeds one locked 32bpp ARGB/BGRA bitmap row and returns complete Annex-B access units, if any.</summary>
+    public List<byte[]> EncodeBgra32Frame(IntPtr scan0, int stride)
+    {
+        if (_transform == null || scan0 == IntPtr.Zero || stride < _width * 4)
+            return [];
+
+        EnsureNv12Scratch();
+        Bgr24ToNv12Converter.ConvertBgra32(scan0, _width, _height, stride, _nv12Scratch);
+        return EncodePreparedNv12();
+    }
+
+    private List<byte[]> EncodePreparedNv12()
+    {
         var encoded = new List<byte[]>(capacity: 2);
 
         try
         {
             DrainAvailableOutput(encoded);
 
-            using var sample = CreateInputSample(ConvertBgr24ToNv12(bgr24));
+            using var sample = CreateInputSample(_nv12Scratch);
             int hr = _transform.ProcessInput(0, sample.Value, 0);
             if (hr == MF_E_NOTACCEPTING)
             {
@@ -142,6 +162,12 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
 
         MaybeLogStats();
         return encoded;
+    }
+
+    private void EnsureNv12Scratch()
+    {
+        if (_nv12Scratch.Length != _inputBufferLength)
+            _nv12Scratch = new byte[_inputBufferLength];
     }
 
     public void Stop()
@@ -378,56 +404,6 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
         }
     }
 
-    private byte[] ConvertBgr24ToNv12(byte[] bgr24)
-    {
-        var nv12 = new byte[_inputBufferLength];
-        int yPlaneSize = _width * _height;
-        int sourceStride = _width * 3;
-
-        for (int y = 0; y < _height; y++)
-        {
-            int sourceRow = y * sourceStride;
-            int yRow = y * _width;
-            for (int x = 0; x < _width; x++)
-            {
-                int source = sourceRow + x * 3;
-                int b = bgr24[source];
-                int g = bgr24[source + 1];
-                int r = bgr24[source + 2];
-                nv12[yRow + x] = ClampToByte(((66 * r + 129 * g + 25 * b + 128) >> 8) + 16);
-            }
-        }
-
-        for (int y = 0; y < _height; y += 2)
-        {
-            int uvRow = yPlaneSize + (y / 2) * _width;
-            for (int x = 0; x < _width; x += 2)
-            {
-                int uSum = 0;
-                int vSum = 0;
-
-                for (int dy = 0; dy < 2; dy++)
-                {
-                    int sourceRow = (y + dy) * sourceStride;
-                    for (int dx = 0; dx < 2; dx++)
-                    {
-                        int source = sourceRow + (x + dx) * 3;
-                        int b = bgr24[source];
-                        int g = bgr24[source + 1];
-                        int r = bgr24[source + 2];
-                        uSum += ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
-                        vSum += ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
-                    }
-                }
-
-                nv12[uvRow + x] = ClampToByte((uSum + 2) / 4);
-                nv12[uvRow + x + 1] = ClampToByte((vSum + 2) / 4);
-            }
-        }
-
-        return nv12;
-    }
-
     private void MaybeLogStats()
     {
         long now = Environment.TickCount64;
@@ -436,8 +412,6 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
         _lastStatsUtc = now;
         Console.WriteLine($"[H264] native fed={_framesFed} out={_framesOut} null={_nullOutputs}");
     }
-
-    private static byte ClampToByte(int value) => value < 0 ? (byte)0 : value > 255 ? (byte)255 : (byte)value;
 
     private static int EstimateBitrate(int width, int height, int fps)
     {

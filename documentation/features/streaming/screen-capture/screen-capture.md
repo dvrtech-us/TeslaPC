@@ -13,8 +13,8 @@ prefers DXGI Desktop Duplication (GPU) and falls back to GDI `CopyFromScreen`.
 2. On tap-to-connect, the browser reads `/config` and opens either the legacy `/stream` route
    (`displayTransport=http`) or `/ws/display?renderer=mjpeg|h264` (`displayTransport=websocket`).
 3. Each captured frame is JPEG-encoded only when at least one JPEG consumer exists (`/stream`
-   or `/ws/display?renderer=mjpeg`). When at least one H264 client is connected, the same
-   BGR24 frame is converted to NV12 and encoded by `H264MediaFoundationEncoder`.
+   or `/ws/display?renderer=mjpeg`). When at least one H264 client is connected, the frame is
+   converted to NV12 by `Bgr24ToNv12Converter` and encoded by `H264MediaFoundationEncoder`.
 4. When the last client disconnects, the capture loop stops and releases its resources.
 5. The Client can select a stream resolution (480p / 720p / 1080p) from a dropdown in the
    main screen or the Settings page. Changes apply immediately without a stream reconnect.
@@ -61,8 +61,10 @@ prefers DXGI Desktop Duplication (GPU) and falls back to GDI `CopyFromScreen`.
    - If `Volatile.Read(ref _httpClientCount) > 0 || DisplayWebSocket.NeedMjpeg`, JPEG-encode
      the scaled frame (`scaledImage.Save(...)` or `srcImage.Save(...)`). H264-only sessions
      skip JPEG work entirely.
-   - If `DisplayWebSocket.NeedH264` is true for this tick, convert the frame to tightly-packed
-     BGR24 (`BitmapToBgr24` / `BitmapToBgr24From32bpp`) and call
+   - If `DisplayWebSocket.NeedH264` is true for this tick, encode H264 from the capture bitmap:
+     when **not** resizing, lock `srcImage` as `Format32bppArgb` and call
+     `DisplayWebSocket.EncodeH264Bgra32` (skips the BGR24 intermediate). When resizing, pack
+     `scaledImage` to tightly-packed BGR24 via `BitmapToBgr24` and call
      `DisplayWebSocket.EncodeH264`. If no H264 clients are connected, call
      `DisplayWebSocket.StopH264Encoder()` so the native encoder is disposed.
    - `PublishFrame(jpeg, h264Frames)`: copy JPEG bytes to `_currentFrame`, increment
@@ -110,10 +112,12 @@ display-control routes to force a fresh DXGI session after a desktop resolution 
   - `MF_MT_INTERLACE_MODE = MFVideoInterlace_Progressive`
   - `MF_MT_MPEG2_PROFILE = eAVEncH264VProfile_Base`
   - `MF_MT_PIXEL_ASPECT_RATIO = 1/1`
-- Input type is `MFVideoFormat_NV12`. Each BGR24 frame is converted to NV12 in managed code.
-- `EncodeFrame(byte[] bgr24)` drains any pending output, calls `ProcessInput`, then drains
-  output again. Each returned `byte[]` is one complete `MFVideoFormat_H264` sample/access unit
-  with start codes and interleaved SPS/PPS.
+- Input type is `MFVideoFormat_NV12`. `Bgr24ToNv12Converter` performs BT.601 BGR/BGRA → NV12 in
+  managed code (scalar 4-pixel unrolled loops; reusable `_nv12Scratch` buffer per encoder).
+- `EncodeFrame(byte[] bgr24)` and `EncodeBgra32Frame(IntPtr scan0, int stride)` both convert to
+  NV12 then call shared `EncodePreparedNv12()`, which drains any pending output, calls
+  `ProcessInput`, then drains output again. Each returned `byte[]` is one complete
+  `MFVideoFormat_H264` sample/access unit with start codes and interleaved SPS/PPS.
 - Output draining calls `IMFTransform.ProcessOutput` with an unmanaged
   `MFT_OUTPUT_DATA_BUFFER` pointer (`IntPtr`) allocated by `Marshal.AllocHGlobal`. The struct's
   `pSample` field is also an `IntPtr`; `IMFSample` COM objects are resolved explicitly only
@@ -139,11 +143,12 @@ display-control routes to force a fresh DXGI session after a desktop resolution 
 
 | Class | File | Responsibility |
 |-------|------|----------------|
-| `ImageStreamingServer` | `TeslaPCInterface/ImageStreamingServer.cs` | Shared capture loop, frame buffer, HTTP MJPEG send threads, WebSocket display publishing, JPEG encoding, BGR24 extraction; mutable `MaxWidth`/`MaxHeight`; `SetMaxResolution`/`RestartCapture` |
+| `ImageStreamingServer` | `TeslaPCInterface/ImageStreamingServer.cs` | Shared capture loop, frame buffer, HTTP MJPEG send threads, WebSocket display publishing, JPEG encoding, H264 BGRA/BGR24 feed; mutable `MaxWidth`/`MaxHeight`; `SetMaxResolution`/`RestartCapture` |
 | `DxgiScreenCapture` | `TeslaPCInterface/DxgiScreenCapture.cs` | DXGI Desktop Duplication capture; signals unavailability for GDI fallback |
 | `MjpegWriter` | `TeslaPCInterface/MjpegWriter.cs` | multipart/x-mixed-replace header + per-frame boundary framing |
 | `DisplayWebSocket` | `TeslaPCInterface/DisplayWebSocket.cs` | `/ws/display` negotiation, PTS-prefixed frame broadcast, H264 client tracking, native encoder lifetime |
-| `H264MediaFoundationEncoder` | `TeslaPCInterface/H264MediaFoundationEncoder.cs` | Native Windows Media Foundation H264 encoder wrapper; BGR24->NV12 conversion; complete access-unit output |
+| `Bgr24ToNv12Converter` | `TeslaPCInterface/Bgr24ToNv12Converter.cs` | BT.601 BGR24/BGRA32 → NV12 conversion for MF encoder input |
+| `H264MediaFoundationEncoder` | `TeslaPCInterface/H264MediaFoundationEncoder.cs` | Native Windows Media Foundation H264 encoder wrapper; NV12 feed; complete access-unit output |
 
 ## Constants
 
