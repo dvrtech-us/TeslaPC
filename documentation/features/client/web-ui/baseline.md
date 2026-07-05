@@ -37,6 +37,16 @@ Known-good invariants for the browser client. Update only when intended behavior
 
 - The AudioWorklet path is preferred; on `addModule`/node failure the client falls back to `AudioBufferSourceNode` scheduling.
 - The `AudioContext` is created at the server's reported sample rate; if the browser clamps it, a warning is logged and client-side resampling engages.
+- When `audioFormat.formatVersion >= 2`, binary `/ws/audio` frames carry an 8-byte little-endian
+  `hostPtsUs` prefix. `scheduleAudioChunk()` delays delivery by `TeslaAvScheduler.delayUntilPlayMs`
+  (default target delay 200 ms from the first anchored host PTS). Format v1 plays immediately.
+
+## A/V sync (phase 3a)
+
+- `av-scheduler.js` is loaded on `index.html` and imported by `display-h264-worker.js`.
+- `TeslaAvScheduler.reset()` runs at `startAudioPlayback()` session start.
+- H264 canvas render is PTS-scheduled; MJPEG `<img>` blit is **not** PTS-scheduled in this phase.
+- Main thread owns the canonical PTS anchor; each H264 worker message includes `schedulerSync`.
 ## Failure Behavior
 
 - After a session has started, audio or input socket `onerror`/`onclose` → `#disconnectPanel` (“Connection lost” + **Refresh page** button). Initial connect uses `#connectPanel` (“Tap to connect”).

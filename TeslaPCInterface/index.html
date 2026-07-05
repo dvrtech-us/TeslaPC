@@ -62,6 +62,7 @@
         </div>
     </div>
 
+    <script src="av-scheduler.js"></script>
     <script src="display-client.js"></script>
 
     <script>
@@ -115,14 +116,54 @@
 
         var AUDIO_PTS_BYTES = 8;
 
-        function stripAudioPcm(arrayBuffer) {
+        function parseAudioFrame(arrayBuffer) {
             if (!audioFormat || (audioFormat.formatVersion || 1) < 2) {
-                return arrayBuffer;
+                return { pts: null, pcm: arrayBuffer };
             }
             if (arrayBuffer.byteLength <= AUDIO_PTS_BYTES) {
-                return arrayBuffer;
+                return { pts: 0, pcm: arrayBuffer };
             }
-            return arrayBuffer.slice(AUDIO_PTS_BYTES);
+            var view = new DataView(arrayBuffer);
+            var pts = Number(view.getBigInt64(0, true));
+            return { pts: pts, pcm: arrayBuffer.slice(AUDIO_PTS_BYTES) };
+        }
+
+        function hostPtsToAudioContextTime(hostPtsUs) {
+            if (!audioContext || !window.TeslaAvScheduler) {
+                return audioContext ? audioContext.currentTime : 0;
+            }
+            window.TeslaAvScheduler.anchorOnFirstHostPts(hostPtsUs);
+            var delaySec = window.TeslaAvScheduler.delayUntilPlayMs(hostPtsUs) / 1000;
+            return audioContext.currentTime + delaySec;
+        }
+
+        function deliverAudioChunk(pcmData) {
+            if (!audioFormat || !audioContext) {
+                return;
+            }
+
+            if (useWorklet && pcmPlayerNode) {
+                pcmPlayerNode.port.postMessage(pcmData);
+            } else {
+                playPcmChunkFallback(pcmData, null);
+            }
+        }
+
+        function scheduleAudioChunk(pcmData, hostPtsUs) {
+            if (hostPtsUs == null || !window.TeslaAvScheduler) {
+                deliverAudioChunk(pcmData);
+                return;
+            }
+
+            window.TeslaAvScheduler.anchorOnFirstHostPts(hostPtsUs);
+            var delayMs = window.TeslaAvScheduler.delayUntilPlayMs(hostPtsUs);
+            if (delayMs <= 0) {
+                deliverAudioChunk(pcmData);
+                return;
+            }
+            setTimeout(function () {
+                deliverAudioChunk(pcmData);
+            }, delayMs);
         }
 
         async function startAudioPlayback() {
@@ -142,6 +183,10 @@
                 audioFormat = null;
                 useWorklet = true;
                 scheduledTime = 0;
+            }
+
+            if (window.TeslaAvScheduler) {
+                window.TeslaAvScheduler.reset();
             }
 
             audioConnecting = true;
@@ -220,12 +265,11 @@
                     audioContext.resume();
                 }
 
-                var pcmData = stripAudioPcm(event.data);
-
-                if (useWorklet && pcmPlayerNode) {
-                    pcmPlayerNode.port.postMessage(pcmData);
+                var parsedAudio = parseAudioFrame(event.data);
+                if (parsedAudio.pts != null) {
+                    scheduleAudioChunk(parsedAudio.pcm, parsedAudio.pts);
                 } else {
-                    playPcmChunkFallback(pcmData);
+                    deliverAudioChunk(parsedAudio.pcm);
                 }
             };
 
@@ -308,7 +352,7 @@
          * and schedule them for gapless playback. Works on any browser with
          * Web Audio API (no AudioWorklet needed).
          */
-        function playPcmChunkFallback(rawData) {
+        function playPcmChunkFallback(rawData, hostPtsUs) {
             var arrayBuffer = rawData instanceof ArrayBuffer ? rawData : rawData.buffer;
             var channels = audioFormat.channels;
             var sourceRate = audioFormat.sampleRate;
@@ -328,18 +372,22 @@
                 }
             }
 
-            // Schedule for gapless playback
             var source = audioContext.createBufferSource();
             source.buffer = audioBuffer;
             source.connect(audioContext.destination);
 
-            var currentTime = audioContext.currentTime;
-            if (scheduledTime < currentTime) {
-                // We've fallen behind — schedule slightly in the future to avoid glitches
-                scheduledTime = currentTime + 0.02;
+            var startTime;
+            if (hostPtsUs != null && window.TeslaAvScheduler) {
+                startTime = hostPtsToAudioContextTime(hostPtsUs);
+            } else {
+                var currentTime = audioContext.currentTime;
+                if (scheduledTime < currentTime) {
+                    scheduledTime = currentTime + 0.02;
+                }
+                startTime = scheduledTime;
+                scheduledTime += audioBuffer.duration;
             }
-            source.start(scheduledTime);
-            scheduledTime += audioBuffer.duration;
+            source.start(startTime);
         }
 
 

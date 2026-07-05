@@ -2,8 +2,9 @@
 
 The single-page browser client (`index.html`) that renders the remote screen, plays system
 audio, and forwards mouse input. Vanilla JavaScript — no frameworks, no build step. All CSS
-is in `/style.css`; display streaming logic lives in `display-client.js`; H264 decode/render
-logic lives in `display-h264-worker.js`; audio decode logic lives in `PCMPlayerProcessor.js`.
+is in `/style.css`; shared A/V PTS scheduling lives in `av-scheduler.js`; display streaming
+logic lives in `display-client.js`; H264 decode/render logic lives in `display-h264-worker.js`;
+audio decode logic lives in `PCMPlayerProcessor.js`.
 
 ## User Flow
 
@@ -49,7 +50,8 @@ logic lives in `display-h264-worker.js`; audio decode logic lives in `PCMPlayerP
 - MJPEG WebSocket payloads become `Blob([payload], { type: "image/jpeg" })`, assigned to
   `#streamImg` via a short-lived object URL.
 - H264 WebSocket payloads are copied and transferred to `display-h264-worker.js` as
-  `{ h264Data: ArrayBuffer }`.
+  `{ h264Data: ArrayBuffer, hostPtsUs, schedulerSync }` when `formatVersion >= 2`.
+- MJPEG WebSocket frames still blit immediately to `<img>` (no PTS scheduler in phase 3a).
 - If the display WebSocket closes unexpectedly, `display-client.js` waits 250 ms, re-reads
   `/config`, and reconnects display only. This is how server-side renderer/transport changes
   apply to connected WebSocket clients.
@@ -71,8 +73,20 @@ logic lives in `display-h264-worker.js`; audio decode logic lives in `PCMPlayerP
   units containing non-IDR slices are decoded as delta chunks after a key frame has been accepted.
 - The worker drops stale decoded frames and skips delta chunks when the decode/render queues are
   backlogged.
+- When `schedulerSync` is present, the worker imports `av-scheduler.js`, maps host PTS to
+  `EncodedVideoChunk.timestamp`, and delays WebGL canvas blit until
+  `TeslaAvScheduler.hostPtsToPlayWallMs(hostPtsUs)` (default 200 ms target delay from anchor).
 - Worker errors are posted back to `display-client.js`, logged to the console, and copied into
   `window.__teslaPcDebug.errors` when the DVR debug probe is installed.
+
+### A/V scheduler (`av-scheduler.js`)
+
+- Loaded before `display-client.js` on `index.html`; also `importScripts` in
+  `display-h264-worker.js`.
+- `TeslaAvScheduler.reset()` runs at the start of `startAudioPlayback()` (session boundary).
+- First `hostPtsUs` seen on the main thread anchors `anchorHostPtsUs` + `anchorWallMs`; each H264
+  frame posts `schedulerSync` so the worker shares the same anchor.
+- `delayUntilPlayMs(hostPtsUs)` drives audio `setTimeout` delivery and H264 render `setTimeout`.
 
 ### Input (`mapPoint` / `sendInput`, `index.html`)
 
@@ -106,7 +120,10 @@ logic lives in `display-h264-worker.js`; audio decode logic lives in `PCMPlayerP
 3. First (text) message → parse format → create `AudioContext({ sampleRate, latencyHint: 'interactive' })` → warn if the browser clamped the rate → `audioWorklet.addModule('PCMPlayerProcessor.js')` → create `AudioWorkletNode` (`outputChannelCount: [channels]`, format in `processorOptions`) → connect to destination.
 4. On worklet failure → `useWorklet = false`, fall back to `playPcmChunkFallback`.
 5. `audioContext.resume()`.
-6. Subsequent (binary) messages → `pcmPlayerNode.port.postMessage(data)` (worklet) or `playPcmChunkFallback(data)`.
+6. Subsequent (binary) messages → `parseAudioFrame()` strips the 8-byte host PTS when
+   `formatVersion >= 2`, then `scheduleAudioChunk(pcm, hostPtsUs)` delays delivery by
+   `TeslaAvScheduler.delayUntilPlayMs` before posting to the worklet or fallback scheduler.
+   Format v1 frames play immediately (no PTS prefix).
 
 ### Audio fallback (`playPcmChunkFallback`, `index.html:254`)
 
@@ -117,6 +134,7 @@ logic lives in `display-h264-worker.js`; audio decode logic lives in `PCMPlayerP
 
 | Function | File | Responsibility |
 |----------|------|----------------|
+| `TeslaAvScheduler.*` | `av-scheduler.js` | Anchor host PTS, map to playout wall time / decoder timestamp |
 | `getWsUrl(path)` | `index.html` / `display-client.js` | Build same-origin `ws://`/`wss://` URL |
 | `TeslaDisplay.start(onDisconnect)` | `display-client.js` | Start HTTP MJPEG or WebSocket MJPEG/H264 display transport from `/config` |
 | `TeslaDisplay.stop()` | `display-client.js` | Close display socket, clear reconnect/blob state, keep any transferred H264 worker alive |
@@ -127,8 +145,10 @@ logic lives in `display-h264-worker.js`; audio decode logic lives in `PCMPlayerP
 | `sendText(text)` | `index.html` | Forward a text run one character at a time; maps `\r`/`\n`→Enter, `\t`→Tab |
 | `isEditable(el)` | `index.html` | Return true when `el` is an `INPUT`, `TEXTAREA`, or has `contentEditable` set |
 | `isNamedKey(event)` | `index.html` | Return true when the key matches `namedKeys` or `/^F\d{1,2}$/` |
+| `parseAudioFrame(arrayBuffer)` | `index.html` | Split format v2 audio into `{ pts, pcm }` |
+| `scheduleAudioChunk(pcm, hostPtsUs)` | `index.html` | Delay audio delivery to worklet/fallback by host PTS |
 | `startAudioPlayback()` | `index.html:86` | Negotiate format and start AudioWorklet (or fallback) |
-| `playPcmChunkFallback(rawData)` | `index.html:254` | Schedule PCM via `AudioBufferSourceNode` when no AudioWorklet |
+| `playPcmChunkFallback(rawData, hostPtsUs)` | `index.html:254` | Schedule PCM via `AudioBufferSourceNode` when no AudioWorklet |
 | `decodePcmToFloat32` / `resampleFloat32` | `index.html:177,219` | Decode + linear-interpolation resample (mirror of the worklet) |
 
 ## Routes and Access Control

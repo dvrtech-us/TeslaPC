@@ -167,6 +167,9 @@
                 console.log("Display format:", format);
                 if (format.renderer === "h264") {
                     ensureH264Worker();
+                    if (h264Worker) {
+                        h264Worker.postMessage({ resetScheduler: true });
+                    }
                 } else {
                     ensureMjpegDom();
                 }
@@ -182,8 +185,15 @@
                 if (!h264Worker) {
                     return;
                 }
+                if ((format.formatVersion || 1) >= 2 && global.TeslaAvScheduler) {
+                    global.TeslaAvScheduler.anchorOnFirstHostPts(parsed.pts);
+                }
                 var copy = parsed.payload.slice();
-                h264Worker.postMessage({ h264Data: copy.buffer }, [copy.buffer]);
+                var message = { h264Data: copy.buffer, hostPtsUs: parsed.pts };
+                if ((format.formatVersion || 1) >= 2 && global.TeslaAvScheduler) {
+                    message.schedulerSync = global.TeslaAvScheduler.getSyncState();
+                }
+                h264Worker.postMessage(message, [copy.buffer]);
             } else {
                 applyMjpegFrame(new Blob([parsed.payload], { type: "image/jpeg" }));
             }
