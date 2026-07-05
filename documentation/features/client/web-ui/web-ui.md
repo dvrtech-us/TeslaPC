@@ -6,10 +6,10 @@ and JS are inline; the only external module is `PCMPlayerProcessor.js` (loaded a
 
 ## User Flow
 
-1. The browser loads `/` (served as `index.html`).
-2. The remote screen appears immediately via `<img src="/stream">` (native MJPEG rendering).
-3. The input WebSocket (`/ws/input`) opens automatically on page load; mouse actions over the image are forwarded.
-4. The user clicks **Start playback** to begin audio (a user gesture is required by browsers); the button then reads **Restart playback**.
+1. The browser loads `/` (served as `index.html`). `#streamImg` has no `src` yet (black screen).
+2. The input WebSocket (`/ws/input`) opens on page load; mouse actions over the image are forwarded once frames arrive.
+3. The user clicks **Start playback** (user gesture): `startVideoStream()` sets `img.src` to `/stream` and opens `/ws/audio` so MJPEG and audio begin together. The button then reads **Restart playback** (both paths restart).
+4. MJPEG renders via `<img>` only — **no `<video>`** (Tesla driving lockout). See the phased A/V sync plan in `documentation/planning/Streaming/2026-07-05-av-sync-phased-plan.md`.
 
 ## Technical Flow
 

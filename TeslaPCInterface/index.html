@@ -8,9 +8,9 @@
 
 <body>
 
-    <!-- MJPEG stream served from same origin at /stream -->
+    <!-- MJPEG starts only after Start playback (phase 1 A/V session align; no <video> tag). -->
     <div class="screen">
-        <img title="playback" src="/stream" />
+        <img id="streamImg" title="playback" alt="" />
     </div>
     <div class="controlbar">
         <button onclick="startAudioPlayback()" id="startPlayback" class="btn primary">&#9658; Start playback</button>
@@ -64,6 +64,14 @@
             setPlaybackButtonState(false, audioContext ? 'Restart playback' : 'Start playback');
         }
 
+        // Connect MJPEG /stream in the same user gesture as audio (avoids seconds of video-ahead-of-audio).
+        function startVideoStream() {
+            var el = document.getElementById('streamImg');
+            if (!el) return;
+            el.removeAttribute('src');
+            el.src = '/stream?_=' + Date.now();
+        }
+
         async function startAudioPlayback() {
             if (audioConnecting) {
                 return;
@@ -82,6 +90,8 @@
 
             audioConnecting = true;
             setPlaybackButtonState(true, 'Connecting...');
+
+            startVideoStream();
 
             audioSocket = new WebSocket(getWsUrl('/ws/audio'));
             audioSocket.binaryType = 'arraybuffer';
@@ -274,8 +284,7 @@
         // Input WebSocket — same origin
         var mouseSocket = new WebSocket(getWsUrl('/ws/input'));
 
-        // Get the image element
-        var img = document.querySelector('img');
+        var img = document.getElementById('streamImg');
 
         // Map a viewport point to host-screen coords. The stream is letterboxed inside the element
         // (object-fit: contain), so use the frame's natural aspect ratio to find the real video
