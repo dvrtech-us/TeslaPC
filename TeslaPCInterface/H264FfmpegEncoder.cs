@@ -15,6 +15,10 @@ public sealed class H264FfmpegEncoder : IDisposable
     private int _height;
     private int _fps;
     private bool _disposed;
+    private int _framesFed;
+    private int _framesOut;
+    private int _nullReads;
+    private long _lastStatsUtc = Environment.TickCount64;
 
     public H264FfmpegEncoder()
     {
@@ -33,12 +37,17 @@ public sealed class H264FfmpegEncoder : IDisposable
         _width = width;
         _height = height;
         _fps = Math.Max(1, fps);
+        _framesFed = 0;
+        _framesOut = 0;
+        _nullReads = 0;
 
         var args = new StringBuilder();
         args.Append("-hide_banner -loglevel error ");
+        args.Append("-fflags nobuffer -flags low_delay ");
         args.Append(CultureInv($"-f rawvideo -pix_fmt bgr24 -s {width}x{height} -r {_fps} -i pipe:0 "));
         args.Append("-c:v libx264 -preset ultrafast -tune zerolatency -profile:v baseline ");
-        args.Append(CultureInv($"-g {_fps} -keyint_min {_fps} -sc_threshold 0 "));
+        args.Append(CultureInv($"-g {_fps} -keyint_min 1 -sc_threshold 0 "));
+        args.Append("-x264-params repeat-headers=1 ");
         args.Append("-bsf:v h264_mp4toannexb -f h264 pipe:1");
 
         var psi = new ProcessStartInfo
@@ -58,6 +67,8 @@ public sealed class H264FfmpegEncoder : IDisposable
         _stdin = _process.StandardInput.BaseStream;
         _stdout = _process.StandardOutput.BaseStream;
 
+        Console.WriteLine($"[H264] Encoder started {_width}x{_height}@{_fps} via {_ffmpeg}");
+
         _ = Task.Run(async () =>
         {
             try
@@ -74,7 +85,7 @@ public sealed class H264FfmpegEncoder : IDisposable
         });
     }
 
-    /// <summary>Feeds one BGR24 frame and returns the encoded Annex-B access unit, if any.</summary>
+    /// <summary>Feeds one tightly-packed BGR24 frame and returns the encoded Annex-B access unit, if any.</summary>
     public byte[]? EncodeFrame(byte[] bgr24)
     {
         if (_stdin == null || _stdout == null || _process is { HasExited: true })
@@ -88,13 +99,25 @@ public sealed class H264FfmpegEncoder : IDisposable
         {
             _stdin.Write(bgr24, 0, expected);
             _stdin.Flush();
+            _framesFed++;
         }
-        catch
+        catch (Exception ex)
         {
+            Console.WriteLine($"[H264] stdin write failed: {ex.Message}");
             return null;
         }
 
-        return ReadEncodedFrame();
+        var encoded = ReadEncodedFrame();
+        if (encoded == null || encoded.Length == 0)
+        {
+            _nullReads++;
+            MaybeLogStats();
+            return null;
+        }
+
+        _framesOut++;
+        MaybeLogStats();
+        return encoded;
     }
 
     public void Stop()
@@ -115,6 +138,15 @@ public sealed class H264FfmpegEncoder : IDisposable
         _stdout = null;
     }
 
+    private void MaybeLogStats()
+    {
+        long now = Environment.TickCount64;
+        if (now - _lastStatsUtc < 5000)
+            return;
+        _lastStatsUtc = now;
+        Console.WriteLine($"[H264] fed={_framesFed} out={_framesOut} null={_nullReads}");
+    }
+
     private byte[]? ReadEncodedFrame()
     {
         if (_stdout == null)
@@ -122,52 +154,34 @@ public sealed class H264FfmpegEncoder : IDisposable
 
         using var ms = new MemoryStream();
         var buf = new byte[65536];
-        long deadline = Environment.TickCount64 + 120;
+        // First frames need SPS/PPS/IDR; allow more time on startup.
+        int timeoutMs = _framesOut == 0 ? 500 : 150;
+        long deadline = Environment.TickCount64 + timeoutMs;
         bool gotData = false;
 
         while (Environment.TickCount64 < deadline)
         {
-            if (_stdout.CanRead && TryReadAvailable(buf, out int n) && n > 0)
+            try
             {
+                var readTask = _stdout.ReadAsync(buf.AsMemory(0, buf.Length));
+                if (!readTask.Wait(Math.Max(1, (int)(deadline - Environment.TickCount64))))
+                    break;
+
+                int n = readTask.Result;
+                if (n <= 0)
+                    break;
+
                 ms.Write(buf, 0, n);
                 gotData = true;
-                deadline = Environment.TickCount64 + 25;
-                continue;
+                deadline = Environment.TickCount64 + 30;
             }
-
-            if (gotData)
-                break;
-
-            Thread.Sleep(1);
-        }
-
-        return ms.Length > 0 ? ms.ToArray() : null;
-    }
-
-    private bool TryReadAvailable(byte[] buf, out int read)
-    {
-        read = 0;
-        if (_stdout == null)
-            return false;
-
-        try
-        {
-            if (_stdout is not { CanRead: true })
-                return false;
-
-            if (_process?.StandardOutput.BaseStream != null)
+            catch
             {
-                // StandardOutput.BaseStream doesn't expose DataAvailable on all platforms;
-                // blocking read with short timeout via poll pattern.
+                break;
             }
+        }
 
-            read = _stdout.Read(buf, 0, buf.Length);
-            return read > 0;
-        }
-        catch
-        {
-            return false;
-        }
+        return gotData && ms.Length > 0 ? ms.ToArray() : null;
     }
 
     private static string CultureInv(FormattableString s) => s.ToString(System.Globalization.CultureInfo.InvariantCulture);

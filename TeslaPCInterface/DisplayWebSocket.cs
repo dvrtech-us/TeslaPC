@@ -85,7 +85,7 @@ internal sealed class DisplayWebSocket
             }
 
             onClientConnected?.Invoke();
-            Console.WriteLine($"Display client connected: {clientId} ({renderer})");
+            Console.WriteLine($"Display client connected: {clientId} ({renderer} {outWidth}x{outHeight})");
 
             var recv = new byte[128];
             while (socket.State == WebSocketState.Open)

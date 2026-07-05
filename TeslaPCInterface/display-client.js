@@ -63,7 +63,17 @@
         canvas.style.display = "block";
 
         var offscreen = canvas.transferControlToOffscreen();
+        if (typeof global.VideoDecoder === "undefined") {
+            console.error("H264: VideoDecoder (WebCodecs) is not available in this browser");
+            return;
+        }
+
         h264Worker = new Worker("display-h264-worker.js");
+        h264Worker.onmessage = function (ev) {
+            if (ev.data && ev.data.error) {
+                console.error("H264 worker:", ev.data.error);
+            }
+        };
         h264Worker.postMessage({
             canvas: offscreen,
             displayWidth: displayWidth,
@@ -130,6 +140,7 @@
                 format = JSON.parse(ev.data);
                 displayWidth = format.width || displayWidth;
                 displayHeight = format.height || displayHeight;
+                console.log("Display format:", format);
                 if (format.renderer === "h264") {
                     ensureH264Worker();
                 } else {

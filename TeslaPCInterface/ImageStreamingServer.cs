@@ -87,8 +87,24 @@ namespace Streaming
         }
 
         /// <summary>Handles a display WebSocket client on <c>/ws/display</c>.</summary>
-        public Task HandleDisplayWebSocketAsync(HttpListenerContext context) =>
-            _displayWebSocket.HandleClientAsync(context, _lastOutWidth, _lastOutHeight, _fps, EnsureCaptureRunning);
+        public Task HandleDisplayWebSocketAsync(HttpListenerContext context)
+        {
+            var (w, h) = GetStreamOutputSize();
+            return _displayWebSocket.HandleClientAsync(context, w, h, _fps, EnsureCaptureRunning);
+        }
+
+        /// <summary>Estimated capture output size (used before the first frame is published).</summary>
+        private (int Width, int Height) GetStreamOutputSize()
+        {
+            if (_lastOutWidth > 1 && _lastOutHeight > 1)
+                return (_lastOutWidth, _lastOutHeight);
+
+            var screen = System.Windows.Forms.Screen.PrimaryScreen!.Bounds;
+            double scale = Math.Min(1.0, Math.Min((double)_maxWidth / screen.Width, (double)_maxHeight / screen.Height));
+            int w = Math.Max(1, (int)Math.Round(screen.Width * scale));
+            int h = Math.Max(1, (int)Math.Round(screen.Height * scale));
+            return (w, h);
+        }
 
         /// <summary>
         /// Gets or sets the interval in milliseconds (or the delay time) between
@@ -338,16 +354,22 @@ namespace Streaming
             _displayWebSocket.BroadcastFrame(pts, frameBytes, h264);
         }
 
+        /// <summary>Tightly packed BGR24 (width * height * 3) for ffmpeg rawvideo input.</summary>
         private static byte[] BitmapToBgr24(Bitmap bmp)
         {
             var rect = new Rectangle(0, 0, bmp.Width, bmp.Height);
             var data = bmp.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
             try
             {
-                int bytes = Math.Abs(data.Stride) * data.Height;
-                var bgr = new byte[bytes];
-                Marshal.Copy(data.Scan0, bgr, 0, bytes);
-                return bgr;
+                int width = bmp.Width;
+                int height = bmp.Height;
+                int stride = Math.Abs(data.Stride);
+                var packed = new byte[width * height * 3];
+                for (int y = 0; y < height; y++)
+                {
+                    Marshal.Copy(data.Scan0 + y * stride, packed, y * width * 3, width * 3);
+                }
+                return packed;
             }
             finally
             {
