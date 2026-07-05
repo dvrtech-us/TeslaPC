@@ -13,14 +13,18 @@
         <img id="streamImg" title="playback" alt="" />
         <div id="tapstart" class="screen-tap" role="button" tabindex="0" aria-label="Tap to connect">
             <div class="tap-inner">
-                <div class="big-ic">&#9658;</div>
+                <div class="big-ic play-icon" aria-hidden="true">
+                    <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" focusable="false">
+                        <polygon points="22,14 22,50 50,32" fill="currentColor" />
+                    </svg>
+                </div>
                 <div class="tap-title">Remote Desktop</div>
                 <div class="tap-sub">Tap to connect</div>
             </div>
         </div>
     </div>
     <div class="controlbar">
-        <button onclick="startAudioPlayback()" id="startPlayback" class="btn primary">&#9658; Start playback</button>
+        <button onclick="startAudioPlayback()" id="startPlayback" class="btn primary">Start playback</button>
         <input type="text" id="fakeKeyboard" class="btn input" placeholder="&#9000; Keyboard" autocomplete="off"
             autocorrect="off" autocapitalize="off" spellcheck="false" />
         <button class="btn" onclick="window.location.assign('/list.html')">&#128193; Files</button>
