@@ -8,7 +8,7 @@ and JS are inline; the only external module is `PCMPlayerProcessor.js` (loaded a
 
 1. The browser loads `/` (served as `index.html`). `#streamImg` has no `src` yet (black screen).
 2. The input WebSocket (`/ws/input`) opens on page load; mouse actions over the image are forwarded once frames arrive.
-3. The user clicks **Start playback** (user gesture): `startVideoStream()` sets `img.src` to `/stream` and opens `/ws/audio` so MJPEG and audio begin together. The button then reads **Restart playback** (both paths restart).
+3. The user taps the **screen overlay** (“Tap to connect”) or **Start playback** in the bar (user gesture): `startVideoStream()` sets `img.src` to `/stream` and opens `/ws/audio` so MJPEG and audio begin together. The button then reads **Restart playback** (both paths restart). The overlay covers the video area only; the control bar stays usable before connect.
 4. MJPEG renders via `<img>` only — **no `<video>`** (Tesla driving lockout). See the phased A/V sync plan in `documentation/planning/Streaming/2026-07-05-av-sync-phased-plan.md`.
 
 ## Technical Flow

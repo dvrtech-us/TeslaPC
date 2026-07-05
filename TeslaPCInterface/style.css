@@ -85,6 +85,19 @@ html, body {
     -webkit-user-drag: none;
     user-drag: none;
 }
+/* Tap-to-connect overlay (video area only; control bar stays reachable). */
+.screen-tap {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(11, 13, 17, .82);
+    backdrop-filter: blur(4px);
+    cursor: pointer;
+    touch-action: manipulation;
+}
 .controlbar {
     position: fixed;
     left: 0; right: 0; bottom: 0;

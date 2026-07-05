@@ -8,9 +8,16 @@
 
 <body>
 
-    <!-- MJPEG starts only after Start playback (phase 1 A/V session align; no <video> tag). -->
+    <!-- MJPEG starts only after tap / Start playback (phase 1 A/V session align; no <video> tag). -->
     <div class="screen">
         <img id="streamImg" title="playback" alt="" />
+        <div id="tapstart" class="screen-tap" role="button" tabindex="0" aria-label="Tap to connect">
+            <div class="tap-inner">
+                <div class="big-ic">&#9658;</div>
+                <div class="tap-title">Remote Desktop</div>
+                <div class="tap-sub">Tap to connect</div>
+            </div>
+        </div>
     </div>
     <div class="controlbar">
         <button onclick="startAudioPlayback()" id="startPlayback" class="btn primary">&#9658; Start playback</button>
@@ -50,6 +57,7 @@
         let useWorklet = true; // will be set to false if AudioWorklet fails
         let scheduledTime = 0; // for fallback buffer scheduling
         let audioConnecting = false;
+        let intentionalAudioClose = false;
 
         function setPlaybackButtonState(connecting, label) {
             var button = document.getElementById('startPlayback');
@@ -62,6 +70,17 @@
         function resetAudioConnection() {
             audioConnecting = false;
             setPlaybackButtonState(false, audioContext ? 'Restart playback' : 'Start playback');
+            showTapOverlay();
+        }
+
+        function hideTapOverlay() {
+            var o = document.getElementById('tapstart');
+            if (o) o.style.display = 'none';
+        }
+
+        function showTapOverlay() {
+            var o = document.getElementById('tapstart');
+            if (o) o.style.display = '';
         }
 
         // Connect MJPEG /stream in the same user gesture as audio (avoids seconds of video-ahead-of-audio).
@@ -78,7 +97,10 @@
             }
 
             if (audioContext != null) {
-                if (audioSocket) audioSocket.close();
+                if (audioSocket) {
+                    intentionalAudioClose = true;
+                    audioSocket.close();
+                }
                 if (audioContext) audioContext.close();
                 audioContext = null;
                 audioSocket = null;
@@ -90,6 +112,7 @@
 
             audioConnecting = true;
             setPlaybackButtonState(true, 'Connecting...');
+            hideTapOverlay();
 
             startVideoStream();
 
@@ -97,6 +120,10 @@
             audioSocket.binaryType = 'arraybuffer';
 
             audioSocket.onclose = function () {
+                if (intentionalAudioClose) {
+                    intentionalAudioClose = false;
+                    return;
+                }
                 resetAudioConnection();
             };
 
@@ -280,6 +307,18 @@
             scheduledTime += audioBuffer.duration;
         }
 
+
+        (function () {
+            var tap = document.getElementById('tapstart');
+            if (!tap) return;
+            function onTapConnect(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                startAudioPlayback();
+            }
+            tap.addEventListener('click', onTapConnect);
+            tap.addEventListener('touchstart', onTapConnect, { passive: false });
+        })();
 
         // Input WebSocket — same origin
         var mouseSocket = new WebSocket(getWsUrl('/ws/input'));
