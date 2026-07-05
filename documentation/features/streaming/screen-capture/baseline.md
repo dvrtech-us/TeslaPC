@@ -55,8 +55,13 @@ streaming. Update only when intended behavior changes.
   `scaledImage` via `BitmapToBgr24`.
 - NV12 conversion is centralized in `Bgr24ToNv12Converter`; `H264MediaFoundationEncoder` reuses
   one `_nv12Scratch` buffer per encoder session.
-- H264 baseline profile (`eAVEncH264VProfile_Base`) is used. Bitrate is clamped to
-  `1_500_000..12_000_000` bps by `H264MediaFoundationEncoder.EstimateBitrate`.
+- H264 baseline profile (`eAVEncH264VProfile_Base`) is used. Default GOP is one second
+  (`AppSettings.H264GopFrames(fps)` → `fps` when `TESLAPC_H264_GOP_FRAMES` is unset). Bitrate
+  defaults to `width * height * fps * 0.10` bps, clamped to `500_000..20_000_000`, with optional
+  `TESLAPC_H264_BITRATE` override.
+- H264 encoder low-latency `ICodecAPI` properties are set best-effort after `SetOutputType`.
+  A new H264 display WebSocket client triggers `RequestKeyframe()` so decode can start without
+  waiting for the next natural GOP IDR.
 - `H264MediaFoundationEncoder` must not marshal `MFT_OUTPUT_DATA_BUFFER[]` through .NET COM
   interop. `IMFTransform.ProcessOutput` receives an unmanaged `MFT_OUTPUT_DATA_BUFFER` pointer,
   and COM samples/events are released explicitly.

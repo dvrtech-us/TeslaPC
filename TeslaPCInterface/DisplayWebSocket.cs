@@ -86,6 +86,10 @@ internal sealed class DisplayWebSocket
             if (renderer == "h264")
             {
                 _needH264 = true;
+                lock (_h264Lock)
+                {
+                    _h264Encoder?.RequestKeyframe();
+                }
             }
             else
             {

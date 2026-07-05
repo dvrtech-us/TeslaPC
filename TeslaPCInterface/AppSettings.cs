@@ -22,8 +22,14 @@ public static class AppSettings
     public const string DisplayRendererKey = "TESLAPC_DISPLAY_RENDERER";
     public const string DisplayTransportKey = "TESLAPC_DISPLAY_TRANSPORT";
     public const string AudioBoostKey = "TESLAPC_AUDIO_BOOST";
+    public const string H264GopFramesKey = "TESLAPC_H264_GOP_FRAMES";
+    public const string H264BitrateKey = "TESLAPC_H264_BITRATE";
 
     public const string DefaultVideoRoot = @"C:\video\";
+    public const int MinH264GopFrames = 1;
+    public const int MaxH264GopFrames = 300;
+    public const int MinH264Bitrate = 500_000;
+    public const int MaxH264Bitrate = 20_000_000;
     public const int DefaultStreamHeight = 1080;
     public const string DefaultDisplayRenderer = "mjpeg";
     public const string DefaultDisplayTransport = "websocket";
@@ -61,6 +67,27 @@ public static class AppSettings
         {
             var v = (Get(DisplayTransportKey) ?? DefaultDisplayTransport).Trim().ToLowerInvariant();
             return v == "http" ? "http" : "websocket";
+        }
+    }
+
+    /// <summary>H264 GOP length in frames. Unset or invalid values default to one second at the stream FPS.</summary>
+    public static int H264GopFrames(int fps)
+    {
+        var v = Get(H264GopFramesKey);
+        if (int.TryParse(v, out var gop) && gop >= MinH264GopFrames && gop <= MaxH264GopFrames)
+            return gop;
+        return Math.Max(1, fps);
+    }
+
+    /// <summary>Optional H264 average bitrate override in bps. Returns null when unset/invalid.</summary>
+    public static int? H264BitrateOverride
+    {
+        get
+        {
+            var v = Get(H264BitrateKey);
+            if (int.TryParse(v, out var bps) && bps >= MinH264Bitrate && bps <= MaxH264Bitrate)
+                return bps;
+            return null;
         }
     }
 

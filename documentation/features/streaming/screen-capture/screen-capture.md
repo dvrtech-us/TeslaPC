@@ -106,12 +106,23 @@ display-control routes to force a fresh DXGI session after a desktop resolution 
 - Output type attributes:
   - `MF_MT_MAJOR_TYPE = MFMediaType_Video`
   - `MF_MT_SUBTYPE = MFVideoFormat_H264`
-  - `MF_MT_AVG_BITRATE = clamp(width * height * fps / 8, 1_500_000, 12_000_000)`
+  - `MF_MT_AVG_BITRATE` — `TESLAPC_H264_BITRATE` override, else
+    `clamp(width * height * fps * 0.10, 500_000, 20_000_000)`
   - `MF_MT_FRAME_RATE = fps/1`
   - `MF_MT_FRAME_SIZE = width/height`
   - `MF_MT_INTERLACE_MODE = MFVideoInterlace_Progressive`
   - `MF_MT_MPEG2_PROFILE = eAVEncH264VProfile_Base`
   - `MF_MT_PIXEL_ASPECT_RATIO = 1/1`
+  - `MF_MT_MAX_KEYFRAME_SPACING` — GOP duration in 100-ns units (default one second:
+    `gopFrames * 10_000_000 / fps`)
+- After `SetOutputType`, `ICodecAPI` low-latency tuning (best-effort; logs and continues on
+  unsupported properties):
+  - `CODECAPI_AVEncCommonLowLatency = true`
+  - `CODECAPI_AVLowLatencyMode = true`
+  - `CODECAPI_AVEncMPVDefaultBPictureCount = 0`
+  - `CODECAPI_AVEncMPVGOPSize` — `TESLAPC_H264_GOP_FRAMES`, else one second (`fps` frames)
+- `RequestKeyframe()` sets `CODECAPI_AVEncVideoForceKeyFrame` before the next `ProcessInput`.
+  `DisplayWebSocket` calls this when a new H264 display client connects.
 - Input type is `MFVideoFormat_NV12`. `Bgr24ToNv12Converter` performs BT.601 BGR/BGRA → NV12 in
   managed code (scalar 4-pixel unrolled loops; reusable `_nv12Scratch` buffer per encoder).
 - `EncodeFrame(byte[] bgr24)` and `EncodeBgra32Frame(IntPtr scan0, int stride)` both convert to
@@ -164,7 +175,10 @@ display-control routes to force a fresh DXGI session after a desktop resolution 
 | H264 input format | `MFVideoFormat_NV12` | `H264MediaFoundationEncoder.cs` |
 | H264 output format | `MFVideoFormat_H264` | `H264MediaFoundationEncoder.cs` |
 | H264 profile | `eAVEncH264VProfile_Base` (`66`) | `H264MediaFoundationEncoder.cs` |
-| H264 bitrate clamp | `1_500_000` to `12_000_000` bps | `H264MediaFoundationEncoder.cs` |
+| H264 GOP (default) | `fps` frames (~1 s) | `AppSettings.H264GopFrames`, `H264MediaFoundationEncoder.cs` |
+| H264 bitrate (default) | `width * height * fps * 0.10`, clamped `500_000`–`20_000_000` bps | `H264MediaFoundationEncoder.EstimateBitrate` |
+| H264 GOP override | `TESLAPC_H264_GOP_FRAMES` (`1`–`300`) | `AppSettings.cs` |
+| H264 bitrate override | `TESLAPC_H264_BITRATE` (`500_000`–`20_000_000` bps) | `AppSettings.cs` |
 | Scaling quality | `HighSpeed` / `Bilinear` / `SmoothingMode.None` | `ImageStreamingServer.cs` |
 | Max resolution (default) | `4320×1080` (width = 4× height), `30` FPS | Constructed in `TeslaPcService` from `AppSettings.StreamHeight` |
 | `AppSettings.DefaultStreamHeight` | `1080` | `TeslaPCInterface/AppSettings.cs` |

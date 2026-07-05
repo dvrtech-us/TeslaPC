@@ -39,6 +39,14 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
     private static readonly Guid MF_MT_INTERLACE_MODE = new("E2724BB8-E676-4806-B4B2-A8D6EFB44CCD");
     private static readonly Guid MF_MT_MPEG2_PROFILE = new("AD76A80B-2D5C-4E0B-B375-64E520137036");
     private static readonly Guid MF_MT_PIXEL_ASPECT_RATIO = new("C6376A1E-8D0A-4027-BE45-6D9A0AD39BB6");
+    private static readonly Guid MF_MT_MAX_KEYFRAME_SPACING = new("94BDCCD8-C018-40C5-A05D-8EB30EEF56D5");
+
+    private static readonly Guid IID_ICodecAPI = new("901DB4C7-31CE-41A2-85DC-8FA0BF41B6DA");
+    private static readonly Guid CODECAPI_AVEncCommonLowLatency = new("672F4E66-1C9C-45C9-A1A1-EE9BB2474F50");
+    private static readonly Guid CODECAPI_AVLowLatencyMode = new("9C27891A-ED7A-40E1-A10B-EBD8F9AA163C");
+    private static readonly Guid CODECAPI_AVEncMPVDefaultBPictureCount = new("8D390AAC-D3DE-495C-9D25-752523C37517");
+    private static readonly Guid CODECAPI_AVEncMPVGOPSize = new("A146E06A-C445-4844-8603-15E66C167189");
+    private static readonly Guid CODECAPI_AVEncVideoForceKeyFrame = new("762AA82F-6E13-45D6-976A-3BB07DC7A1B0");
 
     private static readonly Guid MFMediaType_Video = new("73646976-0000-0010-8000-00AA00389B71");
     private static readonly Guid MFVideoFormat_H264 = new("34363248-0000-0010-8000-00AA00389B71");
@@ -61,6 +69,7 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
     private int _framesOut;
     private int _nullOutputs;
     private long _lastStatsUtc = Environment.TickCount64;
+    private volatile bool _forceNextKeyframe;
 
     public static bool IsAvailable => OperatingSystem.IsWindows() && CanCreateEncoder();
 
@@ -95,16 +104,22 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
         if (_transform == null)
             throw new InvalidOperationException("Windows Media Foundation H264 encoder activation returned null.");
 
-        ConfigureOutputType(_transform, width, height, _fps);
+        int gopFrames = AppSettings.H264GopFrames(_fps);
+        int bitrate = EstimateBitrate(width, height, _fps);
+        ConfigureOutputType(_transform, width, height, _fps, gopFrames, bitrate);
         ConfigureInputType(_transform, width, height, _fps);
+        ConfigureLowLatency(_transform, gopFrames);
         Check(_transform.GetOutputStreamInfo(0, out _outputInfo), "IMFTransform.GetOutputStreamInfo");
 
         // The synchronous inbox encoder starts producing low-latency output after these notifications.
         _transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, IntPtr.Zero);
         _transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, IntPtr.Zero);
 
-        Console.WriteLine($"[H264] Native Media Foundation encoder started {_width}x{_height}@{_fps}");
+        Console.WriteLine($"[H264] Native Media Foundation encoder started {_width}x{_height}@{_fps} gop={gopFrames} bitrate={bitrate}");
     }
+
+    /// <summary>Requests an IDR access unit on the next fed frame.</summary>
+    public void RequestKeyframe() => _forceNextKeyframe = true;
 
     /// <summary>Feeds one tightly-packed BGR24 frame and returns complete Annex-B access units, if any.</summary>
     public List<byte[]> EncodeFrame(byte[] bgr24)
@@ -135,6 +150,12 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
         try
         {
             DrainAvailableOutput(encoded);
+
+            if (_forceNextKeyframe)
+            {
+                _forceNextKeyframe = false;
+                TryForceKeyframe(_transform);
+            }
 
             using var sample = CreateInputSample(_nv12Scratch);
             int hr = _transform.ProcessInput(0, sample.Value, 0);
@@ -240,21 +261,88 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
         }
     }
 
-    private static void ConfigureOutputType(IMFTransform transform, int width, int height, int fps)
+    private static void ConfigureOutputType(IMFTransform transform, int width, int height, int fps, int gopFrames, int bitrate)
     {
         Check(MFCreateMediaType(out var outputType), "MFCreateMediaType(output)");
         using var mediaType = new ComReleaser<IMFMediaType>(outputType);
 
         Check(SetGuid(outputType, MF_MT_MAJOR_TYPE, MFMediaType_Video), "output.SetGUID(MF_MT_MAJOR_TYPE)");
         Check(SetGuid(outputType, MF_MT_SUBTYPE, MFVideoFormat_H264), "output.SetGUID(MF_MT_SUBTYPE)");
-        Check(SetUInt32(outputType, MF_MT_AVG_BITRATE, EstimateBitrate(width, height, fps)), "output.SetUINT32(MF_MT_AVG_BITRATE)");
+        Check(SetUInt32(outputType, MF_MT_AVG_BITRATE, bitrate), "output.SetUINT32(MF_MT_AVG_BITRATE)");
         Check(SetUInt64(outputType, MF_MT_FRAME_RATE, PackRatio((uint)fps, 1)), "output.SetUINT64(MF_MT_FRAME_RATE)");
         Check(SetUInt64(outputType, MF_MT_FRAME_SIZE, PackRatio((uint)width, (uint)height)), "output.SetUINT64(MF_MT_FRAME_SIZE)");
         Check(SetUInt32(outputType, MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive), "output.SetUINT32(MF_MT_INTERLACE_MODE)");
         Check(SetUInt32(outputType, MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base), "output.SetUINT32(MF_MT_MPEG2_PROFILE)");
         Check(SetUInt64(outputType, MF_MT_PIXEL_ASPECT_RATIO, PackRatio(1, 1)), "output.SetUINT64(MF_MT_PIXEL_ASPECT_RATIO)");
+        int keyframeSpacingHns = (int)Math.Min(int.MaxValue, (long)gopFrames * 10_000_000L / Math.Max(1, fps));
+        Check(SetUInt32(outputType, MF_MT_MAX_KEYFRAME_SPACING, keyframeSpacingHns), "output.SetUINT32(MF_MT_MAX_KEYFRAME_SPACING)");
 
         Check(transform.SetOutputType(0, outputType, 0), "IMFTransform.SetOutputType");
+    }
+
+    private static void ConfigureLowLatency(IMFTransform transform, int gopFrames)
+    {
+        var codecApi = GetCodecApi(transform);
+        if (codecApi == null)
+        {
+            Console.WriteLine("[H264] ICodecAPI unavailable — using media-type GOP/bitrate only");
+            return;
+        }
+
+        TrySetCodecApiBool(codecApi, CODECAPI_AVEncCommonLowLatency, true);
+        TrySetCodecApiBool(codecApi, CODECAPI_AVLowLatencyMode, true);
+        TrySetCodecApiUInt(codecApi, CODECAPI_AVEncMPVDefaultBPictureCount, 0);
+        TrySetCodecApiUInt(codecApi, CODECAPI_AVEncMPVGOPSize, (uint)gopFrames);
+    }
+
+    private static void TryForceKeyframe(IMFTransform transform)
+    {
+        var codecApi = GetCodecApi(transform);
+        if (codecApi == null)
+            return;
+
+        TrySetCodecApiUInt(codecApi, CODECAPI_AVEncVideoForceKeyFrame, 1);
+    }
+
+    private static ICodecAPI? GetCodecApi(IMFTransform transform)
+    {
+        IntPtr unk = Marshal.GetIUnknownForObject(transform);
+        try
+        {
+            var iid = IID_ICodecAPI;
+            int hr = Marshal.QueryInterface(unk, in iid, out IntPtr codecPtr);
+            if (hr < 0 || codecPtr == IntPtr.Zero)
+                return null;
+
+            try
+            {
+                return (ICodecAPI)Marshal.GetObjectForIUnknown(codecPtr);
+            }
+            finally
+            {
+                Marshal.Release(codecPtr);
+            }
+        }
+        finally
+        {
+            Marshal.Release(unk);
+        }
+    }
+
+    private static void TrySetCodecApiBool(ICodecAPI codecApi, Guid api, bool value)
+    {
+        object boxed = value;
+        int hr = codecApi.SetValue(ref api, ref boxed);
+        if (hr < 0)
+            Console.WriteLine($"[H264] ICodecAPI.SetValue({api}) bool={value} failed: 0x{hr:X8}");
+    }
+
+    private static void TrySetCodecApiUInt(ICodecAPI codecApi, Guid api, uint value)
+    {
+        object boxed = value;
+        int hr = codecApi.SetValue(ref api, ref boxed);
+        if (hr < 0)
+            Console.WriteLine($"[H264] ICodecAPI.SetValue({api}) uint={value} failed: 0x{hr:X8}");
     }
 
     private static void ConfigureInputType(IMFTransform transform, int width, int height, int fps)
@@ -415,8 +503,12 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
 
     private static int EstimateBitrate(int width, int height, int fps)
     {
-        long bitsPerSecond = (long)width * height * Math.Max(1, fps) / 8;
-        return (int)Math.Clamp(bitsPerSecond, 1_500_000, 12_000_000);
+        if (AppSettings.H264BitrateOverride is int overrideBps)
+            return overrideBps;
+
+        // ~0.10 bits per pixel per frame for desktop screen content.
+        long bitsPerSecond = (long)(width * height * Math.Max(1, fps) * 0.10);
+        return (int)Math.Clamp(bitsPerSecond, AppSettings.MinH264Bitrate, AppSettings.MaxH264Bitrate);
     }
 
     private static ulong PackRatio(uint high, uint low) => ((ulong)high << 32) | low;
@@ -654,6 +746,20 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
         [PreserveSig] int RemoveAllBuffers();
         [PreserveSig] int GetTotalLength(out int pcbTotalLength);
         [PreserveSig] int CopyToBuffer([MarshalAs(UnmanagedType.Interface)] IMFMediaBuffer pBuffer);
+    }
+
+    [ComImport]
+    [Guid("901DB4C7-31CE-41A2-85DC-8FA0BF41B6DA")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface ICodecAPI
+    {
+        [PreserveSig] int IsSupported(ref Guid Api);
+        [PreserveSig] int IsModifiable(ref Guid Api);
+        [PreserveSig] int GetParameterRange(ref Guid Api, [MarshalAs(UnmanagedType.Struct)] out object ValueMin, [MarshalAs(UnmanagedType.Struct)] out object ValueMax, [MarshalAs(UnmanagedType.Struct)] out object SteppingDelta);
+        [PreserveSig] int GetParameterValues(ref Guid Api, out IntPtr ip, out int valuesCount);
+        [PreserveSig] int GetDefaultValue(ref Guid Api, [MarshalAs(UnmanagedType.Struct)] out object Value);
+        [PreserveSig] int GetValue(ref Guid Api, [MarshalAs(UnmanagedType.Struct)] out object Value);
+        [PreserveSig] int SetValue(ref Guid Api, ref object Value);
     }
 
     [ComImport]
