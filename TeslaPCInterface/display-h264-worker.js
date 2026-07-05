@@ -21,6 +21,8 @@ let syntheticTimestampUs = 0;
 const FRAME_DURATION_US = 33333;
 const MAX_RENDER_QUEUE_SIZE = 4;
 const MAX_DECODE_QUEUE_SIZE = 8;
+const MAX_SCHEDULED_QUEUE_SIZE = 90;
+const LATE_FRAME_SLACK_MS = 50;
 
 let positionLocation = null;
 let texcoordLocation = null;
@@ -168,11 +170,53 @@ function getDecodeQueueSize() {
   return decoder.decodeQueueSize;
 }
 
+function countOverdueFrames(now) {
+  let count = 0;
+  for (let index = 0; index < pendingFrames.length; index += 1) {
+    if (pendingFrames[index].playAtMs <= now - LATE_FRAME_SLACK_MS) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function isDecodeBacklogged() {
-  return (
-    pendingFrames.length > MAX_RENDER_QUEUE_SIZE ||
-    getDecodeQueueSize() > MAX_DECODE_QUEUE_SIZE
-  );
+  if (getDecodeQueueSize() > MAX_DECODE_QUEUE_SIZE) {
+    return true;
+  }
+  if (!usePtsScheduling) {
+    return pendingFrames.length > MAX_RENDER_QUEUE_SIZE;
+  }
+  return countOverdueFrames(Date.now()) > MAX_RENDER_QUEUE_SIZE;
+}
+
+function trimScheduledQueue() {
+  if (!usePtsScheduling) {
+    if (pendingFrames.length > MAX_RENDER_QUEUE_SIZE + 1) {
+      while (pendingFrames.length > 1) {
+        const stale = pendingFrames.shift();
+        if (stale.frame && stale.frame.close) {
+          stale.frame.close();
+        }
+      }
+    }
+    return;
+  }
+
+  const now = Date.now();
+  while (pendingFrames.length > 1 && pendingFrames[0].playAtMs <= now - LATE_FRAME_SLACK_MS) {
+    const stale = pendingFrames.shift();
+    if (stale.frame && stale.frame.close) {
+      stale.frame.close();
+    }
+  }
+
+  while (pendingFrames.length > MAX_SCHEDULED_QUEUE_SIZE) {
+    const stale = pendingFrames.shift();
+    if (stale.frame && stale.frame.close) {
+      stale.frame.close();
+    }
+  }
 }
 
 function scheduleRender() {
@@ -535,14 +579,7 @@ self.onmessage = function (event) {
           : Date.now();
 
         pendingFrames.push({ frame: frame, playAtMs: playAtMs });
-        if (pendingFrames.length > MAX_RENDER_QUEUE_SIZE + 1) {
-          while (pendingFrames.length > 1) {
-            const stale = pendingFrames.shift();
-            if (stale.frame && stale.frame.close) {
-              stale.frame.close();
-            }
-          }
-        }
+        trimScheduledQueue();
         scheduleRender();
       },
       error: (error) => {
