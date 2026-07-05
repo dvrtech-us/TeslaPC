@@ -31,13 +31,44 @@ function toSafeNumber(value, fallback) {
   return Math.max(1, Math.round(fallback));
 }
 
-function buildDecoderConfig(spsData) {
-  if (!spsData || spsData.length < 8) {
+function getNalPayloadOffset(nal) {
+  if (!nal || nal.length < 4) {
+    return 0;
+  }
+  if (
+    nal.length >= 4 &&
+    nal[0] === 0x00 &&
+    nal[1] === 0x00 &&
+    nal[2] === 0x00 &&
+    nal[3] === 0x01
+  ) {
+    return 4;
+  }
+  if (nal.length >= 3 && nal[0] === 0x00 && nal[1] === 0x00 && nal[2] === 0x01) {
+    return 3;
+  }
+  return 0;
+}
+
+function findSpsNal(data) {
+  const units = splitNalUnits(data);
+  for (let index = 0; index < units.length; index += 1) {
+    if (getNalType(units[index]) === 7) {
+      return units[index];
+    }
+  }
+  return null;
+}
+
+function buildDecoderConfig(parameterSets) {
+  const spsData = findSpsNal(parameterSets);
+  const offset = getNalPayloadOffset(spsData);
+  if (!spsData || spsData.length < offset + 4) {
     return null;
   }
 
   let codec = "avc1.";
-  for (let index = 5; index < 8; index += 1) {
+  for (let index = offset + 1; index < offset + 4; index += 1) {
     let hex = spsData[index].toString(16);
     if (hex.length < 2) {
       hex = "0" + hex;
@@ -233,18 +264,7 @@ function getNalType(nal) {
     return -1;
   }
 
-  let offset = 0;
-  if (
-    nal.length >= 4 &&
-    nal[0] === 0x00 &&
-    nal[1] === 0x00 &&
-    nal[2] === 0x00 &&
-    nal[3] === 0x01
-  ) {
-    offset = 4;
-  } else if (nal.length >= 3 && nal[0] === 0x00 && nal[1] === 0x00 && nal[2] === 0x01) {
-    offset = 3;
-  }
+  let offset = getNalPayloadOffset(nal);
 
   if (offset >= nal.length) {
     return -1;
@@ -260,7 +280,7 @@ function appendByteArray(left, right) {
   return merged;
 }
 
-function decodeEncodedNal(nal, isKey) {
+function decodeAccessUnit(accessUnit, isKey) {
   if (!decoder || decoder.state !== "configured") {
     return;
   }
@@ -274,16 +294,11 @@ function decodeEncodedNal(nal, isKey) {
     return;
   }
 
-  let data = nal;
-  if (isKey && spsPps) {
-    data = appendByteArray(spsPps, nal);
-  }
-
   const chunk = new EncodedVideoChunk({
     type: isKey ? "key" : "delta",
     timestamp: nextTimestampUs,
     duration: FRAME_DURATION_US,
-    data: data,
+    data: accessUnit,
   });
   nextTimestampUs += FRAME_DURATION_US;
 
@@ -300,34 +315,54 @@ function decodeEncodedNal(nal, isKey) {
   }
 }
 
-function handleNal(nal) {
-  const nalType = getNalType(nal);
-  if (nalType === 7) {
-    spsPps = nal;
-    configureDecoderFromSpsPps();
-    return;
-  }
-
-  if (nalType === 8) {
-    spsPps = spsPps ? appendByteArray(spsPps, nal) : nal;
-    return;
-  }
-
-  if (nalType === 5) {
-    decodeEncodedNal(nal, true);
-    return;
-  }
-
-  if (nalType === 1) {
-    decodeEncodedNal(nal, false);
-  }
-}
-
 function handleEncodedData(data) {
-  const units = splitNalUnits(data);
+  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+  const units = splitNalUnits(bytes);
+  let containsParameterSets = false;
+  let containsVcl = false;
+  let isKey = false;
+
   for (let index = 0; index < units.length; index += 1) {
-    handleNal(units[index]);
+    const nal = units[index];
+    const nalType = getNalType(nal);
+
+    if (nalType === 7) {
+      spsPps = nal;
+      containsParameterSets = true;
+      continue;
+    }
+
+    if (nalType === 8) {
+      spsPps = spsPps ? appendByteArray(spsPps, nal) : nal;
+      containsParameterSets = true;
+      continue;
+    }
+
+    if (nalType === 5) {
+      isKey = true;
+      containsVcl = true;
+      continue;
+    }
+
+    if (nalType === 1) {
+      containsVcl = true;
+    }
   }
+
+  if (containsParameterSets) {
+    configureDecoderFromSpsPps();
+  }
+
+  if (!containsVcl) {
+    return;
+  }
+
+  let accessUnit = bytes;
+  if (isKey && spsPps && !containsParameterSets) {
+    accessUnit = appendByteArray(spsPps, bytes);
+  }
+
+  decodeAccessUnit(accessUnit, isKey);
 }
 
 function initializeGL(glContext) {

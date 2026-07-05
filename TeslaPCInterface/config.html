@@ -50,7 +50,7 @@
                 </div>
                 <input type="hidden" name="displayRenderer" value="mjpeg" />
                 <input type="hidden" name="displayTransport" value="websocket" />
-                <span class="fhint" id="h264Hint">MJPEG works everywhere. H264 uses WebCodecs on the client and ffmpeg on the PC (lower bandwidth).</span>
+                <span class="fhint" id="h264Hint">MJPEG works everywhere. H264 uses WebCodecs on the client and native Windows Media Foundation on the PC (lower bandwidth).</span>
             </div>
 
             <div class="field">
@@ -129,7 +129,7 @@
                 if (c.streamHeight) setStreamHeight(nearestRes(c.streamHeight));
                 if (c.displayRenderer) setDisplayRenderer(c.displayRenderer);
                 if (c.h264Available === false)
-                    document.getElementById('h264Hint').textContent = 'H264 unavailable — install ffmpeg (TESLAPC_FFMPEG) on the PC.';
+                    document.getElementById('h264Hint').textContent = 'H264 unavailable — native Windows Media Foundation encoder was not found on the PC.';
                 document.getElementById('verFooter').textContent = c.version ? ('TeslaPC v' + c.version) : '';
                 document.getElementById('cfState').textContent = c.cfTokenSet
                     ? 'A token is saved. Leave blank to keep it, or type a new one to replace it.'

@@ -101,8 +101,8 @@ namespace Streaming
 
             var screen = System.Windows.Forms.Screen.PrimaryScreen!.Bounds;
             double scale = Math.Min(1.0, Math.Min((double)_maxWidth / screen.Width, (double)_maxHeight / screen.Height));
-            int w = Math.Max(1, (int)Math.Round(screen.Width * scale));
-            int h = Math.Max(1, (int)Math.Round(screen.Height * scale));
+            int w = MakeEven(Math.Max(1, (int)Math.Round(screen.Width * scale)));
+            int h = MakeEven(Math.Max(1, (int)Math.Round(screen.Height * scale)));
             return (w, h);
         }
 
@@ -229,6 +229,7 @@ namespace Streaming
             }
             finally
             {
+                _displayWebSocket.StopH264Encoder();
                 lock (_frameLock)
                 {
                     _captureThread = null;
@@ -256,12 +257,11 @@ namespace Streaming
             // Scale uniformly to fit within the cap box (preserves aspect ratio; never upscales),
             // so the stream always matches the screen's shape regardless of its aspect ratio.
             double scale = Math.Min(1.0, Math.Min((double)_maxWidth / screenSize.Width, (double)_maxHeight / screenSize.Height));
-            int outWidth = Math.Max(1, (int)Math.Round(screenSize.Width * scale));
-            int outHeight = Math.Max(1, (int)Math.Round(screenSize.Height * scale));
+            int outWidth = MakeEven(Math.Max(1, (int)Math.Round(screenSize.Width * scale)));
+            int outHeight = MakeEven(Math.Max(1, (int)Math.Round(screenSize.Height * scale)));
             _lastOutWidth = outWidth;
             _lastOutHeight = outHeight;
             bool needsResize = outWidth != screenSize.Width || outHeight != screenSize.Height;
-            bool needH264 = _displayWebSocket.NeedH264;
 
             using Bitmap srcImage = new(screenSize.Width, screenSize.Height, PixelFormat.Format32bppArgb);
             using Graphics? srcGraphics = useDxgi ? null : Graphics.FromImage(srcImage);
@@ -318,13 +318,18 @@ namespace Streaming
                         srcImage.Save(ms, jpegCodec, encoderParameters);
                     }
 
-                    byte[]? h264 = null;
+                    List<byte[]>? h264 = null;
+                    bool needH264 = _displayWebSocket.NeedH264;
                     if (needH264)
                     {
                         byte[] bgr = needsResize
                             ? BitmapToBgr24(scaledImage!)
                             : BitmapToBgr24From32bpp(srcImage, outWidth, outHeight);
                         h264 = _displayWebSocket.EncodeH264(bgr, outWidth, outHeight, _fps);
+                    }
+                    else
+                    {
+                        _displayWebSocket.StopH264Encoder();
                     }
 
                     PublishFrame(ms, h264);
@@ -339,7 +344,7 @@ namespace Streaming
             return false;
         }
 
-        private void PublishFrame(MemoryStream jpegStream, byte[]? h264)
+        private void PublishFrame(MemoryStream jpegStream, IReadOnlyList<byte[]>? h264)
         {
             byte[] frameBytes = jpegStream.ToArray();
             long pts = _timing.HostPtsUs;
@@ -354,7 +359,9 @@ namespace Streaming
             _displayWebSocket.BroadcastFrame(pts, frameBytes, h264);
         }
 
-        /// <summary>Tightly packed BGR24 (width * height * 3) for ffmpeg rawvideo input.</summary>
+        private static int MakeEven(int value) => Math.Max(2, value & ~1);
+
+        /// <summary>Tightly packed BGR24 (width * height * 3) for native H264/NV12 conversion.</summary>
         private static byte[] BitmapToBgr24(Bitmap bmp)
         {
             var rect = new Rectangle(0, 0, bmp.Width, bmp.Height);

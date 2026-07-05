@@ -1,14 +1,20 @@
-# Screen Capture & MJPEG Streaming
+# Screen Capture & Display Streaming
 
-Captures the primary monitor and streams it to browsers as MJPEG over the `/stream` route.
-A single shared capture loop feeds all connected clients. Capture prefers DXGI Desktop
-Duplication (GPU) and falls back to GDI `CopyFromScreen`.
+Captures the primary monitor and streams it to browsers as MJPEG or H264. MJPEG is available
+over the legacy `/stream` HTTP route and the `/ws/display` WebSocket route. H264 is available
+only over `/ws/display` and is encoded by the native Windows Media Foundation H.264 encoder
+MFT (`mfh264enc.dll`). A single shared capture loop feeds all connected clients. Capture
+prefers DXGI Desktop Duplication (GPU) and falls back to GDI `CopyFromScreen`.
 
 ## User Flow
 
-1. The browser loads `index.html`, which contains `<img src="/stream">`.
-2. The browser opens the MJPEG stream; the server begins (or joins) the shared capture loop.
-3. Each captured frame is JPEG-encoded once and pushed to every connected client.
+1. The browser loads `index.html`, which contains `#streamImg` for MJPEG and `#streamCanvas`
+   for H264.
+2. On tap-to-connect, the browser reads `/config` and opens either the legacy `/stream` route
+   (`displayTransport=http`) or `/ws/display?renderer=mjpeg|h264` (`displayTransport=websocket`).
+3. Each captured frame is JPEG-encoded once for MJPEG clients. When at least one H264 client is
+   connected, the same BGR24 frame is converted to NV12 and encoded by
+   `H264MediaFoundationEncoder`.
 4. When the last client disconnects, the capture loop stops and releases its resources.
 5. The Client can select a stream resolution (480p / 720p / 1080p) from a dropdown in the
    main screen or the Settings page. Changes apply immediately without a stream reconnect.
@@ -22,7 +28,20 @@ Duplication (GPU) and falls back to GDI `CopyFromScreen`.
 3. A `MjpegWriter` is created with boundary `"boundary"`; `WriteHeader()` is called **synchronously on the request thread** (prevents http.sys 503).
 4. `ThreadPool.QueueUserWorkItem(StreamToClient)` runs this client's send loop.
 
-### Shared capture loop (`CaptureLoop` → `RunCaptureSession`)
+### WebSocket display entry (`ImageStreamingServer.HandleDisplayWebSocketAsync`, `DisplayWebSocket.cs`)
+
+1. `GetStreamOutputSize()` returns the current even-width/even-height output size (estimated
+   from the primary display before the first frame).
+2. `DisplayWebSocket.HandleClientAsync` accepts `/ws/display`, reads the `renderer` query
+   parameter, and sends a JSON format message:
+   `{ type:"format", formatVersion:2, renderer, width, height, fps, streamEpochUs, hostClockHz }`.
+3. `renderer=h264` is accepted only when `H264MediaFoundationEncoder.IsAvailable` is true;
+   otherwise the server logs a fallback and negotiates `mjpeg`.
+4. Binary display messages have an 8-byte little-endian host PTS prefix followed by either a
+   JPEG frame or one complete Annex-B H264 access unit.
+5. `DisplayWebSocket.NeedH264` becomes true while any connected display client negotiated H264.
+
+### Shared capture loop (`CaptureLoop` -> `RunCaptureSession`)
 
 1. Snapshot `_restartEpoch` and the current `MaxWidth`/`MaxHeight` cap.
 2. `using var dxgiCapture = new DxgiScreenCapture()`; check `IsAvailable`.
@@ -32,13 +51,20 @@ Duplication (GPU) and falls back to GDI `CopyFromScreen`.
    preserving aspect ratio and never upscaling:
    `scale = min(1, MaxWidth/screenW, MaxHeight/screenH)`. So a 1080p screen with `MaxHeight=720`
    streams 1280×720; the same screen with `MaxHeight=1080` streams at native 1920×1080; a 16:10
-   screen at 1200p with `MaxHeight=1080` streams 1728×1080.
+   screen at 1200p with `MaxHeight=1080` streams 1728×1080. Width and height are rounded down
+   to even values via `MakeEven` because NV12/H264 requires 4:2:0-compatible dimensions.
 5. Allocate `srcImage` (`Format32bppArgb`) and, if resizing, `scaledImage` (`Format24bppRgb`).
 6. Resolve the JPEG codec (`GetJpegCodec`) and set `Encoder.Quality = 60L`.
 7. Per frame:
    - `dxgiCapture.TryCapture(srcImage)` or `srcGraphics.CopyFromScreen(...)`.
    - If resizing: `DrawImage` into `scaledImage`, then `scaledImage.Save(ms, jpegCodec, params)`. Else `srcImage.Save(...)`.
-   - `PublishFrame(ms)`: copy bytes to `_currentFrame`, increment `_frameNumber`, `Monitor.PulseAll(_frameLock)`.
+   - If `DisplayWebSocket.NeedH264` is true for this tick, convert the frame to tightly-packed
+     BGR24 (`BitmapToBgr24` / `BitmapToBgr24From32bpp`) and call
+     `DisplayWebSocket.EncodeH264`. If no H264 clients are connected, call
+     `DisplayWebSocket.StopH264Encoder()` so the native encoder is disposed.
+   - `PublishFrame(ms, h264Frames)`: copy JPEG bytes to `_currentFrame`, increment
+     `_frameNumber`, `Monitor.PulseAll(_frameLock)`, then broadcast JPEG or H264 payloads to
+     display WebSocket clients.
    - Pace: if `elapsed < Interval`, `Thread.Sleep(Interval - elapsed)` where `Interval = 1000 / fps`.
 8. `RunCaptureSession` returns `true` (restart) when either:
    - `_restartEpoch` has changed (bumped by `SetMaxResolution` or `RestartCapture`), **or**
@@ -66,6 +92,29 @@ display-control routes to force a fresh DXGI session after a desktop resolution 
 - If a newer frame arrived while sending, the intermediate frame is **skipped** (slow clients always get the latest image).
 - Sends via `MjpegWriter.Write(frame)`.
 
+### Native H264 encoding (`H264MediaFoundationEncoder.cs`)
+
+- `H264MediaFoundationEncoder.IsAvailable` returns true only on Windows when
+  `CoCreateInstance(CLSID_CMSH264EncoderMFT)` succeeds.
+- `Start(width, height, fps)` initializes COM/MF on the capture thread, creates the native
+  H264 encoder MFT, sets the **output type before input type**, and starts streaming messages.
+- Output type attributes:
+  - `MF_MT_MAJOR_TYPE = MFMediaType_Video`
+  - `MF_MT_SUBTYPE = MFVideoFormat_H264`
+  - `MF_MT_AVG_BITRATE = clamp(width * height * fps / 8, 1_500_000, 12_000_000)`
+  - `MF_MT_FRAME_RATE = fps/1`
+  - `MF_MT_FRAME_SIZE = width/height`
+  - `MF_MT_INTERLACE_MODE = MFVideoInterlace_Progressive`
+  - `MF_MT_MPEG2_PROFILE = eAVEncH264VProfile_Base`
+  - `MF_MT_PIXEL_ASPECT_RATIO = 1/1`
+- Input type is `MFVideoFormat_NV12`. Each BGR24 frame is converted to NV12 in managed code.
+- `EncodeFrame(byte[] bgr24)` drains any pending output, calls `ProcessInput`, then drains
+  output again. Each returned `byte[]` is one complete `MFVideoFormat_H264` sample/access unit
+  with start codes and interleaved SPS/PPS.
+- `Stop()` sends end-of-stream/end-streaming messages, releases COM objects, calls
+  `MFShutdown()`, and uninitializes COM only when this instance initialized COM on the same
+  thread.
+
 ### DXGI capture (`DxgiScreenCapture.cs`)
 
 - Public API: `IsAvailable` (bool), `CaptureSize` (Size), `TryCapture(Bitmap)` (bool), `Dispose()`.
@@ -83,9 +132,11 @@ display-control routes to force a fresh DXGI session after a desktop resolution 
 
 | Class | File | Responsibility |
 |-------|------|----------------|
-| `ImageStreamingServer` | `TeslaPCInterface/ImageStreamingServer.cs` | Shared capture loop, frame buffer, per-client send threads, JPEG encoding; mutable `MaxWidth`/`MaxHeight`; `SetMaxResolution`/`RestartCapture` |
+| `ImageStreamingServer` | `TeslaPCInterface/ImageStreamingServer.cs` | Shared capture loop, frame buffer, HTTP MJPEG send threads, WebSocket display publishing, JPEG encoding, BGR24 extraction; mutable `MaxWidth`/`MaxHeight`; `SetMaxResolution`/`RestartCapture` |
 | `DxgiScreenCapture` | `TeslaPCInterface/DxgiScreenCapture.cs` | DXGI Desktop Duplication capture; signals unavailability for GDI fallback |
 | `MjpegWriter` | `TeslaPCInterface/MjpegWriter.cs` | multipart/x-mixed-replace header + per-frame boundary framing |
+| `DisplayWebSocket` | `TeslaPCInterface/DisplayWebSocket.cs` | `/ws/display` negotiation, PTS-prefixed frame broadcast, H264 client tracking, native encoder lifetime |
+| `H264MediaFoundationEncoder` | `TeslaPCInterface/H264MediaFoundationEncoder.cs` | Native Windows Media Foundation H264 encoder wrapper; BGR24->NV12 conversion; complete access-unit output |
 
 ## Constants
 
@@ -98,6 +149,10 @@ display-control routes to force a fresh DXGI session after a desktop resolution 
 | Boundary string | `"boundary"` | `ImageStreamingServer.cs` |
 | Source pixel format | `Format32bppArgb` | `ImageStreamingServer.cs` |
 | Scaled pixel format | `Format24bppRgb` | `ImageStreamingServer.cs` |
+| H264 input format | `MFVideoFormat_NV12` | `H264MediaFoundationEncoder.cs` |
+| H264 output format | `MFVideoFormat_H264` | `H264MediaFoundationEncoder.cs` |
+| H264 profile | `eAVEncH264VProfile_Base` (`66`) | `H264MediaFoundationEncoder.cs` |
+| H264 bitrate clamp | `1_500_000` to `12_000_000` bps | `H264MediaFoundationEncoder.cs` |
 | Scaling quality | `HighSpeed` / `Bilinear` / `SmoothingMode.None` | `ImageStreamingServer.cs` |
 | Max resolution (default) | `4320×1080` (width = 4× height), `30` FPS | Constructed in `TeslaPcService` from `AppSettings.StreamHeight` |
 | `AppSettings.DefaultStreamHeight` | `1080` | `TeslaPCInterface/AppSettings.cs` |
@@ -108,17 +163,22 @@ display-control routes to force a fresh DXGI session after a desktop resolution 
 | Variable | `AppSettings` constant | Default | Apply timing |
 |----------|----------------------|---------|--------------|
 | `TESLAPC_STREAM_HEIGHT` | `StreamHeightKey` | `1080` | Next capture-session restart (immediate if the server restarts the session) |
+| `TESLAPC_DISPLAY_RENDERER` | `DisplayRendererKey` | `mjpeg` | Next browser display connection |
+| `TESLAPC_DISPLAY_TRANSPORT` | `DisplayTransportKey` | `websocket` | Next browser display connection |
 
 ## Routes and Access Control
 
 | Route | Protocol | Auth | Handler |
 |-------|----------|------|---------|
 | `/stream` | HTTP/HTTPS | none | `ImageStreamingServer.HandleStreamRequest` |
+| `/ws/display` | WebSocket | none | `ImageStreamingServer.HandleDisplayWebSocketAsync` / `DisplayWebSocket.HandleClientAsync` |
 
 ## Integration Points
 
-- Invoked by [web-server](../../server/web-server/web-server.md) routing for `/stream`.
-- Consumed by [web-ui](../../client/web-ui/web-ui.md) via a plain `<img>` tag.
+- Invoked by [web-server](../../server/web-server/web-server.md) routing for `/stream` and
+  `/ws/display`.
+- Consumed by [web-ui](../../client/web-ui/web-ui.md) via `<img>` (MJPEG) or
+  `<canvas>` + WebCodecs worker (H264).
 - Max-resolution cap is readable via `/config` (`streamHeight` field) and writable via
   `POST /config` (`streamHeight`), as documented in
   [configuration](../../app/configuration/configuration.md).

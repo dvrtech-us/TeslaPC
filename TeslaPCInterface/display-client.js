@@ -59,19 +59,27 @@
             return;
         }
 
+        if (typeof global.VideoDecoder === "undefined") {
+            var unavailable = "H264: VideoDecoder (WebCodecs) is not available in this browser";
+            console.error(unavailable);
+            if (global.__teslaPcDebug && global.__teslaPcDebug.errors) {
+                global.__teslaPcDebug.errors.push(unavailable);
+            }
+            return;
+        }
+
         img.style.display = "none";
         canvas.style.display = "block";
 
         var offscreen = canvas.transferControlToOffscreen();
-        if (typeof global.VideoDecoder === "undefined") {
-            console.error("H264: VideoDecoder (WebCodecs) is not available in this browser");
-            return;
-        }
 
         h264Worker = new Worker("display-h264-worker.js");
         h264Worker.onmessage = function (ev) {
             if (ev.data && ev.data.error) {
                 console.error("H264 worker:", ev.data.error);
+                if (global.__teslaPcDebug && global.__teslaPcDebug.errors) {
+                    global.__teslaPcDebug.errors.push("H264 worker: " + ev.data.error);
+                }
             }
         };
         h264Worker.postMessage({

@@ -283,7 +283,7 @@ public class WebServer
             streamHeight = _imageStreamer.MaxHeight,
             displayRenderer = AppSettings.DisplayRenderer,
             displayTransport = AppSettings.DisplayTransport,
-            h264Available = new H264FfmpegEncoder().IsAvailable,
+            h264Available = H264MediaFoundationEncoder.IsAvailable,
             version = AppSettings.Version,
             cfTokenSet = !string.IsNullOrWhiteSpace(AppSettings.Get(AppSettings.CloudflareTokenKey))
         };

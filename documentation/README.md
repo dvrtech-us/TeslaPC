@@ -19,12 +19,12 @@ Each feature has its own directory under `features/<module>/<feature-name>/` con
 |--------|---------|---------|----------------|
 | server | [web-server](features/server/web-server/web-server.md) | Unified HTTP/HTTPS listener with path-based routing and startup orchestration | `WebServer.cs`, `Program.cs` |
 | server | [input-control](features/server/input-control/input-control.md) | Mouse (Win32 P/Invoke) and keyboard (SendKeys) over the `/ws/input` WebSocket | `WebServer.cs`, `Program.cs` |
-| streaming | [screen-capture](features/streaming/screen-capture/screen-capture.md) | MJPEG screen streaming with DXGI Desktop Duplication and GDI fallback | `ImageStreamingServer.cs`, `DxgiScreenCapture.cs`, `MjpegWriter.cs` |
+| streaming | [screen-capture](features/streaming/screen-capture/screen-capture.md) | MJPEG/H264 display streaming with DXGI Desktop Duplication, GDI fallback, and native Media Foundation H264 | `ImageStreamingServer.cs`, `DxgiScreenCapture.cs`, `MjpegWriter.cs`, `DisplayWebSocket.cs`, `H264MediaFoundationEncoder.cs` |
 | streaming | [audio-capture](features/streaming/audio-capture/audio-capture.md) | WASAPI loopback system-audio streaming over `/ws/audio` | `AudioStreamingServer.cs`, `PCMPlayerProcessor.js` |
 | streaming | [display-control](features/streaming/display-control/display-control.md) | Browser-driven Windows display-resolution control; "Fit screen" aspect-match and explicit set via `/display/*` | `DisplayManager.cs`, `WebServer.cs` |
 | app | [control-panel](features/app/control-panel/control-panel.md) | WinForms desktop control panel (Dashboard + Log, status, large controls) | `Program.cs`, `MainForm.cs`, `TeslaPcService.cs` |
 | app | [configuration](features/app/configuration/configuration.md) | In-app settings editor (WinForms Config tab + `/config.html`); persists to `%ProgramData%\TeslaPC\.env` | `AppSettings.cs`, `WebServer.cs`, `MainForm.cs`, `config.html` |
-| client | [web-ui](features/client/web-ui/web-ui.md) | Single-page browser client (video, audio, input) | `index.html`, `PCMPlayerProcessor.js` |
+| client | [web-ui](features/client/web-ui/web-ui.md) | Single-page browser client (MJPEG/H264 display, audio, input) | `index.html`, `display-client.js`, `display-h264-worker.js`, `PCMPlayerProcessor.js` |
 | media | [file-browser-vlc](features/media/file-browser-vlc/file-browser-vlc.md) | Host file browser (list view) with watched/resume badges; in-app ffmpeg player | `WebServer.cs`, `list.html`, `play.html` |
 | media | [media-library](features/media/media-library/media-library.md) | SQLite playback-progress store: resume, watched flag, play count | `MediaLibrary.cs`, `MediaStreamer.cs` |
 | infrastructure | [tesla-browser-bypass](features/infrastructure/tesla-browser-bypass/tesla-browser-bypass.md) | CGNAT secondary IP + portproxy so the Tesla in-car browser can connect | `TeslaBrowserBypass.cs` |

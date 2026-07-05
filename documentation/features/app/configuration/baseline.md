@@ -4,8 +4,9 @@ Known-good invariants. Update only when intended behavior changes.
 
 ## Invariants
 
-- The six settings (`TESLAPC_HTTPS_HOST`, `TESLAPC_CF_TOKEN`, `TESLAPC_ACME_EMAIL`,
-  `TESLAPC_VIDEO_ROOT`, `TESLAPC_LOG_LEVEL`, `TESLAPC_STREAM_HEIGHT`) are persisted to
+- The eight settings (`TESLAPC_HTTPS_HOST`, `TESLAPC_CF_TOKEN`, `TESLAPC_ACME_EMAIL`,
+  `TESLAPC_VIDEO_ROOT`, `TESLAPC_LOG_LEVEL`, `TESLAPC_STREAM_HEIGHT`,
+  `TESLAPC_DISPLAY_RENDERER`, `TESLAPC_DISPLAY_TRANSPORT`) are persisted to
   `%ProgramData%\TeslaPC\.env` by `AppSettings.Save`.
 - `Program.LoadDotEnv` loads the app-directory `.env` first, then `%ProgramData%\TeslaPC\.env`.
   **Existing environment variables win** — neither file overwrites a key already set in the
@@ -53,6 +54,16 @@ Known-good invariants. Update only when intended behavior changes.
 - Stream resolution (480p / 720p / 1080p) is chosen via touch button pickers in `index.html`
   (`#resBtn` opens `#resPicker`) and `config.html` (`#resChoices`); both post `streamHeight` to
   `POST /config`. Native `<select>` elements are not used (Tesla browser shows blank popups).
+- `GET /config` includes `displayRenderer` (`mjpeg` or `h264`), `displayTransport`
+  (`websocket` or `http`), and `h264Available` (bool from
+  `H264MediaFoundationEncoder.IsAvailable`). `POST /config` accepts and persists only valid
+  renderer/transport values.
+- `AppSettings.DisplayRenderer` returns `h264` only when `TESLAPC_DISPLAY_RENDERER` is exactly
+  `h264` after trim/lowercase; otherwise it returns `mjpeg`.
+- `AppSettings.DisplayTransport` returns `http` only when `TESLAPC_DISPLAY_TRANSPORT` is exactly
+  `http` after trim/lowercase; otherwise it returns `websocket`.
+- Display renderer/transport settings apply to the next browser display connection. They are not
+  part of `restartNeeded`.
 - `GET /config` includes a `version` field (string) — the value of `AppSettings.Version`.
   The version is read-only; it cannot be changed via `POST /config` and is not part of
   `restartNeeded`.

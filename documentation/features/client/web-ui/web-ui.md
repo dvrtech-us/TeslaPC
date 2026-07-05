@@ -2,30 +2,70 @@
 
 The single-page browser client (`index.html`) that renders the remote screen, plays system
 audio, and forwards mouse input. Vanilla JavaScript — no frameworks, no build step. All CSS
-and JS are inline; the only external module is `PCMPlayerProcessor.js` (loaded as an AudioWorklet).
+is in `/style.css`; display streaming logic lives in `display-client.js`; H264 decode/render
+logic lives in `display-h264-worker.js`; audio decode logic lives in `PCMPlayerProcessor.js`.
 
 ## User Flow
 
-1. The browser loads `/` (served as `index.html`). `#streamImg` has no `src` yet (black screen).
+1. The browser loads `/` (served as `index.html`). `#streamImg` has no `src` yet and
+   `#streamCanvas` is hidden (black screen).
 2. The input WebSocket (`/ws/input`) opens on page load; mouse actions over the image are forwarded once frames arrive.
-3. The user taps the **screen overlay** (“Tap to connect”, user gesture): `startVideoStream()` sets `img.src` to `/stream` and opens `/ws/audio` so MJPEG and audio begin together. If `/ws/audio` or `/ws/input` drops after connect, `#disconnectPanel` warns the user and offers a **Refresh page** button. The overlay covers the video area only; the control bar has no separate playback button.
-4. MJPEG renders via `<img>` only — **no `<video>`** (Tesla driving lockout). See the phased A/V sync plan in `documentation/planning/Streaming/2026-07-05-av-sync-phased-plan.md`.
+3. The user taps the **screen overlay** (“Tap to connect”, user gesture):
+   `TeslaDisplay.start()` reads `/config` and opens either `/stream` (legacy HTTP MJPEG) or
+   `/ws/display?renderer=mjpeg|h264`; the same tap opens `/ws/audio` so display and audio begin
+   together. If `/ws/audio`, `/ws/input`, or `/ws/display` drops after connect,
+   `#disconnectPanel` warns the user and offers a **Refresh page** button.
+4. MJPEG renders via `<img>`; H264 renders via `<canvas>` using WebCodecs `VideoDecoder` in
+   `display-h264-worker.js`. There is still **no `<video>`** element (Tesla driving lockout).
 
 ## Technical Flow
 
 ### Layout
 
 - `<title>Remote Desktop</title>`; styling comes from the shared `/style.css` (dark in-car touch theme), not inline styles; a no-zoom `viewport` meta is set for touch.
-- Video: `<img title="playback" src="/stream">` inside `<div class="screen">` (flex-centered, `object-fit: contain`). There is **no `<canvas>`** — MJPEG renders directly into the `<img>`.
-- Controls live in a fixed bottom `<div class="controlbar">` with large `.btn` targets: the **Keyboard** input (`#fakeKeyboard`), **Files** (→ `/list.html`), **Settings** (→ `/config.html`), **stream resolution** (`#resBtn` opens `#resPicker` with 480p/720p/1080p buttons — not a native `<select>`; Tesla browser breaks those), and **Fit screen**. Connect A/V via the **Tap to connect** screen overlay (no control-bar playback button). See the [file-browser-vlc](../../media/file-browser-vlc/file-browser-vlc.md) feature.
+- Video: `<img id="streamImg">` and `<canvas id="streamCanvas">` inside `<div class="screen">`
+  (flex-centered, `object-fit: contain`). MJPEG uses the image; H264 hides the image and shows
+  the canvas.
+- Controls live in a fixed bottom `<div class="controlbar">` with large `.btn` targets: the
+  **Keyboard** input (`#fakeKeyboard`), **Files** (→ `/list.html`), **Settings** (→
+  `/config.html`), **stream resolution** (`#resBtn` opens `#resPicker` with 480p/720p/1080p
+  buttons), **video codec** (`#codecBtn` opens `#codecPicker` with MJPEG/H264 buttons), and
+  **Fit screen**. Native `<select>` popups are avoided where Tesla browser behavior is unreliable.
+  Connect A/V via the **Tap to connect** screen overlay (no control-bar playback button).
 
 ### URL helper
 
 - `getWsUrl(path)` chooses `wss://` on HTTPS and `ws://` on HTTP, always against `location.host` (same origin).
 
-### Video
+### Display (`display-client.js`)
 
-- Purely `<img src="/stream">`; the browser handles `multipart/x-mixed-replace`. No JS, no reconnect logic.
+- `TeslaDisplay.start(onDisconnect)` fetches `/config`. If `displayTransport` is `http`, it sets
+  `#streamImg.src = "/stream?_=" + Date.now()` and hides `#streamCanvas`.
+- Default display transport is WebSocket: `new WebSocket(getWsUrl('/ws/display') +
+  '?renderer=' + encodeURIComponent(displayRenderer))`.
+- The first WebSocket message is JSON format metadata. Binary messages are parsed by stripping
+  the 8-byte little-endian host PTS prefix.
+- MJPEG WebSocket payloads become `Blob([payload], { type: "image/jpeg" })`, assigned to
+  `#streamImg` via a short-lived object URL.
+- H264 WebSocket payloads are copied and transferred to `display-h264-worker.js` as
+  `{ h264Data: ArrayBuffer }`.
+- `TeslaDisplay.getStreamSize()` returns the rendered video rectangle and letterbox offsets for
+  input coordinate mapping. It uses `<img>.naturalWidth/Height` for MJPEG and the negotiated
+  display size for H264.
+
+### H264 worker (`display-h264-worker.js`)
+
+- The main thread transfers `#streamCanvas` to an `OffscreenCanvas` and starts a worker only when
+  `VideoDecoder` is available.
+- The worker creates a WebGL/WebGL2 context, configures a `VideoDecoder` after seeing SPS/PPS
+  NAL units, and draws decoded `VideoFrame` objects to the canvas texture.
+- H264 payloads are treated as complete Annex-B access units. Parameter-set-only payloads update
+  decoder configuration. Access units containing IDR NAL units are decoded as key chunks; access
+  units containing non-IDR slices are decoded as delta chunks after a key frame has been accepted.
+- The worker drops stale decoded frames and skips delta chunks when the decode/render queues are
+  backlogged.
+- Worker errors are posted back to `display-client.js`, logged to the console, and copied into
+  `window.__teslaPcDebug.errors` when the DVR debug probe is installed.
 
 ### Input (`mapPoint` / `sendInput`, `index.html`)
 
@@ -70,7 +110,11 @@ and JS are inline; the only external module is `PCMPlayerProcessor.js` (loaded a
 
 | Function | File | Responsibility |
 |----------|------|----------------|
-| `getWsUrl(path)` | `index.html:60` | Build same-origin `ws://`/`wss://` URL |
+| `getWsUrl(path)` | `index.html` / `display-client.js` | Build same-origin `ws://`/`wss://` URL |
+| `TeslaDisplay.start(onDisconnect)` | `display-client.js` | Start HTTP MJPEG or WebSocket MJPEG/H264 display transport from `/config` |
+| `TeslaDisplay.stop()` | `display-client.js` | Close display socket, terminate H264 worker, revoke MJPEG object URL |
+| `TeslaDisplay.getStreamSize()` | `display-client.js` | Return rendered display size and letterbox offsets for input mapping |
+| `handleEncodedData(data)` | `display-h264-worker.js` | Parse Annex-B H264 access units, configure decoder, submit WebCodecs chunks |
 | `sendMouseEvent(type, event)` | `index.html:295` | Forward image-relative mouse coords to `/ws/input` |
 | `sendKey(key, code)` | `index.html` | Send `{Type:'key', Key, KeyCode}` over `/ws/input` |
 | `sendText(text)` | `index.html` | Forward a text run one character at a time; maps `\r`/`\n`→Enter, `\t`→Tab |
@@ -82,8 +126,9 @@ and JS are inline; the only external module is `PCMPlayerProcessor.js` (loaded a
 
 ## Routes and Access Control
 
-The client consumes `/` (HTML), `/stream` (video), `/ws/input` (input), and `/ws/audio` (audio).
-All are same-origin and unauthenticated.
+The client consumes `/` (HTML), `/config` (display settings), `/stream` (legacy HTTP MJPEG),
+`/ws/display` (WebSocket MJPEG/H264), `/ws/input` (input), and `/ws/audio` (audio). All are
+same-origin and unauthenticated.
 
 ## Integration Points
 

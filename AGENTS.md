@@ -4,6 +4,9 @@ Operating guide for AI agents and developers working in the TeslaPC repository. 
 before making changes. For a feature-by-feature reference, start at
 [`documentation/README.md`](documentation/README.md).
 
+For local, machine-specific live-debug notes, check `debugging.md` if it exists. That file is
+intentionally git-ignored and is not canonical feature documentation.
+
 ## What This Project Is
 
 TeslaPC is a Windows remote-desktop streaming app (.NET 10.0, C#, WinForms). A single unified
@@ -43,13 +46,13 @@ still **no `sql/` folders** — the schema is created in code.
 |--------|---------|----------------|
 | server | web-server | `WebServer.cs`, `Program.cs` |
 | server | input-control | `WebServer.cs`, `Program.cs` |
-| streaming | screen-capture | `ImageStreamingServer.cs`, `DxgiScreenCapture.cs`, `MjpegWriter.cs` |
+| streaming | screen-capture | `ImageStreamingServer.cs`, `DxgiScreenCapture.cs`, `MjpegWriter.cs`, `DisplayWebSocket.cs`, `H264MediaFoundationEncoder.cs` |
 | streaming | audio-capture | `AudioStreamingServer.cs`, `PCMPlayerProcessor.js` |
 | streaming | display-control | `DisplayManager.cs`, `WebServer.cs` |
 | app | control-panel | `Program.cs`, `MainForm.cs`, `TeslaPcService.cs` |
 | app | configuration | `AppSettings.cs`, `WebServer.cs`, `MainForm.cs`, `config.html` |
 | media | media-library | `MediaLibrary.cs`, `MediaStreamer.cs` |
-| client | web-ui | `index.html`, `PCMPlayerProcessor.js` |
+| client | web-ui | `index.html`, `display-client.js`, `display-h264-worker.js`, `PCMPlayerProcessor.js` |
 | infrastructure | tesla-browser-bypass | `TeslaBrowserBypass.cs` |
 | infrastructure | firewall-bootstrap | `FirewallBootstrap.cs` |
 | infrastructure | https-bootstrap | `SslCertificateBootstrap.cs`, `bindSSLCert.bat` |
@@ -63,6 +66,8 @@ TeslaPCInterface/
 ├── ImageStreamingServer.cs    # Shared MJPEG capture loop, JPEG encoding, per-client send
 ├── DxgiScreenCapture.cs       # DXGI Desktop Duplication capture (GDI fallback)
 ├── MjpegWriter.cs             # multipart/x-mixed-replace framing
+├── DisplayWebSocket.cs        # WebSocket MJPEG/H264 display transport
+├── H264MediaFoundationEncoder.cs # Native Windows Media Foundation H264 encoder
 ├── AudioStreamingServer.cs    # WASAPI loopback capture + /ws/audio broadcast
 ├── PCMPlayerProcessor.js      # Client AudioWorklet (decode/resample/buffer/play)
 ├── TeslaBrowserBypass.cs      # CGNAT 100.64.0.1 + portproxy on the hotspot adapter

@@ -4,16 +4,23 @@ Known-good invariants for the browser client. Update only when intended behavior
 
 ## Flow Invariants
 
-- The remote screen is rendered by a plain `<img id="streamImg">` — no `<canvas>`, no `<video>`, no JS in the video decode path.
+- The remote screen is rendered by `<img id="streamImg">` for MJPEG or `<canvas id="streamCanvas">`
+  for H264. There is still no `<video>` element.
 - `#streamImg` has no `src` until the user taps the **Tap to connect** screen overlay (same gesture starts `/ws/audio`).
 - The input WebSocket (`/ws/input`) opens on page load, before any audio interaction.
 - Audio only starts after that tap (browser user-gesture requirement). There is no control-bar playback button; refresh the page for a full reset.
 - All WebSocket/stream URLs are same-origin via `getWsUrl` (`wss://` under HTTPS, `ws://` under HTTP).
+- `display-client.js` reads `/config` before opening display. `displayTransport=http` uses
+  `/stream`; `displayTransport=websocket` uses `/ws/display?renderer=mjpeg|h264`.
+- H264 requires browser `VideoDecoder` support. When unavailable, no H264 worker is created and
+  the error is logged/captured in `window.__teslaPcDebug.errors` if the DVR probe is installed.
+- H264 WebSocket payloads are complete Annex-B access units; the worker submits access units, not
+  arbitrary NAL fragments, to `VideoDecoder`.
 
 ## Input Rules
 
-- Mouse listeners are attached to the video `<img>`: `click`, `mousemove`, `mousedown`, `mouseup`.
-- Coordinates are relative to the image's bounding rect and sent with the image's rendered size as `DisplaySize`.
+- Mouse listeners use `TeslaDisplay.getStreamSize()` so coordinates account for either MJPEG
+  image natural size or H264 negotiated stream size.
 - All keyboard paths send over `/ws/input` via `sendKey(key, code)` (`{Type:'key', Key, KeyCode}`) or `sendText(text)`.
 - Paste is forwarded regardless of whether `#fakeKeyboard` is focused: a `document`-level `paste` listener reads `clipboardData.getData('text')` and calls `sendText`; it also fires when the user pastes into the box itself (the box's own `input` event is suppressed by `preventDefault()`).
 - Physical keyboard typing is captured page-wide by a `document`-level `keydown` listener; the user does **not** need to focus `#fakeKeyboard` for keystrokes to be forwarded.

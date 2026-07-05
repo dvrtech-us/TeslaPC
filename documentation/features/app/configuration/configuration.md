@@ -1,6 +1,6 @@
 # Configuration / Settings
 
-Lets users read and write the four core TeslaPC environment variables without hand-editing
+Lets users read and write the core TeslaPC environment variables without hand-editing
 `.env`. Settings are persisted to `%ProgramData%\TeslaPC\.env` and immediately mirrored into
 the live process environment by `AppSettings.Save`. Two independent surfaces are provided: a
 **Config tab** in the WinForms control panel and a **Settings page** (`/config.html`) in the
@@ -41,6 +41,11 @@ web UI.
      returns the token).
    - The log-level field is a `<select name="logLevel">` with options `error`, `warn`,
      `info`, `debug`; pre-selected from the `logLevel` value returned by `GET /config`.
+   - The display-codec field is a two-button choice group (`#codecChoices`, values `mjpeg` /
+     `h264`) plus hidden `displayRenderer` and `displayTransport` inputs. H264 uses WebCodecs
+     in the browser and the native Windows Media Foundation H264 encoder on the PC. If
+     `GET /config` returns `h264Available:false`, the page changes the hint to explain that
+     the native encoder was not found.
    - The stream-resolution field is a three-button choice group (`#resChoices`, values `480` /
      `720` / `1080`) plus a hidden `streamHeight` input; pre-selected from `GET /config`
      (native `<select>` popups are unreliable on the Tesla in-car browser).
@@ -67,13 +72,23 @@ web UI.
 | `VideoRootKey` | `TESLAPC_VIDEO_ROOT` |
 | `LogLevelKey` | `TESLAPC_LOG_LEVEL` |
 | `StreamHeightKey` | `TESLAPC_STREAM_HEIGHT` |
+| `DisplayRendererKey` | `TESLAPC_DISPLAY_RENDERER` |
+| `DisplayTransportKey` | `TESLAPC_DISPLAY_TRANSPORT` |
 | `DefaultVideoRoot` | `C:\video\` |
 | `DefaultStreamHeight` | `1080` |
+| `DefaultDisplayRenderer` | `mjpeg` |
+| `DefaultDisplayTransport` | `websocket` |
 | `EnvFilePath` | `%ProgramData%\TeslaPC\.env` (expanded at runtime) |
 
 **`StreamHeight` property** — reads `Get(StreamHeightKey)`, parses as an integer, clamps to
 `[240, 2160]`. Returns `DefaultStreamHeight` (1080) when the key is absent, unparseable, or
 out of range.
+
+**`DisplayRenderer` property** — reads `Get(DisplayRendererKey)`, lowercases it, and returns
+`"h264"` only for an exact `h264` value. All other values fall back to `"mjpeg"`.
+
+**`DisplayTransport` property** — reads `Get(DisplayTransportKey)`, lowercases it, and returns
+`"http"` only for an exact `http` value. All other values fall back to `"websocket"`.
 
 **`Get(string key)`** — reads from `Environment.GetEnvironmentVariable(key)` (the live
 process environment that `Program.LoadDotEnv` has already populated).
@@ -114,7 +129,7 @@ is left intact.
 Returns a JSON object with the current non-secret settings:
 
 ```json
-{ "httpsHost": "my.example.com", "acmeEmail": "admin@example.com", "videoRoot": "C:\\video\\", "cfTokenSet": true, "logLevel": "info", "streamHeight": 1080, "version": "1.0.0" }
+{ "httpsHost": "my.example.com", "acmeEmail": "admin@example.com", "videoRoot": "C:\\video\\", "cfTokenSet": true, "logLevel": "info", "streamHeight": 1080, "displayRenderer": "mjpeg", "displayTransport": "websocket", "h264Available": true, "version": "1.0.0" }
 ```
 
 `cfTokenSet` is `true` when `TESLAPC_CF_TOKEN` is set to a non-empty value. **The token
@@ -122,12 +137,15 @@ value is never included in the response.** `logLevel` is the current level as a 
 string (`error`, `warn`, `info`, or `debug`) returned by `Log.LevelName`. `streamHeight` is
 the current `_imageStreamer.MaxHeight` integer (default `1080`). `version` is the application
 version string from `AppSettings.Version` (e.g. `"1.0.0"`); surfaced here so the web Settings
-page can display it in the footer.
+page can display it in the footer. `displayRenderer` and `displayTransport` are the current
+display settings from `AppSettings`. `h264Available` is true when
+`H264MediaFoundationEncoder.IsAvailable` can instantiate the native Windows H264 encoder MFT.
 
 #### `POST /config`
 
 Accepts `application/x-www-form-urlencoded` with fields: `httpsHost`, `acmeEmail`,
-`videoRoot`, `logLevel`, `streamHeight`, and optionally `cfToken`.
+`videoRoot`, `logLevel`, `streamHeight`, `displayRenderer`, `displayTransport`, and optionally
+`cfToken`.
 
 1. Builds a dictionary, adding `httpsHost`/`acmeEmail` when present and `videoRoot`/`cfToken`
    only when non-blank (so a blank token is omitted and the stored one is preserved).
@@ -138,9 +156,11 @@ Accepts `application/x-www-form-urlencoded` with fields: `httpsHost`, `acmeEmail
 5. If `streamHeight` was included and parses to a value in `[240, 2160]`, calls
    `_imageStreamer.SetMaxResolution(h*4, h)` **immediately** (no restart needed). The new cap
    takes effect on the next capture-session start (triggered automatically by the epoch bump).
-6. Sets `restartNeeded = true` if `httpsHost`, `cfToken`, or `acmeEmail` were saved.
+6. If `displayRenderer` is present, saves only `h264` or `mjpeg`; if `displayTransport` is
+   present, saves only `http` or `websocket`. These apply to the next display connection.
+7. Sets `restartNeeded = true` if `httpsHost`, `cfToken`, or `acmeEmail` were saved.
    `logLevel` and `streamHeight` are **not** in `restartNeeded` — both take effect live.
-7. Returns JSON:
+8. Returns JSON:
 
 ```json
 { "saved": true, "restartNeeded": false }
@@ -192,6 +212,8 @@ A full process restart is not required; the in-app Restart is sufficient.
 | `AppSettings.Save` | `TeslaPCInterface/AppSettings.cs` | Rewrite `%ProgramData%\TeslaPC\.env`; mirror values into live env |
 | `AppSettings.VideoRoot` | `TeslaPCInterface/AppSettings.cs` | Read video root from env or fall back to `C:\video\` |
 | `AppSettings.StreamHeight` | `TeslaPCInterface/AppSettings.cs` | Read and clamp `TESLAPC_STREAM_HEIGHT`; default `1080` |
+| `AppSettings.DisplayRenderer` | `TeslaPCInterface/AppSettings.cs` | Read `TESLAPC_DISPLAY_RENDERER`; allows only `mjpeg` or `h264` |
+| `AppSettings.DisplayTransport` | `TeslaPCInterface/AppSettings.cs` | Read `TESLAPC_DISPLAY_TRANSPORT`; allows only `websocket` or `http` |
 | `AppSettings.Version` | `TeslaPCInterface/AppSettings.cs` | Reads `AssemblyInformationalVersionAttribute`; strips `+git` suffix; falls back to assembly version |
 | `Program.LoadDotEnv` | `TeslaPCInterface/Program.cs` | Load app-dir `.env` then `%ProgramData%` `.env` at startup |
 | `WebServer.HandleConfig` | `TeslaPCInterface/WebServer.cs` | `GET /config` (safe read) and `POST /config` (write + apply) |
@@ -209,8 +231,8 @@ A full process restart is not required; the in-app Restart is sufficient.
 
 | Route | Method | Protocol | Auth | Handler |
 |-------|--------|----------|------|---------|
-| `/config` | GET | HTTP/HTTPS | none | `WebServer.HandleConfig` — returns `{ httpsHost, acmeEmail, videoRoot, cfTokenSet, logLevel, streamHeight, version }` JSON |
-| `/config` | POST | HTTP/HTTPS | none | `WebServer.HandleConfig` — saves settings, applies video folder / log level / stream height live, returns `{ saved, restartNeeded }` JSON |
+| `/config` | GET | HTTP/HTTPS | none | `WebServer.HandleConfig` — returns `{ httpsHost, acmeEmail, videoRoot, cfTokenSet, logLevel, streamHeight, displayRenderer, displayTransport, h264Available, version }` JSON |
+| `/config` | POST | HTTP/HTTPS | none | `WebServer.HandleConfig` — saves settings, applies video folder / log level / stream height live, saves display renderer/transport for next display connection, returns `{ saved, restartNeeded }` JSON |
 | `/config.html` | GET | HTTP/HTTPS | none | Static page served from `TeslaPCInterface/config.html` |
 | `/version` | GET | HTTP/HTTPS | none | `WebServer.HandleRequest` — returns `{ "version": "<version>" }` JSON (e.g. `{ "version": "1.0.0" }`); lightweight endpoint for health checks or external tooling |
 
@@ -244,6 +266,8 @@ surfaced in:
 | `TESLAPC_VIDEO_ROOT` | `VideoRootKey` | `C:\video\` | **Live** (immediate) |
 | `TESLAPC_LOG_LEVEL` | `LogLevelKey` | `info` | **Live** (immediate) |
 | `TESLAPC_STREAM_HEIGHT` | `StreamHeightKey` | `1080` | **Live** (immediate via `POST /config`; startup value used at next session restart) |
+| `TESLAPC_DISPLAY_RENDERER` | `DisplayRendererKey` | `mjpeg` | Next display connection |
+| `TESLAPC_DISPLAY_TRANSPORT` | `DisplayTransportKey` | `websocket` | Next display connection |
 
 ## Access Control
 
