@@ -299,25 +299,39 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
         for (int i = 0; i < 8; i++)
         {
             IMFSample? outputSample = CreateOutputSample();
-            var output = new[]
+            IntPtr outputSamplePtr = outputSample is null ? IntPtr.Zero : Marshal.GetIUnknownForObject(outputSample);
+            IMFSample? resolvedSample = null;
+            bool releaseResolvedSample = false;
+            IntPtr outputBuffer = IntPtr.Zero;
+            var output = new MFT_OUTPUT_DATA_BUFFER
             {
-                new MFT_OUTPUT_DATA_BUFFER
-                {
-                    dwStreamID = 0,
-                    pSample = outputSample,
-                    dwStatus = 0,
-                    pEvents = IntPtr.Zero,
-                }
+                dwStreamID = 0,
+                pSample = outputSamplePtr,
+                dwStatus = 0,
+                pEvents = IntPtr.Zero,
             };
 
-            int hr = _transform.ProcessOutput(0, 1, output, out _);
+            int hr = 0;
             try
             {
+                outputBuffer = Marshal.AllocHGlobal(Marshal.SizeOf<MFT_OUTPUT_DATA_BUFFER>());
+                Marshal.StructureToPtr(output, outputBuffer, false);
+
+                hr = _transform.ProcessOutput(0, 1, outputBuffer, out _);
+                output = Marshal.PtrToStructure<MFT_OUTPUT_DATA_BUFFER>(outputBuffer);
+
                 if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT)
                     return;
                 Check(hr, "IMFTransform.ProcessOutput");
 
-                var sample = output[0].pSample;
+                var sample = outputSample;
+                if (sample is null && output.pSample != IntPtr.Zero)
+                {
+                    resolvedSample = (IMFSample)Marshal.GetObjectForIUnknown(output.pSample);
+                    releaseResolvedSample = true;
+                    sample = resolvedSample;
+                }
+
                 if (sample is not null)
                 {
                     byte[] bytes = CopySampleBytes(sample);
@@ -327,11 +341,18 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
             }
             finally
             {
-                if (output[0].pEvents != IntPtr.Zero)
-                    Marshal.Release(output[0].pEvents);
-                var sample = output[0].pSample;
-                if (sample is not null)
-                    ReleaseComObject(sample);
+                if (output.pEvents != IntPtr.Zero)
+                    Marshal.Release(output.pEvents);
+                if (releaseResolvedSample && resolvedSample is not null)
+                    ReleaseComObject(resolvedSample);
+                if (output.pSample != IntPtr.Zero)
+                    Marshal.Release(output.pSample);
+                if (outputSamplePtr != IntPtr.Zero && output.pSample != outputSamplePtr)
+                    Marshal.Release(outputSamplePtr);
+                if (outputSample is not null)
+                    ReleaseComObject(outputSample);
+                if (outputBuffer != IntPtr.Zero)
+                    Marshal.FreeHGlobal(outputBuffer);
             }
         }
     }
@@ -523,7 +544,7 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
     private struct MFT_OUTPUT_DATA_BUFFER
     {
         public int dwStreamID;
-        [MarshalAs(UnmanagedType.Interface)] public IMFSample? pSample;
+        public IntPtr pSample;
         public int dwStatus;
         public IntPtr pEvents;
     }
@@ -555,7 +576,7 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
         [PreserveSig] int ProcessEvent(int dwInputStreamID, IntPtr pEvent);
         [PreserveSig] int ProcessMessage(int eMessage, IntPtr ulParam);
         [PreserveSig] int ProcessInput(int dwInputStreamID, [MarshalAs(UnmanagedType.Interface)] IMFSample pSample, int dwFlags);
-        [PreserveSig] int ProcessOutput(int dwFlags, int cOutputBufferCount, [In, Out] MFT_OUTPUT_DATA_BUFFER[] pOutputSamples, out int pdwStatus);
+        [PreserveSig] int ProcessOutput(int dwFlags, int cOutputBufferCount, IntPtr pOutputSamples, out int pdwStatus);
     }
 
     [ComImport]

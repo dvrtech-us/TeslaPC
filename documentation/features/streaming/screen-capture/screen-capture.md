@@ -111,6 +111,10 @@ display-control routes to force a fresh DXGI session after a desktop resolution 
 - `EncodeFrame(byte[] bgr24)` drains any pending output, calls `ProcessInput`, then drains
   output again. Each returned `byte[]` is one complete `MFVideoFormat_H264` sample/access unit
   with start codes and interleaved SPS/PPS.
+- Output draining calls `IMFTransform.ProcessOutput` with an unmanaged
+  `MFT_OUTPUT_DATA_BUFFER` pointer (`IntPtr`) allocated by `Marshal.AllocHGlobal`. The struct's
+  `pSample` field is also an `IntPtr`; `IMFSample` COM objects are resolved explicitly only
+  after the call returns. This avoids .NET COM array/typelib marshalling for `IMFSample`.
 - `Stop()` sends end-of-stream/end-streaming messages, releases COM objects, calls
   `MFShutdown()`, and uninitializes COM only when this instance initialized COM on the same
   thread.

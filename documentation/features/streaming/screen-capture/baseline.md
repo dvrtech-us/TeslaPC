@@ -46,6 +46,9 @@ streaming. Update only when intended behavior changes.
   Media Foundation H264 encoder MFT; ffmpeg is not used for the live display encoder.
 - H264 baseline profile (`eAVEncH264VProfile_Base`) is used. Bitrate is clamped to
   `1_500_000..12_000_000` bps by `H264MediaFoundationEncoder.EstimateBitrate`.
+- `H264MediaFoundationEncoder` must not marshal `MFT_OUTPUT_DATA_BUFFER[]` through .NET COM
+  interop. `IMFTransform.ProcessOutput` receives an unmanaged `MFT_OUTPUT_DATA_BUFFER` pointer,
+  and COM samples/events are released explicitly.
 
 ## Session-Restart Rules
 
