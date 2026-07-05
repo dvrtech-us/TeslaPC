@@ -19,9 +19,33 @@ public static class AppSettings
     public const string VideoRootKey = "TESLAPC_VIDEO_ROOT";
     public const string LogLevelKey = "TESLAPC_LOG_LEVEL";
     public const string StreamHeightKey = "TESLAPC_STREAM_HEIGHT";
+    public const string DisplayRendererKey = "TESLAPC_DISPLAY_RENDERER";
+    public const string DisplayTransportKey = "TESLAPC_DISPLAY_TRANSPORT";
 
     public const string DefaultVideoRoot = @"C:\video\";
     public const int DefaultStreamHeight = 1080;
+    public const string DefaultDisplayRenderer = "mjpeg";
+    public const string DefaultDisplayTransport = "websocket";
+
+    /// <summary>Display codec for WebSocket transport: <c>mjpeg</c> or <c>h264</c>.</summary>
+    public static string DisplayRenderer
+    {
+        get
+        {
+            var v = (Get(DisplayRendererKey) ?? DefaultDisplayRenderer).Trim().ToLowerInvariant();
+            return v == "h264" ? "h264" : "mjpeg";
+        }
+    }
+
+    /// <summary>Display transport: <c>websocket</c> (default) or <c>http</c> (legacy <c>/stream</c>).</summary>
+    public static string DisplayTransport
+    {
+        get
+        {
+            var v = (Get(DisplayTransportKey) ?? DefaultDisplayTransport).Trim().ToLowerInvariant();
+            return v == "http" ? "http" : "websocket";
+        }
+    }
 
     /// <summary>Max vertical pixels for the stream (the live screen/media is scaled into this cap).</summary>
     public static int StreamHeight

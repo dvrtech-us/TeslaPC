@@ -9,8 +9,9 @@
 <body>
 
     <!-- MJPEG starts only after tap-to-connect (phase 1 A/V session align; no <video> tag). -->
-    <div class="screen">
+    <div class="screen" id="screenSurface">
         <img id="streamImg" title="playback" alt="" />
+        <canvas id="streamCanvas"></canvas>
         <div id="screenOverlay" class="screen-tap">
             <div id="connectPanel" class="tap-inner" role="button" tabindex="0" aria-label="Tap to connect">
                 <div class="big-ic play-icon" aria-hidden="true">
@@ -41,6 +42,7 @@
         <button class="btn" onclick="window.location.assign('/list.html')">&#128193; Files</button>
         <button class="btn" onclick="window.location.assign('/config.html')">&#9881; Settings</button>
         <button type="button" id="resBtn" class="btn" title="Stream resolution" onclick="toggleResPicker(event)">1080p</button>
+        <button type="button" id="codecBtn" class="btn" title="Video codec" onclick="toggleCodecPicker(event)">MJPEG</button>
         <button class="btn" onclick="fitScreen()" title="Set the PC resolution to match this screen">&#9974; Fit screen</button>
     </div>
     <div id="resPicker" class="res-picker" hidden>
@@ -51,11 +53,16 @@
             <button type="button" class="btn res-choice" data-h="1080" onclick="pickRes(1080)">1080p</button>
         </div>
     </div>
+    <div id="codecPicker" class="res-picker" hidden>
+        <div class="res-picker-inner">
+            <div class="res-picker-title">Video codec (WebSocket)</div>
+            <button type="button" class="btn codec-choice" data-codec="mjpeg" onclick="pickCodec('mjpeg')">MJPEG</button>
+            <button type="button" class="btn codec-choice" data-codec="h264" onclick="pickCodec('h264')">H264</button>
+            <div class="res-picker-hint">H264 needs ffmpeg on the PC. Refresh the page after changing.</div>
+        </div>
+    </div>
 
-    <!-- Include the WebSocket JavaScript library -->
-
-
-
+    <script src="display-client.js"></script>
 
     <script>
 
@@ -106,12 +113,16 @@
             showDisconnectOverlay();
         }
 
-        // Connect MJPEG /stream in the same user gesture as audio (avoids seconds of video-ahead-of-audio).
-        function startVideoStream() {
-            var el = document.getElementById('streamImg');
-            if (!el) return;
-            el.removeAttribute('src');
-            el.src = '/stream?_=' + Date.now();
+        var AUDIO_PTS_BYTES = 8;
+
+        function stripAudioPcm(arrayBuffer) {
+            if (!audioFormat || (audioFormat.formatVersion || 1) < 2) {
+                return arrayBuffer;
+            }
+            if (arrayBuffer.byteLength <= AUDIO_PTS_BYTES) {
+                return arrayBuffer;
+            }
+            return arrayBuffer.slice(AUDIO_PTS_BYTES);
         }
 
         async function startAudioPlayback() {
@@ -136,7 +147,9 @@
             audioConnecting = true;
             hideScreenOverlay();
 
-            startVideoStream();
+            if (window.TeslaDisplay) {
+                TeslaDisplay.start(onSessionLost);
+            }
 
             audioSocket = new WebSocket(getWsUrl('/ws/audio'));
             audioSocket.binaryType = 'arraybuffer';
@@ -207,12 +220,12 @@
                     audioContext.resume();
                 }
 
+                var pcmData = stripAudioPcm(event.data);
+
                 if (useWorklet && pcmPlayerNode) {
-                    // Primary path: AudioWorklet
-                    pcmPlayerNode.port.postMessage(event.data);
+                    pcmPlayerNode.port.postMessage(pcmData);
                 } else {
-                    // Fallback path: decode PCM and schedule AudioBufferSourceNodes
-                    playPcmChunkFallback(event.data);
+                    playPcmChunkFallback(pcmData);
                 }
             };
 
@@ -353,22 +366,21 @@
             onSessionLost();
         };
 
-        var img = document.getElementById('streamImg');
+        var screenSurface = document.getElementById('screenSurface');
 
-        // Map a viewport point to host-screen coords. The stream is letterboxed inside the element
-        // (object-fit: contain), so use the frame's natural aspect ratio to find the real video
-        // rectangle; returns null for points in the black bars.
         function mapPoint(clientX, clientY) {
-            var rect = img.getBoundingClientRect();
-            var natW = img.naturalWidth || rect.width;
-            var natH = img.naturalHeight || rect.height;
-            var scale = Math.min(rect.width / natW, rect.height / natH);
-            var dispW = natW * scale, dispH = natH * scale;
-            var offX = (rect.width - dispW) / 2, offY = (rect.height - dispH) / 2;
-            var x = clientX - rect.left - offX;
-            var y = clientY - rect.top - offY;
-            if (x < 0 || y < 0 || x > dispW || y > dispH) return null;
-            return { x: parseInt(x), y: parseInt(y), w: parseInt(dispW), h: parseInt(dispH) };
+            var layout = window.TeslaDisplay ? TeslaDisplay.getStreamSize() : null;
+            if (!layout) return null;
+            var rect = layout.rect;
+            var x = clientX - rect.left - layout.offsetX;
+            var y = clientY - rect.top - layout.offsetY;
+            if (x < 0 || y < 0 || x > layout.renderWidth || y > layout.renderHeight) return null;
+            return {
+                x: parseInt(x * layout.displayWidth / layout.renderWidth),
+                y: parseInt(y * layout.displayHeight / layout.renderHeight),
+                w: layout.displayWidth,
+                h: layout.displayHeight
+            };
         }
 
         function sendInput(type, clientX, clientY) {
@@ -380,13 +392,12 @@
             }));
         }
 
-        // Mouse (desktop).
-        img.addEventListener('click', function (e) { sendInput('click', e.clientX, e.clientY); });
-        img.addEventListener('mousemove', function (e) { sendInput('move', e.clientX, e.clientY); });
-        img.addEventListener('mousedown', function (e) { sendInput('down', e.clientX, e.clientY); });
-        img.addEventListener('mouseup', function (e) { sendInput('up', e.clientX, e.clientY); });
-        // Desktop right mouse button -> right-click on the host.
-        img.addEventListener('contextmenu', function (e) { sendInput('rightclick', e.clientX, e.clientY); e.preventDefault(); });
+        // Mouse (desktop) — events on the screen surface (img or canvas).
+        screenSurface.addEventListener('click', function (e) { sendInput('click', e.clientX, e.clientY); });
+        screenSurface.addEventListener('mousemove', function (e) { sendInput('move', e.clientX, e.clientY); });
+        screenSurface.addEventListener('mousedown', function (e) { sendInput('down', e.clientX, e.clientY); });
+        screenSurface.addEventListener('mouseup', function (e) { sendInput('up', e.clientX, e.clientY); });
+        screenSurface.addEventListener('contextmenu', function (e) { sendInput('rightclick', e.clientX, e.clientY); e.preventDefault(); });
 
         // Touch (Tesla / tablets):
         //   quick tap            -> left click
@@ -395,7 +406,7 @@
         // The 'down' is deferred until we know it's a drag, so a long-press isn't also a left press.
         var LONG_PRESS_MS = 500, MOVE_TOL = 12;
         var tStartX = 0, tStartY = 0, tMoved = false, tDownSent = false, tLongPressed = false, tTimer = null;
-        img.addEventListener('touchstart', function (e) {
+        screenSurface.addEventListener('touchstart', function (e) {
             var t = e.changedTouches[0];
             tStartX = t.clientX; tStartY = t.clientY;
             tMoved = false; tDownSent = false; tLongPressed = false;
@@ -405,7 +416,7 @@
             }, LONG_PRESS_MS);
             e.preventDefault();
         }, { passive: false });
-        img.addEventListener('touchmove', function (e) {
+        screenSurface.addEventListener('touchmove', function (e) {
             if (tLongPressed) { e.preventDefault(); return; }
             var t = e.changedTouches[0];
             if (!tMoved && Math.abs(t.clientX - tStartX) + Math.abs(t.clientY - tStartY) > MOVE_TOL) {
@@ -417,7 +428,7 @@
             if (tDownSent) sendInput('move', t.clientX, t.clientY);
             e.preventDefault();
         }, { passive: false });
-        img.addEventListener('touchend', function (e) {
+        screenSurface.addEventListener('touchend', function (e) {
             clearTimeout(tTimer);
             var t = e.changedTouches[0];
             if (tLongPressed) { /* right-click already sent */ }
@@ -583,9 +594,47 @@
                 .catch(function () {});
         }
 
+        function updateCodecUi(codec) {
+            document.getElementById('codecBtn').textContent = codec === 'h264' ? 'H264' : 'MJPEG';
+            var choices = document.querySelectorAll('.codec-choice');
+            for (var i = 0; i < choices.length; i++)
+                choices[i].classList.toggle('active', choices[i].getAttribute('data-codec') === codec);
+        }
+
+        function toggleCodecPicker(e) {
+            if (e) e.stopPropagation();
+            var p = document.getElementById('codecPicker');
+            p.hidden = !p.hidden;
+            closeResPicker();
+        }
+
+        function closeCodecPicker() {
+            document.getElementById('codecPicker').hidden = true;
+        }
+
+        function setCodec(codec) {
+            var b = new URLSearchParams();
+            b.set('displayRenderer', codec);
+            b.set('displayTransport', 'websocket');
+            fetch('/config', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: b.toString() });
+        }
+
+        function pickCodec(codec) {
+            updateCodecUi(codec);
+            setCodec(codec);
+            closeCodecPicker();
+        }
+
+        document.addEventListener('touchstart', function (e) {
+            var p = document.getElementById('codecPicker');
+            if (p.hidden) return;
+            if (!p.contains(e.target) && e.target.id !== 'codecBtn') closeCodecPicker();
+        }, { passive: true });
+
         fetch('/config').then(function (r) { return r.json(); }).then(function (c) {
-            if (!c || !c.streamHeight) return;
-            updateResUi(nearestRes(c.streamHeight));
+            if (!c) return;
+            if (c.streamHeight) updateResUi(nearestRes(c.streamHeight));
+            if (c.displayRenderer) updateCodecUi(c.displayRenderer);
         }).catch(function () {});
     </script>
 </body>

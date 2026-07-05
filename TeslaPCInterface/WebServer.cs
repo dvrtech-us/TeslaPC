@@ -166,6 +166,10 @@ public class WebServer
             {
                 await _audioCapture.HandleClientAsync(context);
             }
+            else if (path.StartsWith("/ws/display", StringComparison.OrdinalIgnoreCase))
+            {
+                await _imageStreamer.HandleDisplayWebSocketAsync(context);
+            }
             else
             {
                 await AcceptWebSocketAsync(context);
@@ -221,12 +225,24 @@ public class WebServer
             string? cfToken = form.Get("cfToken");
             string? logLevel = form.Get("logLevel");
             string? streamHeight = form.Get("streamHeight");
+            string? displayRenderer = form.Get("displayRenderer");
+            string? displayTransport = form.Get("displayTransport");
 
             if (host != null) toSave[AppSettings.HttpsHostKey] = host.Trim();
             if (email != null) toSave[AppSettings.AcmeEmailKey] = email.Trim();
             if (videoRoot != null && !string.IsNullOrWhiteSpace(videoRoot)) toSave[AppSettings.VideoRootKey] = videoRoot.Trim();
             if (Log.Parse(logLevel) is { } _) toSave[AppSettings.LogLevelKey] = logLevel!.Trim().ToLowerInvariant();
             if (int.TryParse(streamHeight, out var sh) && sh >= 240 && sh <= 2160) toSave[AppSettings.StreamHeightKey] = sh.ToString();
+            if (displayRenderer != null)
+            {
+                var r = displayRenderer.Trim().ToLowerInvariant();
+                if (r == "h264" || r == "mjpeg") toSave[AppSettings.DisplayRendererKey] = r;
+            }
+            if (displayTransport != null)
+            {
+                var t = displayTransport.Trim().ToLowerInvariant();
+                if (t == "http" || t == "websocket") toSave[AppSettings.DisplayTransportKey] = t;
+            }
             // Only overwrite the token when a non-blank value is supplied (the form leaves it blank to keep).
             if (!string.IsNullOrWhiteSpace(cfToken)) toSave[AppSettings.CloudflareTokenKey] = cfToken.Trim();
 
@@ -265,6 +281,9 @@ public class WebServer
             videoRoot = _media.Root,
             logLevel = Log.LevelName,
             streamHeight = _imageStreamer.MaxHeight,
+            displayRenderer = AppSettings.DisplayRenderer,
+            displayTransport = AppSettings.DisplayTransport,
+            h264Available = new H264FfmpegEncoder().IsAvailable,
             version = AppSettings.Version,
             cfTokenSet = !string.IsNullOrWhiteSpace(AppSettings.Get(AppSettings.CloudflareTokenKey))
         };

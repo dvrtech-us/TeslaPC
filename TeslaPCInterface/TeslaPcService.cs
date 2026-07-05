@@ -53,8 +53,9 @@ internal sealed class TeslaPcService
         // upscales). Configurable via TESLAPC_STREAM_HEIGHT (default 1080); the width cap is generous
         // (4x height) so height is the binding dimension for normal and ultrawide displays.
         int h = AppSettings.StreamHeight;
-        _imageServer = new ImageStreamingServer(h * 4, h, 30);
-        _audioCapture = new AudioCapture();
+        var streamTiming = new StreamTiming();
+        _imageServer = new ImageStreamingServer(h * 4, h, 30, streamTiming);
+        _audioCapture = new AudioCapture(streamTiming);
         _audioCapture.StartCapturing();
         _library = new MediaLibrary();
         _media = new MediaStreamer(_imageServer, _audioCapture, _library) { Root = AppSettings.VideoRoot };

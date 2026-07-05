@@ -16,6 +16,9 @@ namespace Streaming
     public class ImageStreamingServer : IDisposable
     {
         private readonly CancellationTokenSource _cancellationTokenSource = new();
+        private readonly StreamTiming _timing;
+        private readonly DisplayWebSocket _displayWebSocket;
+        private readonly int _fps;
         private volatile int _maxWidth;
         private volatile int _maxHeight;
         private int _restartEpoch;   // bumped to force the capture session to restart (cap/desktop-res change)
@@ -25,10 +28,13 @@ namespace Streaming
         private readonly object _frameLock = new();
         private byte[] _currentFrame = Array.Empty<byte>();
         private int _frameNumber;
-        private int _clientCount;
-        /// <summary>Number of clients currently receiving the MJPEG stream.</summary>
-        public int ClientCount => Volatile.Read(ref _clientCount);
+        private long _framePtsUs;
+        private int _httpClientCount;
+        /// <summary>HTTP /stream plus WebSocket /ws/display clients.</summary>
+        public int ClientCount => Volatile.Read(ref _httpClientCount) + _displayWebSocket.ClientCount;
         private Thread? _captureThread;
+        private int _lastOutWidth = 1;
+        private int _lastOutHeight = 1;
 
         // Media mode: while a video file is playing, MediaStreamer publishes decoded JPEG frames
         // into the shared buffer via PublishMediaFrame, and the screen-capture loop stands down so
@@ -70,14 +76,19 @@ namespace Streaming
         /// <param name="width"></param>
         /// <param name="height"></param>
 
-        public ImageStreamingServer(int width, int height, int fps)
+        public ImageStreamingServer(int width, int height, int fps, StreamTiming timing)
         {
             _maxWidth = width;
             _maxHeight = height;
-
-            this.Interval = 1000 / fps;
-
+            _fps = fps;
+            _timing = timing;
+            _displayWebSocket = new DisplayWebSocket(timing);
+            Interval = 1000 / fps;
         }
+
+        /// <summary>Handles a display WebSocket client on <c>/ws/display</c>.</summary>
+        public Task HandleDisplayWebSocketAsync(HttpListenerContext context) =>
+            _displayWebSocket.HandleClientAsync(context, _lastOutWidth, _lastOutHeight, _fps, EnsureCaptureRunning);
 
         /// <summary>
         /// Gets or sets the interval in milliseconds (or the delay time) between
@@ -91,7 +102,7 @@ namespace Streaming
         /// </summary>
         public void HandleStreamRequest(HttpListenerContext ctx)
         {
-            Interlocked.Increment(ref _clientCount);
+            Interlocked.Increment(ref _httpClientCount);
             EnsureCaptureRunning();
 
             // Send MJPEG headers on the request thread. If we defer this to the
@@ -144,7 +155,7 @@ namespace Streaming
                 _mediaMode = false;
                 Monitor.PulseAll(_frameLock);
             }
-            if (Volatile.Read(ref _clientCount) > 0)
+            if (ClientCount > 0)
                 EnsureCaptureRunning();
         }
 
@@ -156,12 +167,16 @@ namespace Streaming
         {
             if (!_mediaMode || jpeg.Length == 0)
                 return;
+            long pts = _timing.HostPtsUs;
             lock (_frameLock)
             {
                 _currentFrame = jpeg;
+                _framePtsUs = pts;
                 _frameNumber++;
                 Monitor.PulseAll(_frameLock);
             }
+
+            _displayWebSocket.BroadcastFrame(pts, jpeg, null);
         }
 
         private static ImageCodecInfo GetJpegCodec()
@@ -185,7 +200,7 @@ namespace Streaming
                 SetProcessDpiAwareness(ProcessDPIAwareness.ProcessPerMonitorDPIAware);
 
                 while (!_cancellationTokenSource.Token.IsCancellationRequested
-                       && Volatile.Read(ref _clientCount) > 0
+                       && ClientCount > 0
                        && !_mediaMode)
                 {
                     if (!RunCaptureSession())
@@ -227,7 +242,10 @@ namespace Streaming
             double scale = Math.Min(1.0, Math.Min((double)_maxWidth / screenSize.Width, (double)_maxHeight / screenSize.Height));
             int outWidth = Math.Max(1, (int)Math.Round(screenSize.Width * scale));
             int outHeight = Math.Max(1, (int)Math.Round(screenSize.Height * scale));
+            _lastOutWidth = outWidth;
+            _lastOutHeight = outHeight;
             bool needsResize = outWidth != screenSize.Width || outHeight != screenSize.Height;
+            bool needH264 = _displayWebSocket.NeedH264;
 
             using Bitmap srcImage = new(screenSize.Width, screenSize.Height, PixelFormat.Format32bppArgb);
             using Graphics? srcGraphics = useDxgi ? null : Graphics.FromImage(srcImage);
@@ -248,7 +266,7 @@ namespace Streaming
             using var ms = new MemoryStream();
             int lastStart = Environment.TickCount;
             while (!_cancellationTokenSource.Token.IsCancellationRequested
-                   && Volatile.Read(ref _clientCount) > 0
+                   && ClientCount > 0
                    && !_mediaMode)
             {
                 // Restart the session (reallocate at the new size) when the cap changes or the desktop
@@ -284,7 +302,16 @@ namespace Streaming
                         srcImage.Save(ms, jpegCodec, encoderParameters);
                     }
 
-                    PublishFrame(ms);
+                    byte[]? h264 = null;
+                    if (needH264)
+                    {
+                        byte[] bgr = needsResize
+                            ? BitmapToBgr24(scaledImage!)
+                            : BitmapToBgr24From32bpp(srcImage, outWidth, outHeight);
+                        h264 = _displayWebSocket.EncodeH264(bgr, outWidth, outHeight, _fps);
+                    }
+
+                    PublishFrame(ms, h264);
                 }
 
                 int elapsed = Environment.TickCount - lastStart;
@@ -296,15 +323,44 @@ namespace Streaming
             return false;
         }
 
-        private void PublishFrame(MemoryStream jpegStream)
+        private void PublishFrame(MemoryStream jpegStream, byte[]? h264)
         {
             byte[] frameBytes = jpegStream.ToArray();
+            long pts = _timing.HostPtsUs;
             lock (_frameLock)
             {
                 _currentFrame = frameBytes;
+                _framePtsUs = pts;
                 _frameNumber++;
                 Monitor.PulseAll(_frameLock);
             }
+
+            _displayWebSocket.BroadcastFrame(pts, frameBytes, h264);
+        }
+
+        private static byte[] BitmapToBgr24(Bitmap bmp)
+        {
+            var rect = new Rectangle(0, 0, bmp.Width, bmp.Height);
+            var data = bmp.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+            try
+            {
+                int bytes = Math.Abs(data.Stride) * data.Height;
+                var bgr = new byte[bytes];
+                Marshal.Copy(data.Scan0, bgr, 0, bytes);
+                return bgr;
+            }
+            finally
+            {
+                bmp.UnlockBits(data);
+            }
+        }
+
+        private static byte[] BitmapToBgr24From32bpp(Bitmap src, int width, int height)
+        {
+            using var rgb = new Bitmap(width, height, PixelFormat.Format24bppRgb);
+            using (var g = Graphics.FromImage(rgb))
+                g.DrawImage(src, 0, 0, width, height);
+            return BitmapToBgr24(rgb);
         }
 
         /// <summary>
@@ -339,7 +395,7 @@ namespace Streaming
             }
             finally
             {
-                Interlocked.Decrement(ref _clientCount);
+                Interlocked.Decrement(ref _httpClientCount);
                 ctx.Response.OutputStream.Close();
             }
         }
@@ -412,6 +468,7 @@ namespace Streaming
                 if (disposing)
                 {
                     Stop();
+                    _displayWebSocket.Shutdown();
                     _cancellationTokenSource.Dispose();
                 }
 

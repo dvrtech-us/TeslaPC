@@ -43,6 +43,17 @@
             </label>
 
             <div class="field">
+                <span class="flabel">Video codec (WebSocket)</span>
+                <div class="res-choices" id="codecChoices">
+                    <button type="button" class="btn codec-choice" data-codec="mjpeg">MJPEG</button>
+                    <button type="button" class="btn codec-choice" data-codec="h264">H264</button>
+                </div>
+                <input type="hidden" name="displayRenderer" value="mjpeg" />
+                <input type="hidden" name="displayTransport" value="websocket" />
+                <span class="fhint" id="h264Hint">MJPEG works everywhere. H264 uses WebCodecs on the client and ffmpeg on the PC (lower bandwidth).</span>
+            </div>
+
+            <div class="field">
                 <span class="flabel">Stream resolution</span>
                 <div class="res-choices" id="resChoices">
                     <button type="button" class="btn res-choice" data-h="480">480p</button>
@@ -90,10 +101,23 @@
                 choices[i].classList.toggle('active', Number(choices[i].getAttribute('data-h')) === h);
         }
 
+        function setDisplayRenderer(codec) {
+            form.displayRenderer.value = codec;
+            var choices = document.querySelectorAll('#codecChoices .codec-choice');
+            for (var i = 0; i < choices.length; i++)
+                choices[i].classList.toggle('active', choices[i].getAttribute('data-codec') === codec);
+        }
+
         document.getElementById('resChoices').addEventListener('click', function (e) {
             var btn = e.target.closest('.res-choice');
             if (!btn) return;
             setStreamHeight(Number(btn.getAttribute('data-h')));
+        });
+
+        document.getElementById('codecChoices').addEventListener('click', function (e) {
+            var btn = e.target.closest('.codec-choice');
+            if (!btn) return;
+            setDisplayRenderer(btn.getAttribute('data-codec'));
         });
 
         function load() {
@@ -103,6 +127,9 @@
                 form.videoRoot.value = c.videoRoot || '';
                 if (c.logLevel) form.logLevel.value = c.logLevel;
                 if (c.streamHeight) setStreamHeight(nearestRes(c.streamHeight));
+                if (c.displayRenderer) setDisplayRenderer(c.displayRenderer);
+                if (c.h264Available === false)
+                    document.getElementById('h264Hint').textContent = 'H264 unavailable — install ffmpeg (TESLAPC_FFMPEG) on the PC.';
                 document.getElementById('verFooter').textContent = c.version ? ('TeslaPC v' + c.version) : '';
                 document.getElementById('cfState').textContent = c.cfTokenSet
                     ? 'A token is saved. Leave blank to keep it, or type a new one to replace it.'
@@ -120,6 +147,8 @@
             body.set('videoRoot', form.videoRoot.value);
             body.set('logLevel', form.logLevel.value);
             body.set('streamHeight', form.streamHeight.value);
+            body.set('displayRenderer', form.displayRenderer.value);
+            body.set('displayTransport', form.displayTransport.value);
             if (form.cfToken.value) body.set('cfToken', form.cfToken.value);
 
             msg.className = 'msg'; msg.textContent = 'Saving…';

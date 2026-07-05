@@ -1,5 +1,6 @@
 using CSCore;
 using CSCore.SoundIn;
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.WebSockets;
@@ -10,6 +11,7 @@ namespace AudioStreamingServer
 {
     public class AudioCapture : IDisposable
     {
+        private readonly StreamTiming _timing;
         private WasapiLoopbackCapture? capture = null;
         private readonly CancellationTokenSource _cancellationTokenSource = new();
         private bool _disposed = false;
@@ -43,6 +45,8 @@ namespace AudioStreamingServer
         // Media mode: while MediaStreamer plays a file it pushes the file's decoded PCM into the same
         // queue via EnqueueMediaAudio, and loopback enqueuing is suppressed so the two don't mix.
         private volatile bool _mediaMode;
+
+        public AudioCapture(StreamTiming timing) => _timing = timing;
 
         /// <summary>Device sample rate (Hz) announced to audio clients.</summary>
         public int SampleRate => _sampleRate;
@@ -132,10 +136,13 @@ namespace AudioStreamingServer
             return JsonSerializer.Serialize(new
             {
                 type = "format",
+                formatVersion = 2,
                 sampleRate = _sampleRate,
                 bitsPerSample = _bitsPerSample,
                 channels = _channels,
-                sampleFormat = _sampleFormat
+                sampleFormat = _sampleFormat,
+                streamEpochUs = _timing.StreamEpochUs,
+                hostClockHz = _timing.HostClockHz,
             });
         }
 
@@ -301,12 +308,15 @@ namespace AudioStreamingServer
             }
         }
 
-        private static async Task SendAudioAsync(WebSocket ws, byte[] buffer)
+        private async Task SendAudioAsync(WebSocket ws, byte[] buffer)
         {
             try
             {
+                var packet = new byte[8 + buffer.Length];
+                BinaryPrimitives.WriteInt64LittleEndian(packet.AsSpan(0, 8), _timing.HostPtsUs);
+                Buffer.BlockCopy(buffer, 0, packet, 8, buffer.Length);
                 await ws.SendAsync(
-                    new ArraySegment<byte>(buffer),
+                    new ArraySegment<byte>(packet),
                     WebSocketMessageType.Binary,
                     true,
                     CancellationToken.None);

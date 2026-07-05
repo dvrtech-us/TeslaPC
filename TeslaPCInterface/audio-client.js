@@ -15,6 +15,13 @@
     var useWorklet = true;
     var scheduledTime = 0;
     var connecting = false;
+    var AUDIO_PTS_BYTES = 8;
+
+    function stripAudioPcm(arrayBuffer) {
+        if (!audioFormat || (audioFormat.formatVersion || 1) < 2) return arrayBuffer;
+        if (arrayBuffer.byteLength <= AUDIO_PTS_BYTES) return arrayBuffer;
+        return arrayBuffer.slice(AUDIO_PTS_BYTES);
+    }
 
     function getWsUrl(path) {
         var protocol = (location.protocol === 'https:') ? 'wss://' : 'ws://';
@@ -81,10 +88,11 @@
             if (audioContext.state === 'suspended') {
                 audioContext.resume();
             }
+            var pcmData = stripAudioPcm(event.data);
             if (useWorklet && pcmPlayerNode) {
-                pcmPlayerNode.port.postMessage(event.data);
+                pcmPlayerNode.port.postMessage(pcmData);
             } else {
-                playPcmChunkFallback(event.data);
+                playPcmChunkFallback(pcmData);
             }
         };
     }
