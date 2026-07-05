@@ -20,7 +20,13 @@ namespace AudioStreamingServer
         // WASAPI loopback often stops firing during short show-silence gaps. Inject zero PCM
         // frames so clients keep decoding until real audio returns or the idle cap is hit.
         private const int SilenceKeepaliveMaxSeconds = 30;
-        private const int KeepaliveIntervalMs = 10;
+        /// <summary>Loopback poll interval; must be well below <see cref="SilenceKeepaliveStartMs"/>.</summary>
+        private const int KeepaliveIntervalMs = 20;
+        /// <summary>
+        /// WASAPI still delivers buffers with short gaps during normal playback; only inject silence
+        /// after this much continuous idle time (show-silence gaps, not inter-buffer timing).
+        /// </summary>
+        private const int SilenceKeepaliveStartMs = 250;
 
         private DateTime _lastRealAudioUtc = DateTime.UtcNow;
         private int _typicalBufferBytes;
@@ -256,7 +262,12 @@ namespace AudioStreamingServer
                 if (idle.TotalSeconds >= SilenceKeepaliveMaxSeconds)
                     continue;
 
-                if (idle.TotalMilliseconds < KeepaliveIntervalMs)
+                if (idle.TotalMilliseconds < SilenceKeepaliveStartMs)
+                    continue;
+
+                // Don't run ahead of the broadcaster — avoids a backlog of silence frames that
+                // delays real audio when the show resumes.
+                if (!_audioDataQueue.IsEmpty)
                     continue;
 
                 var silence = new byte[_typicalBufferBytes];
