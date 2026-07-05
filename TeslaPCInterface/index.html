@@ -266,11 +266,10 @@
                 }
 
                 var parsedAudio = parseAudioFrame(event.data);
-                if (parsedAudio.pts != null) {
-                    scheduleAudioChunk(parsedAudio.pcm, parsedAudio.pts);
-                } else {
-                    deliverAudioChunk(parsedAudio.pcm);
+                if (parsedAudio.pts != null && window.TeslaAvScheduler) {
+                    window.TeslaAvScheduler.anchorOnFirstHostPts(parsedAudio.pts);
                 }
+                deliverAudioChunk(parsedAudio.pcm);
             };
 
         }

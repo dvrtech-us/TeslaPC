@@ -22,15 +22,14 @@
     }
 
     function anchorOnFirstHostPts(hostPtsUs) {
-        if (anchorHostPtsUs !== null) {
-            return;
-        }
         var pts = Number(hostPtsUs);
         if (!Number.isFinite(pts)) {
             return;
         }
-        anchorHostPtsUs = pts;
-        anchorWallMs = Date.now();
+        if (anchorHostPtsUs === null || pts < anchorHostPtsUs) {
+            anchorHostPtsUs = pts;
+            anchorWallMs = Date.now();
+        }
     }
 
     function sync(state) {

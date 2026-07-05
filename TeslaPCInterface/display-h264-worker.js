@@ -1,12 +1,11 @@
 importScripts("av-scheduler.js");
 
 let pendingFrames = [];
-let ptsQueue = [];
 let spsPps = null;
 let decoder = null;
 let gl = null;
 let offscreenCanvas = null;
-let usePtsScheduling = false;
+let useHostPtsTimestamps = false;
 
 let width = 1280;
 let height = 720;
@@ -21,8 +20,6 @@ let syntheticTimestampUs = 0;
 const FRAME_DURATION_US = 33333;
 const MAX_RENDER_QUEUE_SIZE = 4;
 const MAX_DECODE_QUEUE_SIZE = 8;
-const MAX_SCHEDULED_QUEUE_SIZE = 90;
-const LATE_FRAME_SLACK_MS = 50;
 
 let positionLocation = null;
 let texcoordLocation = null;
@@ -41,8 +38,7 @@ function resetSchedulerState() {
   if (self.TeslaAvScheduler) {
     self.TeslaAvScheduler.reset();
   }
-  ptsQueue = [];
-  usePtsScheduling = false;
+  useHostPtsTimestamps = false;
   syntheticTimestampUs = 0;
   closeAllPendingFrames();
 }
@@ -156,9 +152,9 @@ function applyRuntimeConfig(config) {
 
 function closeAllPendingFrames() {
   while (pendingFrames.length > 0) {
-    const entry = pendingFrames.shift();
-    if (entry && entry.frame && entry.frame.close) {
-      entry.frame.close();
+    const frame = pendingFrames.shift();
+    if (frame && frame.close) {
+      frame.close();
     }
   }
 }
@@ -170,105 +166,36 @@ function getDecodeQueueSize() {
   return decoder.decodeQueueSize;
 }
 
-function countOverdueFrames(now) {
-  let count = 0;
-  for (let index = 0; index < pendingFrames.length; index += 1) {
-    if (pendingFrames[index].playAtMs <= now - LATE_FRAME_SLACK_MS) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
 function isDecodeBacklogged() {
-  if (getDecodeQueueSize() > MAX_DECODE_QUEUE_SIZE) {
-    return true;
-  }
-  if (!usePtsScheduling) {
-    return pendingFrames.length > MAX_RENDER_QUEUE_SIZE;
-  }
-  return countOverdueFrames(Date.now()) > MAX_RENDER_QUEUE_SIZE;
-}
-
-function trimScheduledQueue() {
-  if (!usePtsScheduling) {
-    if (pendingFrames.length > MAX_RENDER_QUEUE_SIZE + 1) {
-      while (pendingFrames.length > 1) {
-        const stale = pendingFrames.shift();
-        if (stale.frame && stale.frame.close) {
-          stale.frame.close();
-        }
-      }
-    }
-    return;
-  }
-
-  const now = Date.now();
-  while (pendingFrames.length > 1 && pendingFrames[0].playAtMs <= now - LATE_FRAME_SLACK_MS) {
-    const stale = pendingFrames.shift();
-    if (stale.frame && stale.frame.close) {
-      stale.frame.close();
-    }
-  }
-
-  while (pendingFrames.length > MAX_SCHEDULED_QUEUE_SIZE) {
-    const stale = pendingFrames.shift();
-    if (stale.frame && stale.frame.close) {
-      stale.frame.close();
-    }
-  }
+  return (
+    pendingFrames.length > MAX_RENDER_QUEUE_SIZE ||
+    getDecodeQueueSize() > MAX_DECODE_QUEUE_SIZE
+  );
 }
 
 function scheduleRender() {
-  if (renderScheduled || pendingFrames.length === 0) {
+  if (renderScheduled) {
     return;
   }
-
-  const head = pendingFrames[0];
-  const delay = usePtsScheduling
-    ? Math.max(0, head.playAtMs - Date.now())
-    : 0;
-
   renderScheduled = true;
-  self.setTimeout(function () {
-    renderScheduled = false;
-    flushRenderableFrames();
-  }, delay);
+  self.setTimeout(renderLatestFrame, 0);
 }
 
-function flushRenderableFrames() {
+function renderLatestFrame() {
+  renderScheduled = false;
   if (!gl || pendingFrames.length === 0) {
     return;
   }
 
-  const now = Date.now();
-  if (usePtsScheduling) {
-    while (pendingFrames.length > 1 && pendingFrames[0].playAtMs <= now) {
-      const stale = pendingFrames.shift();
-      if (stale.frame && stale.frame.close) {
-        stale.frame.close();
-      }
-    }
-
-    if (pendingFrames.length === 0) {
-      return;
-    }
-
-    if (pendingFrames[0].playAtMs > now) {
-      scheduleRender();
-      return;
-    }
-  } else {
-    while (pendingFrames.length > 1) {
-      const stale = pendingFrames.shift();
-      if (stale.frame && stale.frame.close) {
-        stale.frame.close();
-      }
+  while (pendingFrames.length > 1) {
+    const staleFrame = pendingFrames.shift();
+    if (staleFrame && staleFrame.close) {
+      staleFrame.close();
     }
   }
 
-  const entry = pendingFrames.shift();
-  drawImageToCanvas(entry.frame);
+  const frame = pendingFrames.shift();
+  drawImageToCanvas(frame);
 
   if (pendingFrames.length > 0) {
     scheduleRender();
@@ -379,15 +306,11 @@ function decodeAccessUnit(accessUnit, isKey, hostPtsUs) {
     return;
   }
 
-  const timestampUs = usePtsScheduling && self.TeslaAvScheduler
-    ? self.TeslaAvScheduler.hostPtsToDecoderTimestampUs(hostPtsUs)
-    : syntheticTimestampUs;
-  if (!usePtsScheduling) {
+  let timestampUs = syntheticTimestampUs;
+  if (useHostPtsTimestamps && self.TeslaAvScheduler && hostPtsUs != null) {
+    timestampUs = self.TeslaAvScheduler.hostPtsToDecoderTimestampUs(hostPtsUs);
+  } else {
     syntheticTimestampUs += FRAME_DURATION_US;
-  }
-
-  if (usePtsScheduling) {
-    ptsQueue.push(hostPtsUs);
   }
 
   const chunk = new EncodedVideoChunk({
@@ -403,9 +326,6 @@ function decodeAccessUnit(accessUnit, isKey, hostPtsUs) {
       dropDeltaUntilKeyframe = false;
     }
   } catch (error) {
-    if (usePtsScheduling && ptsQueue.length > 0) {
-      ptsQueue.pop();
-    }
     if (!isKey) {
       dropDeltaUntilKeyframe = true;
     }
@@ -569,17 +489,15 @@ self.onmessage = function (event) {
     initializeGL(gl);
     decoder = new VideoDecoder({
       output: (frame) => {
-        let hostPtsUs = null;
-        if (usePtsScheduling && ptsQueue.length > 0) {
-          hostPtsUs = ptsQueue.shift();
+        pendingFrames.push(frame);
+        if (pendingFrames.length > MAX_RENDER_QUEUE_SIZE + 1) {
+          while (pendingFrames.length > 1) {
+            const staleFrame = pendingFrames.shift();
+            if (staleFrame && staleFrame.close) {
+              staleFrame.close();
+            }
+          }
         }
-
-        const playAtMs = usePtsScheduling && self.TeslaAvScheduler && hostPtsUs != null
-          ? self.TeslaAvScheduler.hostPtsToPlayWallMs(hostPtsUs)
-          : Date.now();
-
-        pendingFrames.push({ frame: frame, playAtMs: playAtMs });
-        trimScheduledQueue();
         scheduleRender();
       },
       error: (error) => {
@@ -591,9 +509,9 @@ self.onmessage = function (event) {
   } else if (event.data.h264Data) {
     if (event.data.schedulerSync && self.TeslaAvScheduler) {
       self.TeslaAvScheduler.sync(event.data.schedulerSync);
-      usePtsScheduling = event.data.schedulerSync.anchorHostPtsUs != null;
+      useHostPtsTimestamps = event.data.schedulerSync.anchorHostPtsUs != null;
     } else if (event.data.hostPtsUs != null) {
-      usePtsScheduling = true;
+      useHostPtsTimestamps = true;
       if (self.TeslaAvScheduler) {
         self.TeslaAvScheduler.anchorOnFirstHostPts(event.data.hostPtsUs);
       }
