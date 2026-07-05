@@ -14,7 +14,6 @@ public sealed class H264FfmpegEncoder : IDisposable
     private Stream? _stdout;
     private Thread? _stdoutThread;
     private readonly ConcurrentQueue<byte[]> _outputQueue = new();
-    private readonly AnnexBAssembler _assembler = new();
     private volatile bool _readerRunning;
     private int _width;
     private int _height;
@@ -49,7 +48,7 @@ public sealed class H264FfmpegEncoder : IDisposable
 
         var args = new StringBuilder();
         args.Append("-hide_banner -loglevel error ");
-        args.Append("-fflags nobuffer+flush_packets -flags low_delay ");
+        args.Append("-fflags nobuffer -flags low_delay -flush_packets 1 ");
         args.Append(CultureInv($"-f rawvideo -pix_fmt bgr24 -s {width}x{height} -r {_fps} -i pipe:0 "));
         args.Append("-c:v libx264 -preset ultrafast -tune zerolatency -profile:v baseline ");
         args.Append(CultureInv($"-g {_fps} -keyint_min 1 -sc_threshold 0 "));
@@ -162,7 +161,6 @@ public sealed class H264FfmpegEncoder : IDisposable
         _stdout = null;
         _stdoutThread = null;
         while (_outputQueue.TryDequeue(out _)) { }
-        _assembler.Reset();
     }
 
     private void StdoutReaderLoop()
@@ -176,7 +174,9 @@ public sealed class H264FfmpegEncoder : IDisposable
                 if (n <= 0)
                     break;
 
-                _assembler.Append(buf.AsSpan(0, n), au => _outputQueue.Enqueue(au));
+                var chunk = new byte[n];
+                Buffer.BlockCopy(buf, 0, chunk, 0, n);
+                _outputQueue.Enqueue(chunk);
             }
         }
         catch (Exception ex)
@@ -249,129 +249,5 @@ public sealed class H264FfmpegEncoder : IDisposable
         if (_disposed) return;
         _disposed = true;
         Stop();
-    }
-
-    /// <summary>Parses Annex-B NAL units and emits complete access units (slice/keyframe).</summary>
-    private sealed class AnnexBAssembler
-    {
-        private byte[] _buf = new byte[256 * 1024];
-        private int _length;
-
-        public void Reset()
-        {
-            _length = 0;
-        }
-
-        public void Append(ReadOnlySpan<byte> chunk, Action<byte[]> onAccessUnit)
-        {
-            EnsureCapacity(_length + chunk.Length);
-            chunk.CopyTo(_buf.AsSpan(_length));
-            _length += chunk.Length;
-            ExtractAccessUnits(onAccessUnit);
-        }
-
-        private void ExtractAccessUnits(Action<byte[]> onAccessUnit)
-        {
-            while (_length >= 5)
-            {
-                var starts = FindStartCodes(_buf.AsSpan(0, _length));
-                if (starts.Count < 2)
-                    return;
-
-                bool emitted = false;
-                for (int i = 0; i < starts.Count - 1; i++)
-                {
-                    int nalStart = starts[i];
-                    int nalEnd = starts[i + 1];
-                    int type = GetNalType(_buf.AsSpan(nalStart, nalEnd - nalStart));
-                    if (type != 1 && type != 5)
-                        continue;
-
-                    int auBegin = nalStart;
-                    if (type == 5)
-                    {
-                        for (int j = i - 1; j >= 0; j--)
-                        {
-                            int prefixType = GetNalType(_buf.AsSpan(starts[j], starts[j + 1] - starts[j]));
-                            if (prefixType == 7 || prefixType == 8)
-                                auBegin = starts[j];
-                            else
-                                break;
-                        }
-                    }
-
-                    var au = _buf.AsSpan(auBegin, nalEnd - auBegin).ToArray();
-                    onAccessUnit(au);
-                    Consume(nalEnd);
-                    emitted = true;
-                    break;
-                }
-
-                if (!emitted)
-                    return;
-            }
-        }
-
-        private void EnsureCapacity(int needed)
-        {
-            if (_buf.Length >= needed)
-                return;
-
-            int size = _buf.Length;
-            while (size < needed)
-                size *= 2;
-            var next = new byte[size];
-            Buffer.BlockCopy(_buf, 0, next, 0, _length);
-            _buf = next;
-        }
-
-        private void Consume(int count)
-        {
-            if (count <= 0 || count >= _length)
-            {
-                _length = 0;
-                return;
-            }
-
-            Buffer.BlockCopy(_buf, count, _buf, 0, _length - count);
-            _length -= count;
-        }
-
-        private static List<int> FindStartCodes(ReadOnlySpan<byte> data)
-        {
-            var starts = new List<int>();
-            for (int i = 0; i <= data.Length - 3; i++)
-            {
-                if (data[i] == 0x00 && data[i + 1] == 0x00)
-                {
-                    if (i + 3 < data.Length && data[i + 2] == 0x00 && data[i + 3] == 0x01)
-                    {
-                        starts.Add(i);
-                        i += 3;
-                    }
-                    else if (data[i + 2] == 0x01)
-                    {
-                        starts.Add(i);
-                        i += 2;
-                    }
-                }
-            }
-
-            return starts;
-        }
-
-        private static int GetNalType(ReadOnlySpan<byte> nal)
-        {
-            int offset = 0;
-            if (nal.Length >= 4 && nal[0] == 0x00 && nal[1] == 0x00 && nal[2] == 0x00 && nal[3] == 0x01)
-                offset = 4;
-            else if (nal.Length >= 3 && nal[0] == 0x00 && nal[1] == 0x00 && nal[2] == 0x01)
-                offset = 3;
-
-            if (offset >= nal.Length)
-                return -1;
-
-            return nal[offset] & 0x1f;
-        }
     }
 }
