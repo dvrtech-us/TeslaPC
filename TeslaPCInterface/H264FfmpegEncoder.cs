@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 
@@ -11,6 +12,10 @@ public sealed class H264FfmpegEncoder : IDisposable
     private Process? _process;
     private Stream? _stdin;
     private Stream? _stdout;
+    private Thread? _stdoutThread;
+    private readonly ConcurrentQueue<byte[]> _outputQueue = new();
+    private readonly AnnexBAssembler _assembler = new();
+    private volatile bool _readerRunning;
     private int _width;
     private int _height;
     private int _fps;
@@ -40,10 +45,11 @@ public sealed class H264FfmpegEncoder : IDisposable
         _framesFed = 0;
         _framesOut = 0;
         _nullReads = 0;
+        while (_outputQueue.TryDequeue(out _)) { }
 
         var args = new StringBuilder();
         args.Append("-hide_banner -loglevel error ");
-        args.Append("-fflags nobuffer -flags low_delay ");
+        args.Append("-fflags nobuffer+flush_packets -flags low_delay ");
         args.Append(CultureInv($"-f rawvideo -pix_fmt bgr24 -s {width}x{height} -r {_fps} -i pipe:0 "));
         args.Append("-c:v libx264 -preset ultrafast -tune zerolatency -profile:v baseline ");
         args.Append(CultureInv($"-g {_fps} -keyint_min 1 -sc_threshold 0 "));
@@ -83,6 +89,14 @@ public sealed class H264FfmpegEncoder : IDisposable
             }
             catch { /* encoder shutting down */ }
         });
+
+        _readerRunning = true;
+        _stdoutThread = new Thread(StdoutReaderLoop)
+        {
+            IsBackground = true,
+            Name = "H264Stdout",
+        };
+        _stdoutThread.Start();
     }
 
     /// <summary>Feeds one tightly-packed BGR24 frame and returns the encoded Annex-B access unit, if any.</summary>
@@ -107,21 +121,28 @@ public sealed class H264FfmpegEncoder : IDisposable
             return null;
         }
 
-        var encoded = ReadEncodedFrame();
-        if (encoded == null || encoded.Length == 0)
+        int timeoutMs = _framesOut == 0 ? 3000 : 250;
+        long deadline = Environment.TickCount64 + timeoutMs;
+        while (Environment.TickCount64 < deadline)
         {
-            _nullReads++;
-            MaybeLogStats();
-            return null;
+            if (_outputQueue.TryDequeue(out var encoded) && encoded.Length > 0)
+            {
+                _framesOut++;
+                MaybeLogStats();
+                return encoded;
+            }
+
+            Thread.Sleep(5);
         }
 
-        _framesOut++;
+        _nullReads++;
         MaybeLogStats();
-        return encoded;
+        return null;
     }
 
     public void Stop()
     {
+        _readerRunning = false;
         try { _stdin?.Close(); } catch { }
         try
         {
@@ -132,10 +153,37 @@ public sealed class H264FfmpegEncoder : IDisposable
             }
         }
         catch { }
+
+        try { _stdoutThread?.Join(1000); } catch { }
+
         _process?.Dispose();
         _process = null;
         _stdin = null;
         _stdout = null;
+        _stdoutThread = null;
+        while (_outputQueue.TryDequeue(out _)) { }
+        _assembler.Reset();
+    }
+
+    private void StdoutReaderLoop()
+    {
+        var buf = new byte[65536];
+        try
+        {
+            while (_readerRunning && _stdout != null)
+            {
+                int n = _stdout.Read(buf, 0, buf.Length);
+                if (n <= 0)
+                    break;
+
+                _assembler.Append(buf.AsSpan(0, n), au => _outputQueue.Enqueue(au));
+            }
+        }
+        catch (Exception ex)
+        {
+            if (_readerRunning)
+                Console.WriteLine($"[H264] stdout reader stopped: {ex.Message}");
+        }
     }
 
     private void MaybeLogStats()
@@ -144,45 +192,7 @@ public sealed class H264FfmpegEncoder : IDisposable
         if (now - _lastStatsUtc < 5000)
             return;
         _lastStatsUtc = now;
-        Console.WriteLine($"[H264] fed={_framesFed} out={_framesOut} null={_nullReads}");
-    }
-
-    private byte[]? ReadEncodedFrame()
-    {
-        if (_stdout == null)
-            return null;
-
-        using var ms = new MemoryStream();
-        var buf = new byte[65536];
-        // First frames need SPS/PPS/IDR; allow more time on startup.
-        int timeoutMs = _framesOut == 0 ? 500 : 150;
-        long deadline = Environment.TickCount64 + timeoutMs;
-        bool gotData = false;
-
-        while (Environment.TickCount64 < deadline)
-        {
-            try
-            {
-                int remaining = Math.Max(1, (int)(deadline - Environment.TickCount64));
-                var readTask = Task.Run(() => _stdout!.Read(buf, 0, buf.Length));
-                if (!readTask.Wait(remaining))
-                    break;
-
-                int n = readTask.Result;
-                if (n <= 0)
-                    break;
-
-                ms.Write(buf, 0, n);
-                gotData = true;
-                deadline = Environment.TickCount64 + 30;
-            }
-            catch
-            {
-                break;
-            }
-        }
-
-        return gotData && ms.Length > 0 ? ms.ToArray() : null;
+        Console.WriteLine($"[H264] fed={_framesFed} out={_framesOut} null={_nullReads} queued={_outputQueue.Count}");
     }
 
     private static string CultureInv(FormattableString s) => s.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -239,5 +249,129 @@ public sealed class H264FfmpegEncoder : IDisposable
         if (_disposed) return;
         _disposed = true;
         Stop();
+    }
+
+    /// <summary>Parses Annex-B NAL units and emits complete access units (slice/keyframe).</summary>
+    private sealed class AnnexBAssembler
+    {
+        private byte[] _buf = new byte[256 * 1024];
+        private int _length;
+
+        public void Reset()
+        {
+            _length = 0;
+        }
+
+        public void Append(ReadOnlySpan<byte> chunk, Action<byte[]> onAccessUnit)
+        {
+            EnsureCapacity(_length + chunk.Length);
+            chunk.CopyTo(_buf.AsSpan(_length));
+            _length += chunk.Length;
+            ExtractAccessUnits(onAccessUnit);
+        }
+
+        private void ExtractAccessUnits(Action<byte[]> onAccessUnit)
+        {
+            while (_length >= 5)
+            {
+                var starts = FindStartCodes(_buf.AsSpan(0, _length));
+                if (starts.Count < 2)
+                    return;
+
+                bool emitted = false;
+                for (int i = 0; i < starts.Count - 1; i++)
+                {
+                    int nalStart = starts[i];
+                    int nalEnd = starts[i + 1];
+                    int type = GetNalType(_buf.AsSpan(nalStart, nalEnd - nalStart));
+                    if (type != 1 && type != 5)
+                        continue;
+
+                    int auBegin = nalStart;
+                    if (type == 5)
+                    {
+                        for (int j = i - 1; j >= 0; j--)
+                        {
+                            int prefixType = GetNalType(_buf.AsSpan(starts[j], starts[j + 1] - starts[j]));
+                            if (prefixType == 7 || prefixType == 8)
+                                auBegin = starts[j];
+                            else
+                                break;
+                        }
+                    }
+
+                    var au = _buf.AsSpan(auBegin, nalEnd - auBegin).ToArray();
+                    onAccessUnit(au);
+                    Consume(nalEnd);
+                    emitted = true;
+                    break;
+                }
+
+                if (!emitted)
+                    return;
+            }
+        }
+
+        private void EnsureCapacity(int needed)
+        {
+            if (_buf.Length >= needed)
+                return;
+
+            int size = _buf.Length;
+            while (size < needed)
+                size *= 2;
+            var next = new byte[size];
+            Buffer.BlockCopy(_buf, 0, next, 0, _length);
+            _buf = next;
+        }
+
+        private void Consume(int count)
+        {
+            if (count <= 0 || count >= _length)
+            {
+                _length = 0;
+                return;
+            }
+
+            Buffer.BlockCopy(_buf, count, _buf, 0, _length - count);
+            _length -= count;
+        }
+
+        private static List<int> FindStartCodes(ReadOnlySpan<byte> data)
+        {
+            var starts = new List<int>();
+            for (int i = 0; i <= data.Length - 3; i++)
+            {
+                if (data[i] == 0x00 && data[i + 1] == 0x00)
+                {
+                    if (i + 3 < data.Length && data[i + 2] == 0x00 && data[i + 3] == 0x01)
+                    {
+                        starts.Add(i);
+                        i += 3;
+                    }
+                    else if (data[i + 2] == 0x01)
+                    {
+                        starts.Add(i);
+                        i += 2;
+                    }
+                }
+            }
+
+            return starts;
+        }
+
+        private static int GetNalType(ReadOnlySpan<byte> nal)
+        {
+            int offset = 0;
+            if (nal.Length >= 4 && nal[0] == 0x00 && nal[1] == 0x00 && nal[2] == 0x00 && nal[3] == 0x01)
+                offset = 4;
+            else if (nal.Length >= 3 && nal[0] == 0x00 && nal[1] == 0x00 && nal[2] == 0x01)
+                offset = 3;
+
+            if (offset >= nal.Length)
+                return -1;
+
+            return nal[offset] & 0x1f;
+        }
     }
 }
