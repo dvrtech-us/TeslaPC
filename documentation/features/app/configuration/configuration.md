@@ -49,6 +49,9 @@ web UI.
    - The stream-resolution field is a three-button choice group (`#resChoices`, values `480` /
      `720` / `1080`) plus a hidden `streamHeight` input; pre-selected from `GET /config`
      (native `<select>` popups are unreliable on the Tesla in-car browser).
+   - The **H264 bitrate** control (when `h264Available:true`) offers **Automatic** (default) or a
+     manual slider (`1.5`–`12.0` Mbps). Pre-fills from `h264BitrateMbps` (`0` = automatic) and
+     shows the computed `h264BitrateAutoMbps` hint. Applies immediately (encoder restarts on save).
    - The **Audio boost** slider (`0.5`–`6.0`, default `1.0`) pre-fills from `audioBoost` on
      `GET /config`. Applies on the next tap-to-connect (or page refresh).
 3. Edit any field and click **Save**. The page posts `application/x-www-form-urlencoded` to
@@ -77,6 +80,8 @@ web UI.
 | `DisplayRendererKey` | `TESLAPC_DISPLAY_RENDERER` |
 | `DisplayTransportKey` | `TESLAPC_DISPLAY_TRANSPORT` |
 | `AudioBoostKey` | `TESLAPC_AUDIO_BOOST` |
+| `H264BitrateKey` | `TESLAPC_H264_BITRATE` |
+| `MinH264BitrateMbps` / `MaxH264BitrateMbps` | `1.5` / `12.0` |
 | `DefaultVideoRoot` | `C:\video\` |
 | `DefaultStreamHeight` | `1080` |
 | `DefaultDisplayRenderer` | `mjpeg` |
@@ -138,7 +143,7 @@ is left intact.
 Returns a JSON object with the current non-secret settings:
 
 ```json
-{ "httpsHost": "my.example.com", "acmeEmail": "admin@example.com", "videoRoot": "C:\\video\\", "cfTokenSet": true, "logLevel": "info", "streamHeight": 1080, "displayRenderer": "mjpeg", "displayTransport": "websocket", "h264Available": true, "audioBoost": 1.0, "version": "1.0.0" }
+{ "httpsHost": "my.example.com", "acmeEmail": "admin@example.com", "videoRoot": "C:\\video\\", "cfTokenSet": true, "logLevel": "info", "streamHeight": 1080, "displayRenderer": "mjpeg", "displayTransport": "websocket", "h264Available": true, "h264BitrateMbps": 0, "h264BitrateAutoMbps": 6.2, "audioBoost": 1.0, "version": "1.0.0" }
 ```
 
 `cfTokenSet` is `true` when `TESLAPC_CF_TOKEN` is set to a non-empty value. **The token
@@ -153,7 +158,8 @@ display settings from `AppSettings`. `h264Available` is true when
 #### `POST /config`
 
 Accepts `application/x-www-form-urlencoded` with fields: `httpsHost`, `acmeEmail`,
-`videoRoot`, `logLevel`, `streamHeight`, `displayRenderer`, `displayTransport`, `audioBoost`,
+`videoRoot`, `logLevel`, `streamHeight`, `displayRenderer`, `displayTransport`, `h264BitrateMbps`,
+`audioBoost`,
 and optionally `cfToken`.
 
 1. Builds a dictionary, adding `httpsHost`/`acmeEmail` when present and `videoRoot`/`cfToken`
@@ -290,6 +296,7 @@ surfaced in:
 | `TESLAPC_DISPLAY_RENDERER` | `DisplayRendererKey` | `mjpeg` | Next display connection |
 | `TESLAPC_DISPLAY_TRANSPORT` | `DisplayTransportKey` | `websocket` | Next display connection |
 | `TESLAPC_AUDIO_BOOST` | `AudioBoostKey` | `1.0` | Next audio connect (`index.html` tap or `play.html` start) |
+| `TESLAPC_H264_BITRATE` | `H264BitrateKey` | automatic (`width * height * fps * 0.10` bps) | Immediate encoder restart on `POST /config` |
 
 ## Access Control
 

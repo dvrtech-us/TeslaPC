@@ -230,6 +230,7 @@ public class WebServer
             string? displayRenderer = form.Get("displayRenderer");
             string? displayTransport = form.Get("displayTransport");
             string? audioBoost = form.Get("audioBoost");
+            string? h264BitrateMbps = form.Get("h264BitrateMbps");
 
             if (host != null) toSave[AppSettings.HttpsHostKey] = host.Trim();
             if (email != null) toSave[AppSettings.AcmeEmailKey] = email.Trim();
@@ -253,6 +254,20 @@ public class WebServer
                 gain = Math.Clamp(gain, AppSettings.MinAudioBoost, AppSettings.MaxAudioBoost);
                 toSave[AppSettings.AudioBoostKey] = gain.ToString(System.Globalization.CultureInfo.InvariantCulture);
             }
+            if (h264BitrateMbps != null
+                && double.TryParse(h264BitrateMbps.Trim(), System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var mbps))
+            {
+                if (mbps <= 0)
+                    toSave[AppSettings.H264BitrateKey] = "";
+                else
+                {
+                    mbps = Math.Clamp(mbps, AppSettings.MinH264BitrateMbps, AppSettings.MaxH264BitrateMbps);
+                    int bps = (int)Math.Round(mbps * 1_000_000);
+                    bps = Math.Clamp(bps, AppSettings.MinH264Bitrate, AppSettings.MaxH264Bitrate);
+                    toSave[AppSettings.H264BitrateKey] = bps.ToString();
+                }
+            }
             // Only overwrite the token when a non-blank value is supplied (the form leaves it blank to keep).
             if (!string.IsNullOrWhiteSpace(cfToken)) toSave[AppSettings.CloudflareTokenKey] = cfToken.Trim();
 
@@ -274,6 +289,8 @@ public class WebServer
                     (toSave.ContainsKey(AppSettings.DisplayTransportKey) && AppSettings.DisplayTransport != previousDisplayTransport);
                 if (displayModeChanged)
                     _imageStreamer.RestartDisplayClients("display config changed");
+                if (toSave.ContainsKey(AppSettings.H264BitrateKey))
+                    _imageStreamer.RestartH264Encoder();
                 bool restartNeeded = toSave.ContainsKey(AppSettings.HttpsHostKey)
                     || toSave.ContainsKey(AppSettings.CloudflareTokenKey)
                     || toSave.ContainsKey(AppSettings.AcmeEmailKey);
@@ -289,6 +306,9 @@ public class WebServer
         }
 
         // GET: report current values, but never the token itself.
+        var (outW, outH) = _imageStreamer.StreamOutputSize;
+        int autoBitrateBps = H264MediaFoundationEncoder.EstimateDefaultBitrateBps(
+            outW, outH, _imageStreamer.StreamFps);
         var payload = new
         {
             httpsHost = AppSettings.Get(AppSettings.HttpsHostKey) ?? "",
@@ -299,6 +319,8 @@ public class WebServer
             displayRenderer = AppSettings.DisplayRenderer,
             displayTransport = AppSettings.DisplayTransport,
             h264Available = H264MediaFoundationEncoder.IsAvailable,
+            h264BitrateMbps = AppSettings.H264BitrateMbps ?? 0,
+            h264BitrateAutoMbps = autoBitrateBps / 1_000_000.0,
             audioBoost = AppSettings.AudioBoost,
             version = AppSettings.Version,
             cfTokenSet = !string.IsNullOrWhiteSpace(AppSettings.Get(AppSettings.CloudflareTokenKey))

@@ -64,6 +64,17 @@
                 <span class="fhint">Max vertical pixels streamed (live screen and video). Higher is sharper but uses more bandwidth. Applies immediately.</span>
             </div>
 
+            <div class="field" id="h264BitrateField">
+                <span class="flabel">H264 bitrate</span>
+                <label class="fhint" style="display:block;margin-bottom:8px">
+                    <input type="checkbox" id="h264BitrateAuto" checked />
+                    Automatic (based on resolution)
+                </label>
+                <input class="finput" name="h264BitrateMbps" id="h264BitrateMbps" type="range"
+                    min="1.5" max="12" step="0.5" value="3" disabled />
+                <span class="fhint" id="h264BitrateHint">Automatic — encoder picks bitrate from stream size. Applies immediately.</span>
+            </div>
+
             <label class="field">
                 <span class="flabel">Audio boost</span>
                 <input class="finput" name="audioBoost" type="range" min="0.5" max="6" step="0.1" value="1" />
@@ -128,6 +139,33 @@
             document.getElementById('audioBoostHint').textContent = formatAudioBoostLabel(gain);
         }
 
+        function formatH264BitrateLabel(auto, mbps, autoMbps) {
+            if (auto) {
+                var autoLabel = Number.isFinite(autoMbps) ? autoMbps.toFixed(1) : '?';
+                return 'Automatic (~' + autoLabel + ' Mbps at current stream size). Applies immediately.';
+            }
+            return Number(mbps).toFixed(1) + ' Mbps — fixed encoder bitrate. Applies immediately.';
+        }
+
+        function setH264Bitrate(auto, mbps, autoMbps) {
+            var autoBox = document.getElementById('h264BitrateAuto');
+            var slider = document.getElementById('h264BitrateMbps');
+            autoBox.checked = !!auto;
+            slider.disabled = !!auto;
+            if (!auto) {
+                var value = Number(mbps);
+                if (!Number.isFinite(value)) value = Number(autoMbps) || 3;
+                value = Math.min(12, Math.max(1.5, value));
+                slider.value = String(value);
+            }
+            document.getElementById('h264BitrateHint').textContent =
+                formatH264BitrateLabel(autoBox.checked, slider.value, autoMbps);
+        }
+
+        function updateH264BitrateFieldVisible(h264Available) {
+            document.getElementById('h264BitrateField').style.display = h264Available ? '' : 'none';
+        }
+
         document.getElementById('resChoices').addEventListener('click', function (e) {
             var btn = e.target.closest('.res-choice');
             if (!btn) return;
@@ -144,6 +182,15 @@
             document.getElementById('audioBoostHint').textContent = formatAudioBoostLabel(form.audioBoost.value);
         });
 
+        document.getElementById('h264BitrateAuto').addEventListener('change', function () {
+            setH264Bitrate(this.checked, form.h264BitrateMbps.value, window.__h264BitrateAutoMbps);
+        });
+
+        form.h264BitrateMbps.addEventListener('input', function () {
+            document.getElementById('h264BitrateHint').textContent =
+                formatH264BitrateLabel(false, form.h264BitrateMbps.value, window.__h264BitrateAutoMbps);
+        });
+
         function load() {
             fetch('/config').then(function (r) { return r.json(); }).then(function (c) {
                 form.httpsHost.value = c.httpsHost || '';
@@ -153,6 +200,9 @@
                 if (c.streamHeight) setStreamHeight(nearestRes(c.streamHeight));
                 if (c.displayRenderer) setDisplayRenderer(c.displayRenderer);
                 if (c.audioBoost != null) setAudioBoost(c.audioBoost);
+                window.__h264BitrateAutoMbps = c.h264BitrateAutoMbps;
+                setH264Bitrate(!c.h264BitrateMbps, c.h264BitrateMbps || c.h264BitrateAutoMbps, c.h264BitrateAutoMbps);
+                updateH264BitrateFieldVisible(c.h264Available !== false);
                 if (c.h264Available === false)
                     document.getElementById('h264Hint').textContent = 'H264 unavailable — native Windows Media Foundation encoder was not found on the PC.';
                 document.getElementById('verFooter').textContent = c.version ? ('TeslaPC v' + c.version) : '';
@@ -175,6 +225,9 @@
             body.set('displayRenderer', form.displayRenderer.value);
             body.set('displayTransport', form.displayTransport.value);
             body.set('audioBoost', form.audioBoost.value);
+            body.set('h264BitrateMbps', document.getElementById('h264BitrateAuto').checked
+                ? '0'
+                : form.h264BitrateMbps.value);
             if (form.cfToken.value) body.set('cfToken', form.cfToken.value);
 
             msg.className = 'msg'; msg.textContent = 'Saving…';

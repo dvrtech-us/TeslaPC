@@ -501,14 +501,19 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
         Console.WriteLine($"[H264] native fed={_framesFed} out={_framesOut} null={_nullOutputs}");
     }
 
+    public static int EstimateDefaultBitrateBps(int width, int height, int fps)
+    {
+        // ~0.10 bits per pixel per frame for desktop screen content.
+        long bitsPerSecond = (long)(width * height * Math.Max(1, fps) * 0.10);
+        return (int)Math.Clamp(bitsPerSecond, AppSettings.MinH264Bitrate, AppSettings.MaxH264Bitrate);
+    }
+
     private static int EstimateBitrate(int width, int height, int fps)
     {
         if (AppSettings.H264BitrateOverride is int overrideBps)
             return overrideBps;
 
-        // ~0.10 bits per pixel per frame for desktop screen content.
-        long bitsPerSecond = (long)(width * height * Math.Max(1, fps) * 0.10);
-        return (int)Math.Clamp(bitsPerSecond, AppSettings.MinH264Bitrate, AppSettings.MaxH264Bitrate);
+        return EstimateDefaultBitrateBps(width, height, fps);
     }
 
     private static ulong PackRatio(uint high, uint low) => ((ulong)high << 32) | low;

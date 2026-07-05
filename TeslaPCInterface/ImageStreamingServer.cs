@@ -74,6 +74,12 @@ namespace Streaming
             _displayWebSocket.RestartClients(reason);
         }
 
+        public void RestartH264Encoder() => _displayWebSocket.StopH264Encoder();
+
+        public int StreamFps => _fps;
+
+        public (int Width, int Height) StreamOutputSize => GetStreamOutputSize();
+
 
         /// <summary>
         /// constructor that takes in the size of the screen

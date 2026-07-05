@@ -178,7 +178,7 @@ display-control routes to force a fresh DXGI session after a desktop resolution 
 | H264 GOP (default) | `fps` frames (~1 s) | `AppSettings.H264GopFrames`, `H264MediaFoundationEncoder.cs` |
 | H264 bitrate (default) | `width * height * fps * 0.10`, clamped `500_000`–`20_000_000` bps | `H264MediaFoundationEncoder.EstimateBitrate` |
 | H264 GOP override | `TESLAPC_H264_GOP_FRAMES` (`1`–`300`) | `AppSettings.cs` |
-| H264 bitrate override | `TESLAPC_H264_BITRATE` (`500_000`–`20_000_000` bps) | `AppSettings.cs` |
+| H264 bitrate override | `TESLAPC_H264_BITRATE` (`500_000`–`20_000_000` bps) or web Settings slider (`1.5`–`12` Mbps) | `AppSettings.cs`, `config.html` |
 | Scaling quality | `HighSpeed` / `Bilinear` / `SmoothingMode.None` | `ImageStreamingServer.cs` |
 | Max resolution (default) | `4320×1080` (width = 4× height), `30` FPS | Constructed in `TeslaPcService` from `AppSettings.StreamHeight` |
 | `AppSettings.DefaultStreamHeight` | `1080` | `TeslaPCInterface/AppSettings.cs` |

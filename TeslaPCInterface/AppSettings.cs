@@ -30,6 +30,8 @@ public static class AppSettings
     public const int MaxH264GopFrames = 300;
     public const int MinH264Bitrate = 500_000;
     public const int MaxH264Bitrate = 20_000_000;
+    public const double MinH264BitrateMbps = 1.5;
+    public const double MaxH264BitrateMbps = 12.0;
     public const int DefaultStreamHeight = 1080;
     public const string DefaultDisplayRenderer = "mjpeg";
     public const string DefaultDisplayTransport = "websocket";
@@ -91,6 +93,17 @@ public static class AppSettings
         }
     }
 
+    /// <summary>H264 bitrate override in Mbps for UI, or null when automatic.</summary>
+    public static double? H264BitrateMbps
+    {
+        get
+        {
+            if (H264BitrateOverride is not int bps)
+                return null;
+            return bps / 1_000_000.0;
+        }
+    }
+
     /// <summary>Max vertical pixels for the stream (the live screen/media is scaled into this cap).</summary>
     public static int StreamHeight
     {
@@ -137,7 +150,6 @@ public static class AppSettings
         var lines = File.Exists(path) ? new List<string>(File.ReadAllLines(path)) : new List<string>();
         foreach (var kv in values)
         {
-            string line = $"{kv.Key}={kv.Value}";
             int idx = lines.FindIndex(l =>
             {
                 var t = l.TrimStart();
@@ -145,6 +157,16 @@ public static class AppSettings
                 int eq = t.IndexOf('=');
                 return eq > 0 && t.Substring(0, eq).Trim() == kv.Key;
             });
+
+            if (string.IsNullOrEmpty(kv.Value))
+            {
+                if (idx >= 0)
+                    lines.RemoveAt(idx);
+                Environment.SetEnvironmentVariable(kv.Key, null);
+                continue;
+            }
+
+            string line = $"{kv.Key}={kv.Value}";
             if (idx >= 0) lines[idx] = line;
             else lines.Add(line);
 
