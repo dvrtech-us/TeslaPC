@@ -12,9 +12,9 @@ prefers DXGI Desktop Duplication (GPU) and falls back to GDI `CopyFromScreen`.
    for H264.
 2. On tap-to-connect, the browser reads `/config` and opens either the legacy `/stream` route
    (`displayTransport=http`) or `/ws/display?renderer=mjpeg|h264` (`displayTransport=websocket`).
-3. Each captured frame is JPEG-encoded once for MJPEG clients. When at least one H264 client is
-   connected, the same BGR24 frame is converted to NV12 and encoded by
-   `H264MediaFoundationEncoder`.
+3. Each captured frame is JPEG-encoded only when at least one JPEG consumer exists (`/stream`
+   or `/ws/display?renderer=mjpeg`). When at least one H264 client is connected, the same
+   BGR24 frame is converted to NV12 and encoded by `H264MediaFoundationEncoder`.
 4. When the last client disconnects, the capture loop stops and releases its resources.
 5. The Client can select a stream resolution (480p / 720p / 1080p) from a dropdown in the
    main screen or the Settings page. Changes apply immediately without a stream reconnect.
@@ -57,14 +57,17 @@ prefers DXGI Desktop Duplication (GPU) and falls back to GDI `CopyFromScreen`.
 6. Resolve the JPEG codec (`GetJpegCodec`) and set `Encoder.Quality = 60L`.
 7. Per frame:
    - `dxgiCapture.TryCapture(srcImage)` or `srcGraphics.CopyFromScreen(...)`.
-   - If resizing: `DrawImage` into `scaledImage`, then `scaledImage.Save(ms, jpegCodec, params)`. Else `srcImage.Save(...)`.
+   - If resizing: `DrawImage` into `scaledImage`.
+   - If `Volatile.Read(ref _httpClientCount) > 0 || DisplayWebSocket.NeedMjpeg`, JPEG-encode
+     the scaled frame (`scaledImage.Save(...)` or `srcImage.Save(...)`). H264-only sessions
+     skip JPEG work entirely.
    - If `DisplayWebSocket.NeedH264` is true for this tick, convert the frame to tightly-packed
      BGR24 (`BitmapToBgr24` / `BitmapToBgr24From32bpp`) and call
      `DisplayWebSocket.EncodeH264`. If no H264 clients are connected, call
      `DisplayWebSocket.StopH264Encoder()` so the native encoder is disposed.
-   - `PublishFrame(ms, h264Frames)`: copy JPEG bytes to `_currentFrame`, increment
-     `_frameNumber`, `Monitor.PulseAll(_frameLock)`, then broadcast JPEG or H264 payloads to
-     display WebSocket clients.
+   - `PublishFrame(jpeg, h264Frames)`: copy JPEG bytes to `_currentFrame`, increment
+     `_frameNumber`, `Monitor.PulseAll(_frameLock)`, then broadcast JPEG and/or H264 payloads
+     to display WebSocket clients. If no JPEG was produced, `_currentFrame` is not changed.
    - Pace: if `elapsed < Interval`, `Thread.Sleep(Interval - elapsed)` where `Interval = 1000 / fps`.
 8. `RunCaptureSession` returns `true` (restart) when either:
    - `_restartEpoch` has changed (bumped by `SetMaxResolution` or `RestartCapture`), **or**
@@ -161,6 +164,14 @@ display-control routes to force a fresh DXGI session after a desktop resolution 
 | Max resolution (default) | `4320×1080` (width = 4× height), `30` FPS | Constructed in `TeslaPcService` from `AppSettings.StreamHeight` |
 | `AppSettings.DefaultStreamHeight` | `1080` | `TeslaPCInterface/AppSettings.cs` |
 | Height clamp range | `[240, 2160]` | `AppSettings.StreamHeight` property |
+
+## WebSocket Backpressure
+
+`DisplayWebSocket` serializes sends per client. Each `DisplayWsClient` has one active send loop,
+one pending latest packet, and one pending H264 keyframe packet. When a browser is slower than
+the capture loop, older unsent display frames are replaced by the newest frame instead of
+building an unbounded WebSocket backlog. H264 IDR packets are preserved ahead of delta packets
+so a slow client can recover decoder state after frame drops.
 
 ## Environment Variables
 

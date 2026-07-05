@@ -157,7 +157,9 @@ Accepts `application/x-www-form-urlencoded` with fields: `httpsHost`, `acmeEmail
    `_imageStreamer.SetMaxResolution(h*4, h)` **immediately** (no restart needed). The new cap
    takes effect on the next capture-session start (triggered automatically by the epoch bump).
 6. If `displayRenderer` is present, saves only `h264` or `mjpeg`; if `displayTransport` is
-   present, saves only `http` or `websocket`. These apply to the next display connection.
+   present, saves only `http` or `websocket`. When either value changes, `WebServer.HandleConfig`
+   calls `_imageStreamer.RestartDisplayClients("display config changed")` so connected display
+   WebSocket clients reconnect and renegotiate the global display mode.
 7. Sets `restartNeeded = true` if `httpsHost`, `cfToken`, or `acmeEmail` were saved.
    `logLevel` and `streamHeight` are **not** in `restartNeeded` — both take effect live.
 8. Returns JSON:
@@ -192,6 +194,16 @@ sets `_media.Root = AppSettings.VideoRoot` at startup and exposes:
 `WebServer.returnAllFilesAsHtmlLinks` (the `/list.html` file browser) reads `_media.Root`
 instead of a hardcoded path, so the new folder takes effect for the next browser request
 with no restart.
+
+### Display renderer / transport — live global application
+
+`displayRenderer` and `displayTransport` are process-wide settings. `POST /config` snapshots
+the previous values before `AppSettings.Save`, compares them after save, and calls
+`ImageStreamingServer.RestartDisplayClients("display config changed")` when either value changed.
+`DisplayWebSocket.RestartClients` closes each connected display WebSocket; browser clients then
+re-read `/config` and reconnect display in the selected mode. This avoids mixed MJPEG/H264
+WebSocket clients after a codec switch. Existing legacy HTTP `/stream` clients cannot be
+server-pushed and continue until their browser reloads or reconnects.
 
 ### Host / Cloudflare token / ACME email — apply on next server restart
 

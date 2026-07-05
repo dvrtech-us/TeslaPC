@@ -22,6 +22,11 @@ streaming. Update only when intended behavior changes.
   server falls back to MJPEG for that client.
 - `DisplayWebSocket.NeedH264` is checked every capture tick. The native H264 encoder exists only
   while at least one H264 display WebSocket client is connected.
+- `DisplayWebSocket.NeedMjpeg` is checked every capture tick. JPEG encoding is skipped when
+  there are no HTTP `/stream` clients and no MJPEG display WebSocket clients.
+- Display WebSocket sends are serialized per client. A slow client may have at most one active
+  send, one latest pending packet, and one preserved H264 keyframe packet; stale unsent display
+  frames are dropped.
 
 ## Capture-Source Rules
 
@@ -33,6 +38,7 @@ streaming. Update only when intended behavior changes.
 ## Encoding / Pacing Defaults
 
 - JPEG quality is fixed at `60`.
+- JPEG work is demand-driven. H264-only sessions do not encode JPEG frames.
 - Frame pacing is best-effort via `Environment.TickCount`; overruns are not compensated across frames.
 - Scaling uses fixed `Bilinear` / `HighSpeed` / no-smoothing settings.
 - Output is the live screen scaled **uniformly** into the `MaxWidth × MaxHeight` cap box — aspect ratio is

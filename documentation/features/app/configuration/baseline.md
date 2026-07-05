@@ -62,8 +62,12 @@ Known-good invariants. Update only when intended behavior changes.
   `h264` after trim/lowercase; otherwise it returns `mjpeg`.
 - `AppSettings.DisplayTransport` returns `http` only when `TESLAPC_DISPLAY_TRANSPORT` is exactly
   `http` after trim/lowercase; otherwise it returns `websocket`.
-- Display renderer/transport settings apply to the next browser display connection. They are not
-  part of `restartNeeded`.
+- Display renderer/transport settings are process-wide. When a saved value changes,
+  `WebServer.HandleConfig` closes connected display WebSockets via
+  `ImageStreamingServer.RestartDisplayClients("display config changed")`; browser clients
+  reconnect display and re-read `/config`. They are not part of `restartNeeded`.
+- Existing legacy HTTP `/stream` clients cannot be server-pushed to another transport; they
+  continue until browser reload/reconnect.
 - `GET /config` includes a `version` field (string) — the value of `AppSettings.Version`.
   The version is read-only; it cannot be changed via `POST /config` and is not part of
   `restartNeeded`.

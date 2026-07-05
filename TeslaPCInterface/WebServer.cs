@@ -213,6 +213,8 @@ public class WebServer
     {
         if (context.Request.HttpMethod == "POST")
         {
+            string previousDisplayRenderer = AppSettings.DisplayRenderer;
+            string previousDisplayTransport = AppSettings.DisplayTransport;
             string body;
             using (var reader = new StreamReader(context.Request.InputStream, context.Request.ContentEncoding))
                 body = reader.ReadToEnd();
@@ -259,6 +261,11 @@ public class WebServer
                     int h = int.Parse(toSave[AppSettings.StreamHeightKey]);
                     _imageStreamer.SetMaxResolution(h * 4, h);
                 }
+                bool displayModeChanged =
+                    (toSave.ContainsKey(AppSettings.DisplayRendererKey) && AppSettings.DisplayRenderer != previousDisplayRenderer) ||
+                    (toSave.ContainsKey(AppSettings.DisplayTransportKey) && AppSettings.DisplayTransport != previousDisplayTransport);
+                if (displayModeChanged)
+                    _imageStreamer.RestartDisplayClients("display config changed");
                 bool restartNeeded = toSave.ContainsKey(AppSettings.HttpsHostKey)
                     || toSave.ContainsKey(AppSettings.CloudflareTokenKey)
                     || toSave.ContainsKey(AppSettings.AcmeEmailKey);

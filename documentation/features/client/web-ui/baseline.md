@@ -12,8 +12,12 @@ Known-good invariants for the browser client. Update only when intended behavior
 - All WebSocket/stream URLs are same-origin via `getWsUrl` (`wss://` under HTTPS, `ws://` under HTTP).
 - `display-client.js` reads `/config` before opening display. `displayTransport=http` uses
   `/stream`; `displayTransport=websocket` uses `/ws/display?renderer=mjpeg|h264`.
+- Unexpected `/ws/display` close reconnects display only after 250 ms and re-reads `/config`.
+  Audio and input sockets are not restarted by display reconnect.
 - H264 requires browser `VideoDecoder` support. When unavailable, no H264 worker is created and
   the error is logged/captured in `window.__teslaPcDebug.errors` if the DVR probe is installed.
+- Once `#streamCanvas` has been transferred to an `OffscreenCanvas`, the H264 worker is reused
+  across display reconnects; `TeslaDisplay.stop()` does not terminate it.
 - H264 WebSocket payloads are complete Annex-B access units; the worker submits access units, not
   arbitrary NAL fragments, to `VideoDecoder`.
 
@@ -36,4 +40,6 @@ Known-good invariants for the browser client. Update only when intended behavior
 ## Failure Behavior
 
 - After a session has started, audio or input socket `onerror`/`onclose` → `#disconnectPanel` (“Connection lost” + **Refresh page** button). Initial connect uses `#connectPanel` (“Tap to connect”).
+- Display WebSocket `onerror`/`onclose` does not show the disconnect panel by itself; it
+  reconnects display in place.
 - The input socket and MJPEG `<img>` have **no reconnect logic**; a dropped connection fails silently / shows a broken image until reload.

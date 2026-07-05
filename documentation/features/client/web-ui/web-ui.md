@@ -13,8 +13,9 @@ logic lives in `display-h264-worker.js`; audio decode logic lives in `PCMPlayerP
 3. The user taps the **screen overlay** (“Tap to connect”, user gesture):
    `TeslaDisplay.start()` reads `/config` and opens either `/stream` (legacy HTTP MJPEG) or
    `/ws/display?renderer=mjpeg|h264`; the same tap opens `/ws/audio` so display and audio begin
-   together. If `/ws/audio`, `/ws/input`, or `/ws/display` drops after connect,
-   `#disconnectPanel` warns the user and offers a **Refresh page** button.
+   together. If `/ws/audio` or `/ws/input` drops after connect, `#disconnectPanel` warns the
+   user and offers a **Refresh page** button. A `/ws/display` close reconnects the display
+   transport in place so global codec changes can apply without interrupting audio/input.
 4. MJPEG renders via `<img>`; H264 renders via `<canvas>` using WebCodecs `VideoDecoder` in
    `display-h264-worker.js`. There is still **no `<video>`** element (Tesla driving lockout).
 
@@ -49,6 +50,12 @@ logic lives in `display-h264-worker.js`; audio decode logic lives in `PCMPlayerP
   `#streamImg` via a short-lived object URL.
 - H264 WebSocket payloads are copied and transferred to `display-h264-worker.js` as
   `{ h264Data: ArrayBuffer }`.
+- If the display WebSocket closes unexpectedly, `display-client.js` waits 250 ms, re-reads
+  `/config`, and reconnects display only. This is how server-side renderer/transport changes
+  apply to connected WebSocket clients.
+- `TeslaDisplay.stop()` closes the display socket and clears pending reconnect/blob state, but
+  keeps the H264 worker alive if it was already created. `#streamCanvas` can only be transferred
+  to an `OffscreenCanvas` once, so reconnects reuse the existing worker.
 - `TeslaDisplay.getStreamSize()` returns the rendered video rectangle and letterbox offsets for
   input coordinate mapping. It uses `<img>.naturalWidth/Height` for MJPEG and the negotiated
   display size for H264.
@@ -112,7 +119,7 @@ logic lives in `display-h264-worker.js`; audio decode logic lives in `PCMPlayerP
 |----------|------|----------------|
 | `getWsUrl(path)` | `index.html` / `display-client.js` | Build same-origin `ws://`/`wss://` URL |
 | `TeslaDisplay.start(onDisconnect)` | `display-client.js` | Start HTTP MJPEG or WebSocket MJPEG/H264 display transport from `/config` |
-| `TeslaDisplay.stop()` | `display-client.js` | Close display socket, terminate H264 worker, revoke MJPEG object URL |
+| `TeslaDisplay.stop()` | `display-client.js` | Close display socket, clear reconnect/blob state, keep any transferred H264 worker alive |
 | `TeslaDisplay.getStreamSize()` | `display-client.js` | Return rendered display size and letterbox offsets for input mapping |
 | `handleEncodedData(data)` | `display-h264-worker.js` | Parse Annex-B H264 access units, configure decoder, submit WebCodecs chunks |
 | `sendMouseEvent(type, event)` | `index.html:295` | Forward image-relative mouse coords to `/ws/input` |

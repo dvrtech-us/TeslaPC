@@ -16,6 +16,7 @@
     var currentBlobUrl = null;
     var displayWidth = 1280;
     var displayHeight = 720;
+    var reconnectTimer = null;
 
     function getWsUrl(path) {
         var protocol = (location.protocol === "https:") ? "wss://" : "ws://";
@@ -51,6 +52,7 @@
 
     function ensureH264Worker() {
         if (h264Worker) {
+            postH264Config();
             return;
         }
         canvas = document.getElementById("streamCanvas");
@@ -91,17 +93,21 @@
         }, [offscreen]);
 
         global.addEventListener("resize", function () {
-            if (!h264Worker || !canvas) {
-                return;
-            }
-            h264Worker.postMessage({
-                config: {
-                    displayWidth: displayWidth,
-                    displayHeight: displayHeight,
-                    windowWidth: canvas.clientWidth || global.innerWidth,
-                    windowHeight: canvas.clientHeight || global.innerHeight,
-                },
-            });
+            postH264Config();
+        });
+    }
+
+    function postH264Config() {
+        if (!h264Worker || !canvas) {
+            return;
+        }
+        h264Worker.postMessage({
+            config: {
+                displayWidth: displayWidth,
+                displayHeight: displayHeight,
+                windowWidth: canvas.clientWidth || global.innerWidth,
+                windowHeight: canvas.clientHeight || global.innerHeight,
+            },
         });
     }
 
@@ -129,21 +135,31 @@
 
         intentionalClose = false;
         var url = getWsUrl("/ws/display") + "?renderer=" + encodeURIComponent(renderer);
-        socket = new WebSocket(url);
-        socket.binaryType = "arraybuffer";
+        var ws = new WebSocket(url);
+        socket = ws;
+        ws.binaryType = "arraybuffer";
 
-        socket.onclose = function () {
-            if (!intentionalClose && typeof onDisconnect === "function") {
-                onDisconnect();
+        function scheduleReconnect() {
+            if (intentionalClose || reconnectTimer || socket !== ws) {
+                return;
             }
+            reconnectTimer = global.setTimeout(function () {
+                reconnectTimer = null;
+                if (!intentionalClose) {
+                    startDisplay(onDisconnect);
+                }
+            }, 250);
+        }
+
+        ws.onclose = function () {
+            scheduleReconnect();
         };
-        socket.onerror = function () {
-            if (!intentionalClose && typeof onDisconnect === "function") {
-                onDisconnect();
-            }
+        ws.onerror = function () {
+            try { ws.close(); } catch (_e) { /* ignore */ }
+            scheduleReconnect();
         };
 
-        socket.onmessage = function (ev) {
+        ws.onmessage = function (ev) {
             if (typeof ev.data === "string") {
                 format = JSON.parse(ev.data);
                 displayWidth = format.width || displayWidth;
@@ -191,9 +207,9 @@
             try { socket.close(); } catch (_e) { /* ignore */ }
             socket = null;
         }
-        if (h264Worker) {
-            try { h264Worker.terminate(); } catch (_e) { /* ignore */ }
-            h264Worker = null;
+        if (reconnectTimer) {
+            global.clearTimeout(reconnectTimer);
+            reconnectTimer = null;
         }
         if (currentBlobUrl) {
             URL.revokeObjectURL(currentBlobUrl);

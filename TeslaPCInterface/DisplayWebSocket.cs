@@ -17,6 +17,7 @@ internal sealed class DisplayWebSocket
     private readonly ConcurrentDictionary<string, DisplayWsClient> _clients = new();
     private readonly object _h264Lock = new();
     private volatile bool _needH264;
+    private volatile bool _needMjpeg;
     private H264MediaFoundationEncoder? _h264Encoder;
     private int _h264EncoderWidth;
     private int _h264EncoderHeight;
@@ -27,6 +28,8 @@ internal sealed class DisplayWebSocket
     public int ClientCount => _clients.Count;
 
     public bool NeedH264 => _needH264;
+
+    public bool NeedMjpeg => _needMjpeg;
 
     public async Task HandleClientAsync(HttpListenerContext context, int outWidth, int outHeight, int fps, Action? onClientConnected = null)
     {
@@ -84,6 +87,10 @@ internal sealed class DisplayWebSocket
             {
                 _needH264 = true;
             }
+            else
+            {
+                _needMjpeg = true;
+            }
 
             onClientConnected?.Invoke();
             Console.WriteLine($"Display client connected: {clientId} ({renderer} {outWidth}x{outHeight})");
@@ -114,7 +121,7 @@ internal sealed class DisplayWebSocket
         }
     }
 
-    public void BroadcastFrame(long hostPtsUs, byte[] jpeg, IReadOnlyList<byte[]>? h264Frames)
+    public void BroadcastFrame(long hostPtsUs, byte[]? jpeg, IReadOnlyList<byte[]>? h264Frames)
     {
         if (_clients.IsEmpty)
             return;
@@ -130,11 +137,12 @@ internal sealed class DisplayWebSocket
                     continue;
 
                 foreach (var h264 in h264Frames)
-                    SendFrame(client.Socket, hostPtsUs, h264);
+                    SendFrame(client, hostPtsUs, h264, isKeyFrame: ContainsH264Keyframe(h264));
             }
             else
             {
-                SendFrame(client.Socket, hostPtsUs, jpeg);
+                if (jpeg is { Length: > 0 })
+                    SendFrame(client, hostPtsUs, jpeg, isKeyFrame: false);
             }
         }
     }
@@ -163,24 +171,39 @@ internal sealed class DisplayWebSocket
         }
     }
 
+    public void RestartClients(string reason)
+    {
+        foreach (var client in _clients.Values)
+            _ = CloseClientAsync(client, reason);
+    }
+
     public void Shutdown()
     {
+        RestartClients("server shutdown");
         _clients.Clear();
         _needH264 = false;
+        _needMjpeg = false;
         StopH264Encoder();
     }
 
     private void RecalculateH264Need()
     {
-        _needH264 = false;
+        bool needH264 = false;
+        bool needMjpeg = false;
         foreach (var c in _clients.Values)
         {
             if (c.Renderer == "h264")
             {
-                _needH264 = true;
-                return;
+                needH264 = true;
+            }
+            else
+            {
+                needMjpeg = true;
             }
         }
+
+        _needH264 = needH264;
+        _needMjpeg = needMjpeg;
 
         // The capture loop owns encoder creation/use. It observes NeedH264 and disposes the
         // encoder from that same thread on the next tick.
@@ -206,7 +229,7 @@ internal sealed class DisplayWebSocket
         _h264EncoderFps = fps;
     }
 
-    private static void SendFrame(WebSocket socket, long hostPtsUs, byte[] payload)
+    private static void SendFrame(DisplayWsClient client, long hostPtsUs, byte[] payload, bool isKeyFrame)
     {
         if (payload.Length == 0)
             return;
@@ -215,7 +238,36 @@ internal sealed class DisplayWebSocket
         BinaryPrimitives.WriteInt64LittleEndian(packet.AsSpan(0, PtsPrefixBytes), hostPtsUs);
         Buffer.BlockCopy(payload, 0, packet, PtsPrefixBytes, payload.Length);
 
-        _ = SendAsync(socket, packet);
+        QueueLatestFrame(client, packet, isKeyFrame);
+    }
+
+    private static void QueueLatestFrame(DisplayWsClient client, byte[] packet, bool isKeyFrame)
+    {
+        bool startSender = false;
+        lock (client.SendLock)
+        {
+            if (client.Socket.State != WebSocketState.Open)
+                return;
+
+            if (isKeyFrame)
+            {
+                client.PendingKeyPacket = packet;
+                client.PendingPacket = null;
+            }
+            else
+            {
+                client.PendingPacket = packet;
+            }
+
+            if (!client.SendLoopRunning)
+            {
+                client.SendLoopRunning = true;
+                startSender = true;
+            }
+        }
+
+        if (startSender)
+            _ = SendLatestLoopAsync(client);
     }
 
     private static string? GetQueryParam(string? query, string key)
@@ -232,15 +284,81 @@ internal sealed class DisplayWebSocket
         return null;
     }
 
-    private static async Task SendAsync(WebSocket socket, byte[] packet)
+    private static async Task SendLatestLoopAsync(DisplayWsClient client)
+    {
+        while (true)
+        {
+            byte[]? packet;
+            lock (client.SendLock)
+            {
+                packet = client.PendingKeyPacket ?? client.PendingPacket;
+                if (client.PendingKeyPacket != null)
+                    client.PendingKeyPacket = null;
+                else
+                    client.PendingPacket = null;
+
+                if (packet == null)
+                {
+                    client.SendLoopRunning = false;
+                    return;
+                }
+            }
+
+            try
+            {
+                await client.Socket.SendAsync(packet, WebSocketMessageType.Binary, true, CancellationToken.None);
+            }
+            catch
+            {
+                lock (client.SendLock)
+                {
+                    client.PendingKeyPacket = null;
+                    client.PendingPacket = null;
+                    client.SendLoopRunning = false;
+                }
+                return;
+            }
+        }
+    }
+
+    private static bool ContainsH264Keyframe(byte[] payload)
+    {
+        for (int i = 0; i < payload.Length - 4; i++)
+        {
+            int startCodeLength = 0;
+            if (payload[i] == 0 && payload[i + 1] == 0 && payload[i + 2] == 1)
+            {
+                startCodeLength = 3;
+            }
+            else if (i <= payload.Length - 5 &&
+                     payload[i] == 0 && payload[i + 1] == 0 && payload[i + 2] == 0 && payload[i + 3] == 1)
+            {
+                startCodeLength = 4;
+            }
+
+            if (startCodeLength == 0)
+                continue;
+
+            int nalIndex = i + startCodeLength;
+            if (nalIndex < payload.Length && (payload[nalIndex] & 0x1F) == 5)
+                return true;
+
+            i = nalIndex;
+        }
+
+        return false;
+    }
+
+    private static async Task CloseClientAsync(DisplayWsClient client, string reason)
     {
         try
         {
-            await socket.SendAsync(packet, WebSocketMessageType.Binary, true, CancellationToken.None);
+            if (client.Socket.State == WebSocketState.Open || client.Socket.State == WebSocketState.CloseReceived)
+                await client.Socket.CloseAsync(WebSocketCloseStatus.NormalClosure, reason, CancellationToken.None);
         }
         catch
         {
-            // Client cleanup happens on receive loop exit.
+            try { client.Socket.Abort(); } catch { }
         }
     }
 
@@ -251,5 +369,9 @@ internal sealed class DisplayWebSocket
         public required string Renderer { get; init; }
         public int OutWidth { get; init; }
         public int OutHeight { get; init; }
+        public object SendLock { get; } = new();
+        public byte[]? PendingKeyPacket { get; set; }
+        public byte[]? PendingPacket { get; set; }
+        public bool SendLoopRunning { get; set; }
     }
 }

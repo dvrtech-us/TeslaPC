@@ -58,7 +58,7 @@
             <div class="res-picker-title">Video codec (WebSocket)</div>
             <button type="button" class="btn codec-choice" data-codec="mjpeg" onclick="pickCodec('mjpeg')">MJPEG</button>
             <button type="button" class="btn codec-choice" data-codec="h264" onclick="pickCodec('h264')">H264</button>
-            <div class="res-picker-hint">H264 uses the native Windows encoder on the PC. Refresh the page after changing.</div>
+            <div class="res-picker-hint">H264 uses the native Windows encoder on the PC.</div>
         </div>
     </div>
 
@@ -616,7 +616,13 @@
             var b = new URLSearchParams();
             b.set('displayRenderer', codec);
             b.set('displayTransport', 'websocket');
-            fetch('/config', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: b.toString() });
+            return fetch('/config', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: b.toString() })
+                .then(function () {
+                    if (sessionStarted && window.TeslaDisplay) {
+                        TeslaDisplay.stop();
+                        TeslaDisplay.start(onSessionLost);
+                    }
+                });
         }
 
         function pickCodec(codec) {

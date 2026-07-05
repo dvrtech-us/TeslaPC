@@ -69,6 +69,11 @@ namespace Streaming
             lock (_frameLock) Monitor.PulseAll(_frameLock);
         }
 
+        public void RestartDisplayClients(string reason)
+        {
+            _displayWebSocket.RestartClients(reason);
+        }
+
 
         /// <summary>
         /// constructor that takes in the size of the screen
@@ -306,20 +311,26 @@ namespace Streaming
 
                 if (captured)
                 {
-                    ms.SetLength(0);
+                    bool needH264 = _displayWebSocket.NeedH264;
+                    bool needJpeg = Volatile.Read(ref _httpClientCount) > 0 || _displayWebSocket.NeedMjpeg;
 
                     if (needsResize)
                     {
                         scaledGraphics!.DrawImage(srcImage, 0, 0, outWidth, outHeight);
-                        scaledImage!.Save(ms, jpegCodec, encoderParameters);
                     }
-                    else
+
+                    byte[]? jpeg = null;
+                    if (needJpeg)
                     {
-                        srcImage.Save(ms, jpegCodec, encoderParameters);
+                        ms.SetLength(0);
+                        if (needsResize)
+                            scaledImage!.Save(ms, jpegCodec, encoderParameters);
+                        else
+                            srcImage.Save(ms, jpegCodec, encoderParameters);
+                        jpeg = ms.ToArray();
                     }
 
                     List<byte[]>? h264 = null;
-                    bool needH264 = _displayWebSocket.NeedH264;
                     if (needH264)
                     {
                         byte[] bgr = needsResize
@@ -332,7 +343,7 @@ namespace Streaming
                         _displayWebSocket.StopH264Encoder();
                     }
 
-                    PublishFrame(ms, h264);
+                    PublishFrame(jpeg, h264);
                 }
 
                 int elapsed = Environment.TickCount - lastStart;
@@ -344,19 +355,21 @@ namespace Streaming
             return false;
         }
 
-        private void PublishFrame(MemoryStream jpegStream, IReadOnlyList<byte[]>? h264)
+        private void PublishFrame(byte[]? jpeg, IReadOnlyList<byte[]>? h264)
         {
-            byte[] frameBytes = jpegStream.ToArray();
             long pts = _timing.HostPtsUs;
-            lock (_frameLock)
+            if (jpeg is { Length: > 0 })
             {
-                _currentFrame = frameBytes;
-                _framePtsUs = pts;
-                _frameNumber++;
-                Monitor.PulseAll(_frameLock);
+                lock (_frameLock)
+                {
+                    _currentFrame = jpeg;
+                    _framePtsUs = pts;
+                    _frameNumber++;
+                    Monitor.PulseAll(_frameLock);
+                }
             }
 
-            _displayWebSocket.BroadcastFrame(pts, frameBytes, h264);
+            _displayWebSocket.BroadcastFrame(pts, jpeg, h264);
         }
 
         private static int MakeEven(int value) => Math.Max(2, value & ~1);
