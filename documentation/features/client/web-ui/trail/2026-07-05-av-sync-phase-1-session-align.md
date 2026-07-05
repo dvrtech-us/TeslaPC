@@ -11,8 +11,9 @@
 playback reloads both audio WS and MJPEG.
 
 A `#tapstart` `.screen-tap` overlay covers the video area (not the control bar), matching
-`play.html` UX: tap the screen to connect. **Start playback** in the bar still works. The
-overlay returns if the audio socket drops unexpectedly (not on intentional restart).
+`play.html` UX: tap the screen to connect. The control-bar **Start playback** button was
+removed (refresh the browser for a full reset). The overlay returns if the audio socket drops
+so the user can tap to reconnect.
 
 ## Constraint
 

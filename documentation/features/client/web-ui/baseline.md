@@ -4,9 +4,10 @@ Known-good invariants for the browser client. Update only when intended behavior
 
 ## Flow Invariants
 
-- The remote screen is rendered by a plain `<img src="/stream">` — no `<canvas>`, no JS in the video path.
+- The remote screen is rendered by a plain `<img id="streamImg">` — no `<canvas>`, no `<video>`, no JS in the video decode path.
+- `#streamImg` has no `src` until the user taps the **Tap to connect** screen overlay (same gesture starts `/ws/audio`).
 - The input WebSocket (`/ws/input`) opens on page load, before any audio interaction.
-- Audio only starts after the user clicks **Start playback** (browser user-gesture requirement).
+- Audio only starts after that tap (browser user-gesture requirement). There is no control-bar playback button; refresh the page for a full reset.
 - All WebSocket/stream URLs are same-origin via `getWsUrl` (`wss://` under HTTPS, `ws://` under HTTP).
 
 ## Input Rules
@@ -25,9 +26,7 @@ Known-good invariants for the browser client. Update only when intended behavior
 
 - The AudioWorklet path is preferred; on `addModule`/node failure the client falls back to `AudioBufferSourceNode` scheduling.
 - The `AudioContext` is created at the server's reported sample rate; if the browser clamps it, a warning is logged and client-side resampling engages.
-- The **Start playback** button transitions: `Start playback` → `Connecting...` (disabled) → `Restart playback`.
-
 ## Failure Behavior
 
-- Audio socket `onerror`/`onclose` → `resetAudioConnection()` re-enables the button; **no automatic reconnect**.
+- Audio socket `onerror`/`onclose` → `resetAudioConnection()` shows the tap overlay again; user may tap to reconnect or refresh the page.
 - The input socket and MJPEG `<img>` have **no reconnect logic**; a dropped connection fails silently / shows a broken image until reload.

@@ -8,7 +8,7 @@
 
 <body>
 
-    <!-- MJPEG starts only after tap / Start playback (phase 1 A/V session align; no <video> tag). -->
+    <!-- MJPEG starts only after tap-to-connect (phase 1 A/V session align; no <video> tag). -->
     <div class="screen">
         <img id="streamImg" title="playback" alt="" />
         <div id="tapstart" class="screen-tap" role="button" tabindex="0" aria-label="Tap to connect">
@@ -24,7 +24,6 @@
         </div>
     </div>
     <div class="controlbar">
-        <button onclick="startAudioPlayback()" id="startPlayback" class="btn primary">Start playback</button>
         <input type="text" id="fakeKeyboard" class="btn input" placeholder="&#9000; Keyboard" autocomplete="off"
             autocorrect="off" autocapitalize="off" spellcheck="false" />
         <button class="btn" onclick="window.location.assign('/list.html')">&#128193; Files</button>
@@ -63,17 +62,8 @@
         let audioConnecting = false;
         let intentionalAudioClose = false;
 
-        function setPlaybackButtonState(connecting, label) {
-            var button = document.getElementById('startPlayback');
-            button.disabled = connecting;
-            if (label) {
-                button.innerHTML = label;
-            }
-        }
-
         function resetAudioConnection() {
             audioConnecting = false;
-            setPlaybackButtonState(false, audioContext ? 'Restart playback' : 'Start playback');
             showTapOverlay();
         }
 
@@ -115,7 +105,6 @@
             }
 
             audioConnecting = true;
-            setPlaybackButtonState(true, 'Connecting...');
             hideTapOverlay();
 
             startVideoStream();
@@ -177,7 +166,6 @@
                     await audioContext.resume();
 
                     audioConnecting = false;
-                    setPlaybackButtonState(false, 'Restart playback');
                     console.log('Audio playback started');
                     return;
                 }

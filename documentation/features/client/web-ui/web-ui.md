@@ -8,7 +8,7 @@ and JS are inline; the only external module is `PCMPlayerProcessor.js` (loaded a
 
 1. The browser loads `/` (served as `index.html`). `#streamImg` has no `src` yet (black screen).
 2. The input WebSocket (`/ws/input`) opens on page load; mouse actions over the image are forwarded once frames arrive.
-3. The user taps the **screen overlay** (“Tap to connect”) or **Start playback** in the bar (user gesture): `startVideoStream()` sets `img.src` to `/stream` and opens `/ws/audio` so MJPEG and audio begin together. The button then reads **Restart playback** (both paths restart). The overlay covers the video area only; the control bar stays usable before connect.
+3. The user taps the **screen overlay** (“Tap to connect”, user gesture): `startVideoStream()` sets `img.src` to `/stream` and opens `/ws/audio` so MJPEG and audio begin together. If the session needs a full reset, refresh the browser; if only audio drops, the overlay returns and another tap reconnects. The overlay covers the video area only; the control bar has no separate playback button.
 4. MJPEG renders via `<img>` only — **no `<video>`** (Tesla driving lockout). See the phased A/V sync plan in `documentation/planning/Streaming/2026-07-05-av-sync-phased-plan.md`.
 
 ## Technical Flow
@@ -17,7 +17,7 @@ and JS are inline; the only external module is `PCMPlayerProcessor.js` (loaded a
 
 - `<title>Remote Desktop</title>`; styling comes from the shared `/style.css` (dark in-car touch theme), not inline styles; a no-zoom `viewport` meta is set for touch.
 - Video: `<img title="playback" src="/stream">` inside `<div class="screen">` (flex-centered, `object-fit: contain`). There is **no `<canvas>`** — MJPEG renders directly into the `<img>`.
-- Controls live in a fixed bottom `<div class="controlbar">` with large `.btn` targets: **Start playback** (`#startPlayback`, primary), the **Keyboard** input (`#fakeKeyboard`), **Files** (→ `/list.html`), **Settings** (→ `/config.html`), **stream resolution** (`#resBtn` opens `#resPicker` with 480p/720p/1080p buttons — not a native `<select>`; Tesla browser breaks those), and **Fit screen**. See the [file-browser-vlc](../../media/file-browser-vlc/file-browser-vlc.md) feature.
+- Controls live in a fixed bottom `<div class="controlbar">` with large `.btn` targets: the **Keyboard** input (`#fakeKeyboard`), **Files** (→ `/list.html`), **Settings** (→ `/config.html`), **stream resolution** (`#resBtn` opens `#resPicker` with 480p/720p/1080p buttons — not a native `<select>`; Tesla browser breaks those), and **Fit screen**. Connect A/V via the **Tap to connect** screen overlay (no control-bar playback button). See the [file-browser-vlc](../../media/file-browser-vlc/file-browser-vlc.md) feature.
 
 ### URL helper
 
