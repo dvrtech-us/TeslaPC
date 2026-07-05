@@ -140,6 +140,10 @@
                 // Subsequent messages are binary audio data
                 if (!audioFormat || !audioContext) return;
 
+                if (audioContext.state === 'suspended') {
+                    audioContext.resume();
+                }
+
                 if (useWorklet && pcmPlayerNode) {
                     // Primary path: AudioWorklet
                     pcmPlayerNode.port.postMessage(event.data);

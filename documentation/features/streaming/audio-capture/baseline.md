@@ -6,8 +6,10 @@ Known-good invariants for audio capture and streaming. Update only when intended
 
 - The capture format (sample rate, bit depth, channels) is **discovered from the device at runtime** and never hardcoded server-side.
 - **No resampling happens on the server.** All resampling is client-side, triggered only when the browser's AudioContext rate differs from the server rate.
-- Audio chunks are enqueued **only** when `e.ByteCount > 0` **and** at least one client is connected.
-- Each binary WebSocket frame is one raw PCM chunk corresponding to exactly one CSCore `DataAvailable` event — no WAV header, no length prefix, no re-framing.
+- Loopback chunks are enqueued when `e.ByteCount > 0` **and** at least one client is connected.
+- While loopback is idle for at least `KeepaliveIntervalMs` (10 ms) but less than `SilenceKeepaliveMaxSeconds` (30 s), the server injects zero-filled PCM chunks sized to the last `DataAvailable` buffer so clients keep decoding through short show-silence gaps.
+- After 30 s of continuous loopback idle, silence keepalive stops until real audio returns.
+- Each binary WebSocket frame is one raw PCM chunk — either a CSCore `DataAvailable` buffer or a synthetic silence keepalive — with no WAV header, no length prefix, no re-framing.
 - The **first** frame to a new client is always the JSON format descriptor (text); all later frames are binary PCM.
 - The server-to-client stream is broadcast: one dequeued buffer is fanned out to all open clients.
 

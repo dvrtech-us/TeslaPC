@@ -119,6 +119,9 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
         const samplesNeeded = framesNeeded * this.channels;
 
         if (this.samples.length < samplesNeeded) {
+            for (let ch = 0; ch < outputChannels; ch++) {
+                output[ch].fill(0);
+            }
             return true;
         }
 

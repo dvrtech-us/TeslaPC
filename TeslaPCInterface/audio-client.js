@@ -78,6 +78,9 @@
             }
 
             if (!audioFormat || !audioContext) return;
+            if (audioContext.state === 'suspended') {
+                audioContext.resume();
+            }
             if (useWorklet && pcmPlayerNode) {
                 pcmPlayerNode.port.postMessage(event.data);
             } else {

@@ -15,6 +15,15 @@ namespace AudioStreamingServer
         private bool _disposed = false;
         private bool _capturing = false;
         private Task? _broadcastTask;
+        private Task? _keepaliveTask;
+
+        // WASAPI loopback often stops firing during short show-silence gaps. Inject zero PCM
+        // frames so clients keep decoding until real audio returns or the idle cap is hit.
+        private const int SilenceKeepaliveMaxSeconds = 30;
+        private const int KeepaliveIntervalMs = 10;
+
+        private DateTime _lastRealAudioUtc = DateTime.UtcNow;
+        private int _typicalBufferBytes;
 
         private readonly ConcurrentQueue<byte[]> _audioDataQueue = new();
         private readonly SemaphoreSlim _audioDataSignal = new(0);
@@ -82,9 +91,15 @@ namespace AudioStreamingServer
 
             capture.DataAvailable += (s, e) =>
             {
+                if (e.ByteCount <= 0)
+                    return;
+
+                _lastRealAudioUtc = DateTime.UtcNow;
+                _typicalBufferBytes = e.ByteCount;
+
                 // In media mode the file's audio (from MediaStreamer) owns the queue; suppress
                 // loopback so the two sources don't interleave.
-                if (e.ByteCount > 0 && !_clients.IsEmpty && !_mediaMode)
+                if (!_clients.IsEmpty && !_mediaMode)
                 {
                     // Copy the raw PCM data (no WaveWriter/WAV header)
                     byte[] buffer = new byte[e.ByteCount];
@@ -96,9 +111,11 @@ namespace AudioStreamingServer
 
             capture.Start();
             _capturing = true;
+            _lastRealAudioUtc = DateTime.UtcNow;
 
             // Start a background task that broadcasts audio to all connected clients
             _broadcastTask = Task.Run(() => BroadcastAudioAsync(_cancellationTokenSource.Token));
+            _keepaliveTask = Task.Run(() => SilenceKeepaliveAsync(_cancellationTokenSource.Token));
         }
 
         /// <summary>
@@ -215,6 +232,40 @@ namespace AudioStreamingServer
         }
 
         /// <summary>
+        /// Injects zero-filled PCM chunks while WASAPI is idle so browsers keep receiving
+        /// frames during short show-silence gaps. Stops after <see cref="SilenceKeepaliveMaxSeconds"/>
+        /// of continuous idle time.
+        /// </summary>
+        private async Task SilenceKeepaliveAsync(CancellationToken cancellationToken)
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(KeepaliveIntervalMs, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+
+                if (!_capturing || _mediaMode || _clients.IsEmpty || _typicalBufferBytes <= 0)
+                    continue;
+
+                var idle = DateTime.UtcNow - _lastRealAudioUtc;
+                if (idle.TotalSeconds >= SilenceKeepaliveMaxSeconds)
+                    continue;
+
+                if (idle.TotalMilliseconds < KeepaliveIntervalMs)
+                    continue;
+
+                var silence = new byte[_typicalBufferBytes];
+                _audioDataQueue.Enqueue(silence);
+                _audioDataSignal.Release();
+            }
+        }
+
+        /// <summary>
         /// Broadcasts queued audio data to all connected WebSocket clients.
         /// Uses a semaphore to avoid CPU spinning when the queue is empty.
         /// </summary>
@@ -283,11 +334,12 @@ namespace AudioStreamingServer
                     capture = null;
                     _capturing = false;
 
-                    if (_broadcastTask != null)
+                    foreach (var task in new[] { _broadcastTask, _keepaliveTask })
                     {
+                        if (task == null) continue;
                         try
                         {
-                            _broadcastTask.Wait(TimeSpan.FromSeconds(2));
+                            task.Wait(TimeSpan.FromSeconds(2));
                         }
                         catch (AggregateException)
                         {

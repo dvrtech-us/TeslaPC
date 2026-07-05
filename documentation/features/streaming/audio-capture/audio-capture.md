@@ -16,7 +16,15 @@ there is **no server-side resampling** — clients resample to their own audio c
 
 - `StartCapturing()` (`:32`): creates `CSCore.SoundIn.WasapiLoopbackCapture`, calls `Initialize()`, and reads `capture.WaveFormat` to populate `_sampleRate`, `_bitsPerSample`, `_channels`, `_sampleFormat`. No format is hardcoded.
 - `ResolveSampleFormat()` (`:83`) maps the device encoding to a string: `IeeeFloat → "float"`; PCM → `"pcm16"`/`"pcm24"`/`"pcm32"` by bit depth; `Extensible` resolved via `WaveFormatExtensible.SubFormat`; fallback `32-bit → "float"`, else `PcmFormatName`.
-- The `DataAvailable` handler (`:49`) copies `e.Data[e.Offset .. +e.ByteCount]` into a `byte[]`, enqueues into `ConcurrentQueue<byte[]> _audioDataQueue`, and releases a `SemaphoreSlim`. Data is enqueued **only** when `e.ByteCount > 0` and at least one client is connected.
+- The `DataAvailable` handler copies `e.Data[e.Offset .. +e.ByteCount]` into a `byte[]`, enqueues into `ConcurrentQueue<byte[]> _audioDataQueue`, and releases a `SemaphoreSlim` when `e.ByteCount > 0`, at least one client is connected, and not in media mode. Each event also updates `_lastRealAudioUtc` and `_typicalBufferBytes`.
+
+### Silence keepalive (`SilenceKeepaliveAsync`)
+
+WASAPI loopback often stops firing during short show-silence gaps. A background task runs every `KeepaliveIntervalMs` (10 ms):
+
+- Skips when not capturing, in media mode, no clients, or `_typicalBufferBytes` is still unknown.
+- If loopback has been idle for ≥ 10 ms but < `SilenceKeepaliveMaxSeconds` (30 s), enqueues a zero-filled `byte[_typicalBufferBytes]` and signals the broadcaster.
+- After 30 s of continuous idle, keepalive stops until the next real `DataAvailable` event.
 
 ### Broadcast (`BroadcastAudioAsync`, `:185`)
 
@@ -43,7 +51,7 @@ there is **no server-side resampling** — clients resample to their own audio c
 
 - `handleMessage` decodes a binary chunk to `Float32Array` (`decodeToFloat32`), resamples if `sourceSampleRate !== playbackSampleRate` (linear interpolation), and appends to an internal buffer.
 - Buffer cap = `playbackSampleRate * channels * 2` samples (~2 seconds); oldest samples are discarded channel-aligned on overflow.
-- `process()` deinterleaves the buffer into the output channels per 128-frame render quantum; outputs silence when underrun.
+- `process()` deinterleaves the buffer into the output channels per 128-frame render quantum; on underrun fills output channels with `0` to keep the worklet graph alive.
 - See [web-ui](../../client/web-ui/web-ui.md) for the non-worklet fallback (`playPcmChunkFallback`).
 
 ## Key Classes
@@ -62,6 +70,8 @@ there is **no server-side resampling** — clients resample to their own audio c
 |----------|-------|----------|
 | Server-side format | runtime from device (not hardcoded) | `AudioStreamingServer.cs:42` |
 | Close-frame receive buffer | `256` bytes | `AudioStreamingServer.cs:150` |
+| Silence keepalive interval | `10` ms (`KeepaliveIntervalMs`) | `AudioStreamingServer.cs` |
+| Silence keepalive idle cap | `30` s (`SilenceKeepaliveMaxSeconds`) | `AudioStreamingServer.cs` |
 | Client buffer cap | `playbackSampleRate * channels * 2` samples (~2 s) | `PCMPlayerProcessor.js:21` |
 | pcm16 / pcm24 / pcm32 divisors | `32768.0` / `8388608.0` / `2147483648.0` | `PCMPlayerProcessor.js:49,62,71` |
 | AudioWorklet module name | `'pcm-player-processor'` | `PCMPlayerProcessor.js:138` |
