@@ -163,8 +163,9 @@ public sealed class H264FfmpegEncoder : IDisposable
         {
             try
             {
-                var readTask = _stdout.ReadAsync(buf.AsMemory(0, buf.Length));
-                if (!readTask.Wait(Math.Max(1, (int)(deadline - Environment.TickCount64))))
+                int remaining = Math.Max(1, (int)(deadline - Environment.TickCount64));
+                var readTask = Task.Run(() => _stdout!.Read(buf, 0, buf.Length));
+                if (!readTask.Wait(remaining))
                     break;
 
                 int n = readTask.Result;
