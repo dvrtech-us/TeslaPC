@@ -19,6 +19,12 @@ internal static class SslCertificateBootstrap
 
     public static bool TryEnsureHttpsReady(int httpsPort, int httpPort, string? trustedHost = null)
     {
+        if (IsHttpsAlreadyConfigured(httpsPort, httpPort))
+        {
+            Console.WriteLine($"[SSL] HTTPS already configured on port {httpsPort} (reusing existing http.sys bindings).");
+            return true;
+        }
+
         if (!IsAdministrator())
         {
             Console.WriteLine("[SSL] HTTPS setup requires administrator privileges.");
@@ -382,6 +388,30 @@ internal static class SslCertificateBootstrap
         {
             Console.WriteLine($"[SSL] Warning: failed to remove stale certificate: {ex.Message}");
         }
+    }
+
+    private static bool IsHttpsAlreadyConfigured(int httpsPort, int httpPort) =>
+        HasSslBinding(httpsPort)
+        && HasUrlReservation($"http://+:{httpPort}/")
+        && HasUrlReservation($"https://+:{httpsPort}/");
+
+    private static bool HasSslBinding(int port)
+    {
+        var result = RunNetsh($"http show sslcert ipport=0.0.0.0:{port}");
+        if (result.exitCode != 0)
+            return false;
+
+        return Regex.IsMatch(result.output, @"(?i)Certificate Hash\s*:\s*[a-f0-9]+");
+    }
+
+    private static bool HasUrlReservation(string url)
+    {
+        var result = RunNetsh("http show urlacl");
+        if (result.exitCode != 0)
+            return false;
+
+        string escaped = Regex.Escape(url);
+        return Regex.IsMatch(result.output, $@"(?i)Reserved URL\s*:\s*{escaped}\s*$", RegexOptions.Multiline);
     }
 
     private static bool IsCertificateBound(int port, string expectedThumbprint)

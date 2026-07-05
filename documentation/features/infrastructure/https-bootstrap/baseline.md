@@ -28,8 +28,12 @@ Known-good invariants. Update only when intended behavior changes.
 
 ## Enablement / Privilege
 
-- Runs only when `--localhost` is **not** set and the process is elevated.
-- Non-admin returns `false`; the server then runs HTTP-only (no HTTPS prefix bound).
+- Runs when `--localhost` is **not** set.
+- If http.sys already has an SSL binding on `0.0.0.0:8443` **and** URL ACLs for both
+  `http://+:8080/` and `https://+:8443/`, `TryEnsureHttpsReady` returns `true` without elevation
+  (reuse path).
+- Otherwise provisioning requires administrator; non-admin returns `false` and the server runs
+  HTTP-only (no HTTPS prefix bound).
 
 ## Known Divergence (documented, not a bug)
 
