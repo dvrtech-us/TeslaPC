@@ -16,20 +16,20 @@ there is **no server-side resampling** — clients resample to their own audio c
 
 - `StartCapturing()` (`:32`): creates `CSCore.SoundIn.WasapiLoopbackCapture`, calls `Initialize()`, and reads `capture.WaveFormat` to populate `_sampleRate`, `_bitsPerSample`, `_channels`, `_sampleFormat`. No format is hardcoded.
 - `ResolveSampleFormat()` (`:83`) maps the device encoding to a string: `IeeeFloat → "float"`; PCM → `"pcm16"`/`"pcm24"`/`"pcm32"` by bit depth; `Extensible` resolved via `WaveFormatExtensible.SubFormat`; fallback `32-bit → "float"`, else `PcmFormatName`.
-- The `DataAvailable` handler copies `e.Data[e.Offset .. +e.ByteCount]` into a `byte[]`, enqueues into `ConcurrentQueue<byte[]> _audioDataQueue`, and releases a `SemaphoreSlim` when `e.ByteCount > 0`, at least one client is connected, and not in media mode. Each event also updates `_lastRealAudioUtc` and `_typicalBufferBytes`.
+- The `DataAvailable` handler copies `e.Data[e.Offset .. +e.ByteCount]` into a `byte[]` and enqueues into `ConcurrentQueue<byte[]> _audioDataQueue` when `e.ByteCount > 0`, at least one client is connected, and not in media mode. Each event updates `_typicalBufferBytes`.
 
-### Silence keepalive (`SilenceKeepaliveAsync`)
+### Continuous stream pump (`ContinuousStreamPumpAsync`)
 
-WASAPI loopback often stops firing during short show-silence gaps. A background task polls every `KeepaliveIntervalMs` (10 ms):
+WASAPI loopback stops firing during show-silence gaps, so the server runs a fixed 10 ms PCM clock:
 
-- Skips when not capturing, in media mode, no clients, or the broadcast queue is non-empty.
-- If loopback has been idle for ≥ `SilenceKeepaliveStartMs` (100 ms) but < `SilenceKeepaliveMaxSeconds` (30 s), enqueues a synthetic silence chunk (`CreateSilenceChunk`) sized to the last `DataAvailable` buffer or a 10 ms format-derived default, then signals the broadcaster.
-- Float keepalive chunks write `1e-5f` on the first sample so strict clients (e.g. Tesla browser) keep the audio session active instead of handing off to vehicle radio during digital silence.
-- After 30 s of continuous idle, keepalive stops until the next real `DataAvailable` event.
+- Skips when not capturing or no clients are connected.
+- **Live loopback:** each tick dequeues a loopback buffer when available, otherwise sends synthetic silence (`CreateSilenceChunk`). Float silence writes `1e-5f` on the first sample for strict clients (e.g. Tesla browser).
+- **Media mode:** only dequeues file PCM from `EnqueueMediaAudio` (no synthetic silence).
+- Loopback enqueue is capped at `MaxQueuedChunks` (8); oldest buffers drop on overflow.
 
-### Broadcast (`BroadcastAudioAsync`, `:185`)
+### Broadcast (`BroadcastToClientsAsync`)
 
-- Waits on the semaphore, dequeues one buffer at a time, and fans out to all open clients via `Task.WhenAll` of `SendAudioAsync` (`:206`).
+- Fans out one PCM chunk per pump tick to all open clients via `Task.WhenAll` of `SendAudioAsync`.
 - Clients are tracked in `ConcurrentDictionary<string, WebSocket> _clients`, keyed by `Guid`.
 - Per-client send exceptions are swallowed; the client is removed in the `HandleClientAsync` finally block.
 
@@ -61,7 +61,7 @@ WASAPI loopback often stops firing during short show-silence gaps. A background 
 |------------------|------|----------------|
 | `AudioCapture` | `TeslaPCInterface/AudioStreamingServer.cs` | WASAPI loopback capture, format discovery, client broadcast |
 | `AudioCapture.HandleClientAsync` | `AudioStreamingServer.cs:118` | Accept WS, send format, manage client lifecycle |
-| `AudioCapture.BroadcastAudioAsync` | `AudioStreamingServer.cs:185` | Dequeue chunks, fan out to all clients |
+| `AudioCapture.ContinuousStreamPumpAsync` | `AudioStreamingServer.cs` | Fixed-clock PCM output (loopback or synthetic silence) |
 | `AudioCapture.ResolveSampleFormat` | `AudioStreamingServer.cs:83` | Map device `WaveFormat` to a format string |
 | `PCMPlayerProcessor` | `TeslaPCInterface/PCMPlayerProcessor.js` | AudioWorklet: decode, resample, buffer, output |
 
@@ -74,7 +74,6 @@ WASAPI loopback often stops firing during short show-silence gaps. A background 
 | Stream pump interval | `10` ms (`StreamPumpIntervalMs`) | `AudioStreamingServer.cs` |
 | PCM queue cap | `8` (`MaxQueuedChunks`) | `AudioStreamingServer.cs` |
 | Synthetic silence marker | `1e-5f` on first float sample | `AudioStreamingServer.cs` |
-| Silence keepalive idle cap | `30` s (`SilenceKeepaliveMaxSeconds`) | `AudioStreamingServer.cs` |
 | Client buffer cap | `playbackSampleRate * channels * 2` samples (~2 s) | `PCMPlayerProcessor.js:21` |
 | pcm16 / pcm24 / pcm32 divisors | `32768.0` / `8388608.0` / `2147483648.0` | `PCMPlayerProcessor.js:49,62,71` |
 | AudioWorklet module name | `'pcm-player-processor'` | `PCMPlayerProcessor.js:138` |
