@@ -23,12 +23,14 @@ namespace AudioStreamingServer
         // frames so clients keep decoding until real audio returns or the idle cap is hit.
         private const int SilenceKeepaliveMaxSeconds = 30;
         /// <summary>Loopback poll interval; must be well below <see cref="SilenceKeepaliveStartMs"/>.</summary>
-        private const int KeepaliveIntervalMs = 20;
+        private const int KeepaliveIntervalMs = 10;
+        /// <summary>Sub-audible float sample written into synthetic silence (~-100 dBFS).</summary>
+        private const float SilenceKeepaliveMarkerLevel = 1e-5f;
         /// <summary>
         /// WASAPI still delivers buffers with short gaps during normal playback; only inject silence
         /// after this much continuous idle time (show-silence gaps, not inter-buffer timing).
         /// </summary>
-        private const int SilenceKeepaliveStartMs = 250;
+        private const int SilenceKeepaliveStartMs = 100;
 
         private DateTime _lastRealAudioUtc = DateTime.UtcNow;
         private int _typicalBufferBytes;
@@ -277,10 +279,34 @@ namespace AudioStreamingServer
                 if (!_audioDataQueue.IsEmpty)
                     continue;
 
-                var silence = new byte[_typicalBufferBytes];
-                _audioDataQueue.Enqueue(silence);
+                int chunkBytes = KeepaliveChunkBytes();
+                _audioDataQueue.Enqueue(CreateSilenceChunk(chunkBytes));
                 _audioDataSignal.Release();
             }
+        }
+
+        private int BytesPerSecond =>
+            _sampleRate * _channels * Math.Max(1, _bitsPerSample / 8);
+
+        private int KeepaliveChunkBytes()
+        {
+            if (_typicalBufferBytes > 0)
+                return _typicalBufferBytes;
+
+            int bytesPerFrame = _channels * Math.Max(1, _bitsPerSample / 8);
+            return Math.Max(bytesPerFrame, BytesPerSecond * KeepaliveIntervalMs / 1000);
+        }
+
+        /// <summary>
+        /// Zero PCM with a sub-audible marker on the first float sample so strict clients (e.g.
+        /// Tesla browser) keep treating the Web Audio stream as active during show-silence gaps.
+        /// </summary>
+        private byte[] CreateSilenceChunk(int length)
+        {
+            var chunk = new byte[length];
+            if (_sampleFormat == "float" && length >= 4)
+                BitConverter.TryWriteBytes(chunk.AsSpan(0, 4), BitConverter.SingleToInt32Bits(SilenceKeepaliveMarkerLevel));
+            return chunk;
         }
 
         /// <summary>

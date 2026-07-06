@@ -20,10 +20,11 @@ there is **no server-side resampling** — clients resample to their own audio c
 
 ### Silence keepalive (`SilenceKeepaliveAsync`)
 
-WASAPI loopback often stops firing during short show-silence gaps. A background task polls every `KeepaliveIntervalMs` (20 ms):
+WASAPI loopback often stops firing during short show-silence gaps. A background task polls every `KeepaliveIntervalMs` (10 ms):
 
-- Skips when not capturing, in media mode, no clients, `_typicalBufferBytes` is still unknown, or the broadcast queue is non-empty.
-- If loopback has been idle for ≥ `SilenceKeepaliveStartMs` (250 ms) but < `SilenceKeepaliveMaxSeconds` (30 s), enqueues a zero-filled `byte[_typicalBufferBytes]` and signals the broadcaster.
+- Skips when not capturing, in media mode, no clients, or the broadcast queue is non-empty.
+- If loopback has been idle for ≥ `SilenceKeepaliveStartMs` (100 ms) but < `SilenceKeepaliveMaxSeconds` (30 s), enqueues a synthetic silence chunk (`CreateSilenceChunk`) sized to the last `DataAvailable` buffer or a 10 ms format-derived default, then signals the broadcaster.
+- Float keepalive chunks write `1e-5f` on the first sample so strict clients (e.g. Tesla browser) keep the audio session active instead of handing off to vehicle radio during digital silence.
 - After 30 s of continuous idle, keepalive stops until the next real `DataAvailable` event.
 
 ### Broadcast (`BroadcastAudioAsync`, `:185`)
@@ -70,8 +71,9 @@ WASAPI loopback often stops firing during short show-silence gaps. A background 
 |----------|-------|----------|
 | Server-side format | runtime from device (not hardcoded) | `AudioStreamingServer.cs:42` |
 | Close-frame receive buffer | `256` bytes | `AudioStreamingServer.cs:150` |
-| Silence keepalive poll | `20` ms (`KeepaliveIntervalMs`) | `AudioStreamingServer.cs` |
-| Silence keepalive start | `250` ms idle (`SilenceKeepaliveStartMs`) | `AudioStreamingServer.cs` |
+| Silence keepalive poll | `10` ms (`KeepaliveIntervalMs`) | `AudioStreamingServer.cs` |
+| Silence keepalive start | `100` ms idle (`SilenceKeepaliveStartMs`) | `AudioStreamingServer.cs` |
+| Silence keepalive marker | `1e-5f` on first float sample | `AudioStreamingServer.cs` |
 | Silence keepalive idle cap | `30` s (`SilenceKeepaliveMaxSeconds`) | `AudioStreamingServer.cs` |
 | Client buffer cap | `playbackSampleRate * channels * 2` samples (~2 s) | `PCMPlayerProcessor.js:21` |
 | pcm16 / pcm24 / pcm32 divisors | `32768.0` / `8388608.0` / `2147483648.0` | `PCMPlayerProcessor.js:49,62,71` |
