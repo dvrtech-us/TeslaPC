@@ -71,9 +71,9 @@ WASAPI loopback often stops firing during short show-silence gaps. A background 
 |----------|-------|----------|
 | Server-side format | runtime from device (not hardcoded) | `AudioStreamingServer.cs:42` |
 | Close-frame receive buffer | `256` bytes | `AudioStreamingServer.cs:150` |
-| Silence keepalive poll | `10` ms (`KeepaliveIntervalMs`) | `AudioStreamingServer.cs` |
-| Silence keepalive start | `100` ms idle (`SilenceKeepaliveStartMs`) | `AudioStreamingServer.cs` |
-| Silence keepalive marker | `1e-5f` on first float sample | `AudioStreamingServer.cs` |
+| Stream pump interval | `10` ms (`StreamPumpIntervalMs`) | `AudioStreamingServer.cs` |
+| PCM queue cap | `8` (`MaxQueuedChunks`) | `AudioStreamingServer.cs` |
+| Synthetic silence marker | `1e-5f` on first float sample | `AudioStreamingServer.cs` |
 | Silence keepalive idle cap | `30` s (`SilenceKeepaliveMaxSeconds`) | `AudioStreamingServer.cs` |
 | Client buffer cap | `playbackSampleRate * channels * 2` samples (~2 s) | `PCMPlayerProcessor.js:21` |
 | pcm16 / pcm24 / pcm32 divisors | `32768.0` / `8388608.0` / `2147483648.0` | `PCMPlayerProcessor.js:49,62,71` |

@@ -16,27 +16,18 @@ namespace AudioStreamingServer
         private readonly CancellationTokenSource _cancellationTokenSource = new();
         private bool _disposed = false;
         private bool _capturing = false;
-        private Task? _broadcastTask;
-        private Task? _keepaliveTask;
+        private Task? _streamPumpTask;
 
-        // WASAPI loopback often stops firing during short show-silence gaps. Inject zero PCM
-        // frames so clients keep decoding until real audio returns or the idle cap is hit.
-        private const int SilenceKeepaliveMaxSeconds = 30;
-        /// <summary>Loopback poll interval; must be well below <see cref="SilenceKeepaliveStartMs"/>.</summary>
-        private const int KeepaliveIntervalMs = 10;
-        /// <summary>Sub-audible float sample written into synthetic silence (~-100 dBFS).</summary>
-        private const float SilenceKeepaliveMarkerLevel = 1e-5f;
-        /// <summary>
-        /// WASAPI still delivers buffers with short gaps during normal playback; only inject silence
-        /// after this much continuous idle time (show-silence gaps, not inter-buffer timing).
-        /// </summary>
-        private const int SilenceKeepaliveStartMs = 100;
+        // WASAPI loopback stops firing during show-silence gaps. The stream pump sends PCM on a
+        // fixed clock: real loopback buffers when available, synthetic silence otherwise.
+        private const int StreamPumpIntervalMs = 10;
+        /// <summary>Sub-audible float sample on synthetic silence (~-100 dBFS) for strict clients.</summary>
+        private const float SilenceMarkerLevel = 1e-5f;
+        private const int MaxQueuedChunks = 8;
 
-        private DateTime _lastRealAudioUtc = DateTime.UtcNow;
         private int _typicalBufferBytes;
 
         private readonly ConcurrentQueue<byte[]> _audioDataQueue = new();
-        private readonly SemaphoreSlim _audioDataSignal = new(0);
         private readonly ConcurrentDictionary<string, WebSocket> _clients = new();
 
         private int _sampleRate;
@@ -76,8 +67,7 @@ namespace AudioStreamingServer
         {
             if (pcm.Length == 0 || _clients.IsEmpty)
                 return;
-            _audioDataQueue.Enqueue(pcm);
-            _audioDataSignal.Release();
+            EnqueuePcm(pcm);
         }
 
         /// <summary>
@@ -106,28 +96,31 @@ namespace AudioStreamingServer
                 if (e.ByteCount <= 0)
                     return;
 
-                _lastRealAudioUtc = DateTime.UtcNow;
                 _typicalBufferBytes = e.ByteCount;
 
                 // In media mode the file's audio (from MediaStreamer) owns the queue; suppress
                 // loopback so the two sources don't interleave.
                 if (!_clients.IsEmpty && !_mediaMode)
                 {
-                    // Copy the raw PCM data (no WaveWriter/WAV header)
                     byte[] buffer = new byte[e.ByteCount];
                     Array.Copy(e.Data, e.Offset, buffer, 0, e.ByteCount);
-                    _audioDataQueue.Enqueue(buffer);
-                    _audioDataSignal.Release();
+                    EnqueuePcm(buffer);
                 }
             };
 
             capture.Start();
             _capturing = true;
-            _lastRealAudioUtc = DateTime.UtcNow;
 
-            // Start a background task that broadcasts audio to all connected clients
-            _broadcastTask = Task.Run(() => BroadcastAudioAsync(_cancellationTokenSource.Token));
-            _keepaliveTask = Task.Run(() => SilenceKeepaliveAsync(_cancellationTokenSource.Token));
+            _streamPumpTask = Task.Run(() => ContinuousStreamPumpAsync(_cancellationTokenSource.Token));
+        }
+
+        private void EnqueuePcm(byte[] buffer)
+        {
+            _audioDataQueue.Enqueue(buffer);
+            while (_audioDataQueue.Count > MaxQueuedChunks && _audioDataQueue.TryDequeue(out _))
+            {
+                // Drop oldest buffers so a burst of loopback events cannot build unbounded latency.
+            }
         }
 
         /// <summary>
@@ -247,91 +240,77 @@ namespace AudioStreamingServer
         }
 
         /// <summary>
-        /// Injects zero-filled PCM chunks while WASAPI is idle so browsers keep receiving
-        /// frames during short show-silence gaps. Stops after <see cref="SilenceKeepaliveMaxSeconds"/>
-        /// of continuous idle time.
+        /// Sends PCM on a fixed clock while clients are connected. Live loopback mode always
+        /// emits a chunk (real audio or synthetic silence). Media mode only sends queued file PCM.
         /// </summary>
-        private async Task SilenceKeepaliveAsync(CancellationToken cancellationToken)
+        private async Task ContinuousStreamPumpAsync(CancellationToken cancellationToken)
         {
             while (!cancellationToken.IsCancellationRequested)
             {
                 try
                 {
-                    await Task.Delay(KeepaliveIntervalMs, cancellationToken);
+                    await Task.Delay(StreamPumpIntervalMs, cancellationToken);
                 }
                 catch (OperationCanceledException)
                 {
                     break;
                 }
 
-                if (!_capturing || _mediaMode || _clients.IsEmpty || _typicalBufferBytes <= 0)
+                if (!_capturing || _clients.IsEmpty)
                     continue;
 
-                var idle = DateTime.UtcNow - _lastRealAudioUtc;
-                if (idle.TotalSeconds >= SilenceKeepaliveMaxSeconds)
+                if (_mediaMode)
+                {
+                    if (_audioDataQueue.TryDequeue(out var mediaChunk))
+                        await BroadcastToClientsAsync(mediaChunk);
                     continue;
+                }
 
-                if (idle.TotalMilliseconds < SilenceKeepaliveStartMs)
-                    continue;
-
-                // Don't run ahead of the broadcaster — avoids a backlog of silence frames that
-                // delays real audio when the show resumes.
-                if (!_audioDataQueue.IsEmpty)
-                    continue;
-
-                int chunkBytes = KeepaliveChunkBytes();
-                _audioDataQueue.Enqueue(CreateSilenceChunk(chunkBytes));
-                _audioDataSignal.Release();
+                byte[] chunk = _audioDataQueue.TryDequeue(out var liveChunk)
+                    ? liveChunk
+                    : CreateSilenceChunk(StreamChunkBytes());
+                await BroadcastToClientsAsync(chunk);
             }
         }
 
         private int BytesPerSecond =>
             _sampleRate * _channels * Math.Max(1, _bitsPerSample / 8);
 
-        private int KeepaliveChunkBytes()
+        private int StreamChunkBytes()
         {
             if (_typicalBufferBytes > 0)
                 return _typicalBufferBytes;
 
             int bytesPerFrame = _channels * Math.Max(1, _bitsPerSample / 8);
-            return Math.Max(bytesPerFrame, BytesPerSecond * KeepaliveIntervalMs / 1000);
+            return Math.Max(bytesPerFrame, BytesPerSecond * StreamPumpIntervalMs / 1000);
         }
 
         /// <summary>
-        /// Zero PCM with a sub-audible marker on the first float sample so strict clients (e.g.
-        /// Tesla browser) keep treating the Web Audio stream as active during show-silence gaps.
+        /// Synthetic silence with a sub-audible marker on the first float sample so strict
+        /// clients keep the audio session active during show-silence gaps.
         /// </summary>
         private byte[] CreateSilenceChunk(int length)
         {
             var chunk = new byte[length];
             if (_sampleFormat == "float" && length >= 4)
-                BitConverter.TryWriteBytes(chunk.AsSpan(0, 4), BitConverter.SingleToInt32Bits(SilenceKeepaliveMarkerLevel));
+                BitConverter.TryWriteBytes(chunk.AsSpan(0, 4), BitConverter.SingleToInt32Bits(SilenceMarkerLevel));
             return chunk;
         }
 
-        /// <summary>
-        /// Broadcasts queued audio data to all connected WebSocket clients.
-        /// Uses a semaphore to avoid CPU spinning when the queue is empty.
-        /// </summary>
-        private async Task BroadcastAudioAsync(CancellationToken cancellationToken)
+        private async Task BroadcastToClientsAsync(byte[] buffer)
         {
-            while (!cancellationToken.IsCancellationRequested)
+            if (buffer.Length == 0 || _clients.IsEmpty)
+                return;
+
+            var sendTasks = new List<Task>(_clients.Count);
+            foreach (var ws in _clients.Values)
             {
-                await _audioDataSignal.WaitAsync(cancellationToken);
-
-                if (_audioDataQueue.TryDequeue(out var buffer))
-                {
-                    var sendTasks = new List<Task>(_clients.Count);
-                    foreach (var ws in _clients.Values)
-                    {
-                        if (ws.State == WebSocketState.Open)
-                            sendTasks.Add(SendAudioAsync(ws, buffer));
-                    }
-
-                    if (sendTasks.Count > 0)
-                        await Task.WhenAll(sendTasks);
-                }
+                if (ws.State == WebSocketState.Open)
+                    sendTasks.Add(SendAudioAsync(ws, buffer));
             }
+
+            if (sendTasks.Count > 0)
+                await Task.WhenAll(sendTasks);
         }
 
         private async Task SendAudioAsync(WebSocket ws, byte[] buffer)
@@ -381,12 +360,11 @@ namespace AudioStreamingServer
                     capture = null;
                     _capturing = false;
 
-                    foreach (var task in new[] { _broadcastTask, _keepaliveTask })
+                    if (_streamPumpTask != null)
                     {
-                        if (task == null) continue;
                         try
                         {
-                            task.Wait(TimeSpan.FromSeconds(2));
+                            _streamPumpTask.Wait(TimeSpan.FromSeconds(2));
                         }
                         catch (AggregateException)
                         {
@@ -395,7 +373,6 @@ namespace AudioStreamingServer
                     }
 
                     _cancellationTokenSource.Dispose();
-                    _audioDataSignal.Dispose();
                 }
                 _disposed = true;
             }

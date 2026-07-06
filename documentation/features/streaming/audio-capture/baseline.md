@@ -7,9 +7,10 @@ Known-good invariants for audio capture and streaming. Update only when intended
 - The capture format (sample rate, bit depth, channels) is **discovered from the device at runtime** and never hardcoded server-side.
 - **No resampling happens on the server.** All resampling is client-side, triggered only when the browser's AudioContext rate differs from the server rate.
 - Loopback chunks are enqueued when `e.ByteCount > 0` **and** at least one client is connected.
-- While loopback has been idle for at least `SilenceKeepaliveStartMs` (100 ms) but less than `SilenceKeepaliveMaxSeconds` (30 s), and the broadcast queue is empty, the server injects synthetic silence PCM every `KeepaliveIntervalMs` (10 ms), sized to the last `DataAvailable` buffer (or a 10 ms default derived from the capture format). Float keepalive chunks carry a sub-audible marker sample (`1e-5f`) so strict clients keep the audio session active. Shorter gaps are normal between WASAPI buffers during active playback and must not trigger keepalive.
-- After 30 s of continuous loopback idle, silence keepalive stops until real audio returns.
-- Each binary WebSocket frame is one raw PCM chunk — either a CSCore `DataAvailable` buffer or a synthetic silence keepalive — with no WAV header, no length prefix, no re-framing.
+- `ContinuousStreamPumpAsync` emits PCM on a fixed `StreamPumpIntervalMs` (10 ms) clock while live loopback clients are connected. Each tick sends a dequeued loopback buffer when available, otherwise a synthetic silence chunk sized to the last `DataAvailable` buffer (or a 10 ms format-derived default). Float silence chunks carry a sub-audible marker sample (`1e-5f`) so strict clients keep the audio session active.
+- The PCM queue is capped at `MaxQueuedChunks` (8); oldest buffers are dropped on overflow.
+- Media mode does not synthesize silence — the pump only sends queued file PCM from `EnqueueMediaAudio`.
+- Each binary WebSocket frame is one raw PCM chunk — loopback audio or synthetic silence — with no WAV header, no length prefix, no re-framing.
 - The **first** frame to a new client is always the JSON format descriptor (text); all later frames are binary PCM.
 - The server-to-client stream is broadcast: one dequeued buffer is fanned out to all open clients.
 
