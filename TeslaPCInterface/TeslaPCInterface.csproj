@@ -2,7 +2,11 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <!-- Windows 10 SDK target enables the WinRT projections used by Windows Graphics Capture
+         (WgcScreenCapture). Min version keeps the app runnable on older Win10; WGC availability
+         is probed at runtime and falls back to DXGI/GDI. -->
+    <TargetFramework>net10.0-windows10.0.22000.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>

@@ -209,18 +209,24 @@ namespace Streaming
         private bool RunCaptureSession()
         {
             int epoch = Volatile.Read(ref _restartEpoch);
-            using var dxgiCapture = new DxgiScreenCapture();
-            bool useDxgi = dxgiCapture.IsAvailable;
-            if (!useDxgi)
+            // Backend chain: WGC (composited output, includes MPO video + cursor) -> DXGI
+            // Desktop Duplication -> GDI CopyFromScreen.
+            using var wgcCapture = new WgcScreenCapture();
+            bool useWgc = wgcCapture.IsAvailable;
+            using var dxgiCapture = useWgc ? null : new DxgiScreenCapture();
+            bool useDxgi = !useWgc && dxgiCapture!.IsAvailable;
+            if (!useWgc && !useDxgi)
             {
                 Console.WriteLine("[Capture] Using GDI CopyFromScreen fallback.");
             }
 
-            Size screenSize = useDxgi
-                ? dxgiCapture.CaptureSize
-                : new Size(
-                    System.Windows.Forms.Screen.PrimaryScreen!.Bounds.Width,
-                    System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
+            Size screenSize = useWgc
+                ? wgcCapture.CaptureSize
+                : useDxgi
+                    ? dxgiCapture!.CaptureSize
+                    : new Size(
+                        System.Windows.Forms.Screen.PrimaryScreen!.Bounds.Width,
+                        System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
 
             // Scale uniformly to fit within the cap box (preserves aspect ratio; never upscales),
             // so the stream always matches the screen's shape regardless of its aspect ratio.
@@ -258,11 +264,19 @@ namespace Streaming
                 var nowBounds = System.Windows.Forms.Screen.PrimaryScreen!.Bounds;
                 if (nowBounds.Width != screenSize.Width || nowBounds.Height != screenSize.Height)
                     return true;
+                // If WGC dies mid-session (monitor item closed), restart so the next session
+                // re-probes the chain and can fall back to DXGI/GDI.
+                if (useWgc && !wgcCapture.IsAvailable)
+                    return true;
 
                 bool captured = false;
-                if (useDxgi)
+                if (useWgc)
                 {
-                    captured = dxgiCapture.TryCapture(srcImage);
+                    captured = wgcCapture.TryCapture(srcImage);
+                }
+                else if (useDxgi)
+                {
+                    captured = dxgiCapture!.TryCapture(srcImage);
                 }
                 else
                 {
