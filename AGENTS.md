@@ -81,6 +81,9 @@ dotnet build TeslaPCInterface.sln
 dotnet run --project TeslaPCInterface/TeslaPCInterface.csproj
 ```
 
+Or from the repo root: `.\build.ps1` (Release; `-Configuration Debug` for debug,
+`-Publish` for a runnable folder in `.\publish`).
+
 Runtime flags / env:
 - `--localhost` — bind to local wildcard only; **skips** firewall + HTTPS bootstrap.
 - `--no-tesla-bypass` — disable the Tesla CGNAT bypass (firewall + HTTPS bootstrap still run).
