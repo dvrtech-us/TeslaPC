@@ -13,12 +13,16 @@ Known-good invariants for remote input. Update only when intended behavior chang
 
 ## Event Rules
 
-| `Type` | Cursor moved? | Button action |
-|--------|---------------|---------------|
-| `move` | yes | none |
+| `Type` | Cursor moved? | Action |
+|--------|---------------|--------|
+| `move` | yes | none (cursor only) |
 | `down` | yes | left button down |
 | `up` | yes | left button up |
+| `rightclick` | yes | right button click (down+up pair) |
+| `wheel` | only if X/Y supplied | `MOUSEEVENTF_WHEEL` with `-Delta` |
 | `click` | yes | none (no dedicated click handling) |
+
+Wheel deltas are forwarded (sign inverted on server for Windows convention). Two-finger touch on the client produces wheel messages.
 
 ## Keyboard
 
@@ -34,8 +38,12 @@ Known-good invariants for remote input. Update only when intended behavior chang
 
 ## Not Implemented (intentional current state)
 
-- Middle-click and scroll wheel. (Right-click **is** supported via `Type == "rightclick"` — desktop `contextmenu` or touch long-press.)
+- Middle-click.
+- Horizontal wheel (`MOUSEEVENTF_HWHEEL`) — constant is declared but not wired in client or server yet.
 - A dedicated `click` (down+up) action.
+
+Right-click is fully supported (`Type == "rightclick"` via desktop `contextmenu` or touch long-press).
+Vertical scroll (mouse wheel + two-finger touch drag) is now supported.
 
 ## Access Control
 

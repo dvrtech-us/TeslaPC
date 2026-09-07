@@ -41,11 +41,30 @@ internal static class AcmeCertificateManager
         if (string.IsNullOrWhiteSpace(host) || string.IsNullOrWhiteSpace(cloudflareToken))
             return false;
 
-        if (HasValidCertificate(host, out var daysLeft))
+        int daysLeft = GetBestCertificateDaysLeft(host);
+        if (daysLeft > RenewWhenDaysLeft)
         {
             Console.WriteLine($"[ACME] Trusted cert for {host} is valid for {daysLeft} more day(s); no action.");
             return true;
         }
+
+        // Issuing is pointless without admin rights: the cert must be imported into
+        // LocalMachine\My (machine key set), which requires elevation. Requesting anyway would
+        // burn a Let's Encrypt issuance on every start and then fail to store it.
+        if (!IsElevated())
+        {
+            if (daysLeft > 0)
+            {
+                Console.WriteLine($"[ACME] Cert for {host} expires in {daysLeft} day(s) but renewal requires administrator privileges; keeping the current cert.");
+                return true;
+            }
+            Console.WriteLine($"[ACME] No trusted cert for {host} and not running as administrator; skipping the certificate request.");
+            return false;
+        }
+
+        Console.WriteLine(daysLeft > 0
+            ? $"[ACME] Cert for {host} expires in {daysLeft} day(s); renewing."
+            : $"[ACME] No valid trusted cert for {host} found in LocalMachine\\My; requesting one.");
 
         try
         {
@@ -97,9 +116,13 @@ internal static class AcmeCertificateManager
         }
     }
 
-    private static bool HasValidCertificate(string host, out int daysLeft)
+    /// <summary>
+    /// Days of validity left on the best trusted cert for <paramref name="host"/> in
+    /// LocalMachine\My, or 0 when none is usable. A faulty store entry only skips that entry,
+    /// never the whole scan (a foreign cert with a malformed extension must not force a re-issue).
+    /// </summary>
+    private static int GetBestCertificateDaysLeft(string host)
     {
-        daysLeft = 0;
         try
         {
             using var store = new X509Store(StoreName.My, StoreLocation.LocalMachine);
@@ -107,19 +130,33 @@ internal static class AcmeCertificateManager
             X509Certificate2? best = null;
             foreach (var c in store.Certificates)
             {
-                if (c.FriendlyName == "TeslaPC Dev Cert" || c.NotAfter <= DateTime.Now || !c.HasPrivateKey)
-                    continue;
-                if (!c.MatchesHostname(host)) continue;
-                if (best == null || c.NotAfter > best.NotAfter) best = c;
+                try
+                {
+                    if (c.FriendlyName == "TeslaPC Dev Cert" || c.NotAfter <= DateTime.Now || !c.HasPrivateKey)
+                        continue;
+                    if (!c.MatchesHostname(host)) continue;
+                    if (best == null || c.NotAfter > best.NotAfter) best = c;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ACME] Skipping unreadable store cert '{c.Subject}': {ex.Message}");
+                }
             }
-            if (best == null) return false;
-            daysLeft = (int)(best.NotAfter - DateTime.Now).TotalDays;
-            return daysLeft > RenewWhenDaysLeft;
+            if (best == null) return 0;
+            return Math.Max(0, (int)(best.NotAfter - DateTime.Now).TotalDays);
         }
-        catch
+        catch (Exception ex)
         {
-            return false;
+            Console.WriteLine($"[ACME] Could not read LocalMachine\\My: {ex.Message}");
+            return 0;
         }
+    }
+
+    private static bool IsElevated()
+    {
+        using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+        return new System.Security.Principal.WindowsPrincipal(identity)
+            .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
     }
 
     private static async Task<AcmeContext> LoadOrCreateAccountAsync(Uri server, string? email)

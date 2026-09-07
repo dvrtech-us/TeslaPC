@@ -12,6 +12,13 @@ Known-good invariants. Update only when intended behavior changes.
   `AcmeCertificateManager` (Certes + Cloudflare DNS-01) obtains a Let's Encrypt cert at startup and
   renews it when < 30 days remain (12 h background timer), importing to `LocalMachine\My` with
   friendly name `TeslaPC LE (<host>)`. With no token it does nothing and the self-signed path runs.
+- **ACME never contacts Let's Encrypt without elevation.** Import requires admin
+  (`LocalMachine\My` + machine key set), so a non-elevated run skips the request: it keeps a
+  valid-but-expiring cert (logs the days left) or logs that issuance is deferred. This prevents
+  one wasted LE issuance per non-admin start.
+- **The cert-store scan is per-cert fault tolerant.** One unreadable/malformed certificate in
+  `LocalMachine\My` is logged and skipped; it must never abort the scan and trigger a re-issue
+  while a valid `TeslaPC LE (<host>)` cert is present (`GetBestCertificateDaysLeft`).
 - The http.sys AppId is exactly `{A253521A-C31E-457C-AADD-C0E42A87EA0F}` and is identical in `SslCertificateBootstrap.cs` and `bindSSLCert.bat` — the two paths are interchangeable.
 - `TeslaPC Dev Cert` is the **sole** lookup key for finding, reusing, and cleaning up certificates; changing it orphans existing certs.
 - `RemoveBrokenCertificates()` always runs **before** `GetOrCreateCertificate()` — certs with inaccessible private keys are pruned before reuse is attempted.

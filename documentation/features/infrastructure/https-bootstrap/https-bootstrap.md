@@ -10,7 +10,9 @@ value gates whether [web-server](../../server/web-server/web-server.md) binds th
 - **Trusted (production)** — when a hostname is configured via `--https-host <host>` (or env
   `TESLAPC_HTTPS_HOST`) the app obtains/renews a **Let's Encrypt** certificate **in-process** via
   [`AcmeCertificateManager`](../../../../TeslaPCInterface/AcmeCertificateManager.cs) (Certes,
-  DNS-01, Cloudflare API) and imports it to `LocalMachine\My`; the bootstrap then binds it. The
+  DNS-01, Cloudflare API) and imports it to `LocalMachine\My`; the bootstrap then binds it.
+  Issuance/renewal only runs **elevated** (import needs `LocalMachine\My` + machine keys); a
+  non-admin run keeps the existing cert and never contacts Let's Encrypt. The
   Tesla browses `https://<host>:8443/` (DNS A record → `100.64.0.1`) and gets **no warning**.
   See the runbook in `documentation/planning/Infrastructure/`.
 - **Self-signed (fallback)** — when no host is set, or no trusted cert is present yet (first boot,

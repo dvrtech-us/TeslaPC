@@ -118,7 +118,7 @@ no bypass).
 ## Current Known Gaps (documented, not bugs)
 
 - **No authentication** on any route; access is controlled only at the network layer.
-- Mouse supports left-click, drag, and right-click (long-press on touch); **no scroll-wheel** yet. Keyboard input is implemented (typing, named keys, and paste, replayed host-side via `SendKeys`); the `keybd_event` P/Invoke remains declared but unused.
+- Mouse supports left-click, drag, right-click (long-press on touch), mouse wheel, and two-finger vertical scroll on touch (mapped to wheel). Keyboard input is implemented (typing, named keys, and paste, replayed host-side via `SendKeys`); the `keybd_event` P/Invoke remains declared but unused.
 - Static files are read via `File.ReadAllText` (UTF-8), so binary assets (e.g. `.png`/`.jpg`) are not served correctly. Video playback does **not** use this path — it streams via the ffmpeg/MJPEG media pipeline.
 - `bindSSLCert.bat` and `SslCertificateBootstrap.cs` diverge slightly (extra port cleanup, explicit subject) — see the https-bootstrap baseline.
 - **SQLite advisory GHSA-2m69-gcr7-jv3q** on `SQLitePCLRaw.lib.e_sqlite3` (transitive via

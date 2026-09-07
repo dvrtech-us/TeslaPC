@@ -30,18 +30,26 @@ and JS are inline; the only external module is `PCMPlayerProcessor.js` (loaded a
 ### Input (`mapPoint` / `sendInput`, `index.html`)
 
 - The input WebSocket opens on load: `new WebSocket(getWsUrl('/ws/input'))`.
-- **Mouse** listeners on the `<img>`: `click`, `mousemove`, `mousedown`, `mouseup`, and
+- **Mouse** listeners on the `<img>`: `click`, `mousemove`, `mousedown`, `mouseup`, `wheel`, and
   `contextmenu`→`rightclick` (desktop right-click, `preventDefault`ed).
-- **Touch** listeners (Tesla/tablets), all `preventDefault`ed (`passive:false`) to stop scroll/zoom
-  and avoid duplicate synthesized mouse events:
+- **Wheel / scroll**: `wheel` events are captured and forwarded as `{ Type: "wheel", Delta, X, Y, DisplaySize }`.
+- **Touch** listeners (Tesla/tablets), all `preventDefault`ed (`passive:false`) to stop native page
+  scroll/zoom and avoid duplicate synthesized mouse events:
   - **quick tap** → `down`+`up` (left click)
   - **press + drag** (move > ~12px) → `down` then `move`…`up` (left-button drag)
   - **press & hold ~0.5s** → `rightclick` (long-press; the `down` is deferred so a hold isn't also a
     left press)
+  - **two or more simultaneous touches** (two-finger vertical drag) → wheel scroll messages. The
+    average Y delta of the first two touches is scaled, negated (natural direction: content follows
+    the fingers), and sent via the wheel path. Single-touch
+    logic (timer, drag, tap) is bypassed while multi-touch is active. `touchcancel` is also handled.
 - `mapPoint(clientX, clientY)` converts a viewport point to the **actual video rectangle**
   (accounting for the `object-fit: contain` letterbox via `naturalWidth/Height`); points in the
-  black bars return null and are ignored. `sendInput(type, x, y)` sends the mapped coords.
-- Message: `{ "Type": "click|move|down|up|rightclick", "X": int, "Y": int, "DisplaySize": { "width": dispW, "height": dispH } }` where `dispW/dispH` are the displayed video size.
+  black bars return null and are ignored. Used by both `sendInput` (pointer) and `sendWheel`.
+- Message protocol now includes wheel:
+  - Pointer: `{ "Type": "move|down|up|rightclick", "X": ..., "Y": ..., "DisplaySize": ... }`
+  - Wheel:   `{ "Type": "wheel", "Delta": number, "X"?, "Y"?, "DisplaySize"?: ... }`
+- New helper `sendWheel(delta, clientX, clientY)` centralizes wheel transmission.
 - **Keyboard** — three input paths all funnel through `sendKey(key, code)` (sends `{Type:'key', Key, KeyCode}` over `/ws/input`) and a helper `sendText(text)`:
 
   1. **On-screen box (`#fakeKeyboard`)** — a visible text input so touch devices (e.g. Tesla browser) can summon the on-screen keyboard. Its `input` event listener sends `event.data` for both `insertText` and `insertFromPaste` input types via `sendKey`.

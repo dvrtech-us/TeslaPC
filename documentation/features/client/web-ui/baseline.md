@@ -12,8 +12,10 @@ Known-good invariants for the browser client. Update only when intended behavior
 
 ## Input Rules
 
-- Mouse listeners are attached to the video `<img>`: `click`, `mousemove`, `mousedown`, `mouseup`.
-- Coordinates are relative to the image's bounding rect and sent with the image's rendered size as `DisplaySize`.
+- Mouse + wheel listeners are attached to the video `<img>`: `click`, `mousemove`, `mousedown`, `mouseup`, `wheel`, and `contextmenu`.
+- `wheel` events send `{ Type: "wheel", Delta: e.deltaY, X, Y, DisplaySize }`.
+- Two-finger vertical drag on touch also produces wheel messages (average finger dy scaled by T2_SCROLL_FACTOR and **negated** — natural direction, content follows the fingers; single-touch state is bypassed).
+- Coordinates (for both pointer and wheel) are relative to the image's bounding rect and sent with the image's rendered size as `DisplaySize`.
 - All keyboard paths send over `/ws/input` via `sendKey(key, code)` (`{Type:'key', Key, KeyCode}`) or `sendText(text)`.
 - Paste is forwarded regardless of whether `#fakeKeyboard` is focused: a `document`-level `paste` listener reads `clipboardData.getData('text')` and calls `sendText`; it also fires when the user pastes into the box itself (the box's own `input` event is suppressed by `preventDefault()`).
 - Physical keyboard typing is captured page-wide by a `document`-level `keydown` listener; the user does **not** need to focus `#fakeKeyboard` for keystrokes to be forwarded.

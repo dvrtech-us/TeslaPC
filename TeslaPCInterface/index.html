@@ -380,6 +380,23 @@
             }));
         }
 
+        // Send a wheel (scroll) event. Delta is typically e.deltaY from wheel events.
+        // For two-finger touch we compute a scaled pixel delta.
+        // X/Y are optional but recommended so the server can position the cursor first.
+        function sendWheel(delta, clientX, clientY) {
+            if (mouseSocket.readyState !== WebSocket.OPEN) return;
+            var payload = { Type: 'wheel', Delta: delta };
+            if (clientX != null && clientY != null) {
+                var p = mapPoint(clientX, clientY);
+                if (p) {
+                    payload.X = p.x;
+                    payload.Y = p.y;
+                    payload.DisplaySize = { width: p.w, height: p.h };
+                }
+            }
+            mouseSocket.send(JSON.stringify(payload));
+        }
+
         // Mouse (desktop).
         img.addEventListener('click', function (e) { sendInput('click', e.clientX, e.clientY); });
         img.addEventListener('mousemove', function (e) { sendInput('move', e.clientX, e.clientY); });
@@ -388,14 +405,40 @@
         // Desktop right mouse button -> right-click on the host.
         img.addEventListener('contextmenu', function (e) { sendInput('rightclick', e.clientX, e.clientY); e.preventDefault(); });
 
+        // Mouse wheel / trackpad scroll (desktop + some touchpads).
+        // We always preventDefault so it doesn't scroll the page itself.
+        img.addEventListener('wheel', function (e) {
+            sendWheel(e.deltaY, e.clientX, e.clientY);
+            e.preventDefault();
+        }, { passive: false });
+
         // Touch (Tesla / tablets):
         //   quick tap            -> left click
         //   press + drag         -> left-button drag
         //   press & hold ~0.5s   -> right-click (long-press)
-        // The 'down' is deferred until we know it's a drag, so a long-press isn't also a left press.
+        //   two-finger vertical drag -> scroll wheel (remote content scroll)
+        // Single-touch drag / tap logic is skipped when >= 2 touches are present.
+        // All handlers use passive:false + preventDefault to keep control and stop page scroll.
         var LONG_PRESS_MS = 500, MOVE_TOL = 12;
         var tStartX = 0, tStartY = 0, tMoved = false, tDownSent = false, tLongPressed = false, tTimer = null;
+
+        // Two-finger scroll gesture state
+        var t2Active = false;
+        var t2PrevAvgY = 0;
+        // Pixels of finger movement to wheel units. Tune for feel (higher = more sensitive).
+        var T2_SCROLL_FACTOR = 1.6;
         img.addEventListener('touchstart', function (e) {
+            if (e.touches && e.touches.length >= 2) {
+                // Two-finger scroll gesture
+                t2Active = true;
+                t2PrevAvgY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+                clearTimeout(tTimer);
+                tMoved = false; tDownSent = false; tLongPressed = false;
+                e.preventDefault();
+                return;
+            }
+
+            // Single-touch path
             var t = e.changedTouches[0];
             tStartX = t.clientX; tStartY = t.clientY;
             tMoved = false; tDownSent = false; tLongPressed = false;
@@ -406,6 +449,28 @@
             e.preventDefault();
         }, { passive: false });
         img.addEventListener('touchmove', function (e) {
+            // Two-finger vertical scroll (highest priority when active or detected)
+            if (t2Active || (e.touches && e.touches.length >= 2)) {
+                if (!t2Active) {
+                    t2Active = true;
+                    t2PrevAvgY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+                    clearTimeout(tTimer);
+                    tMoved = false; tDownSent = false; tLongPressed = false;
+                }
+                var avgY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+                var dy = avgY - t2PrevAvgY;
+                if (Math.abs(dy) > 2) {
+                    // Convert finger movement to wheel delta (natural touch convention:
+                    // content follows the fingers, so dragging down scrolls content up).
+                    var wheelDelta = Math.round(-dy * T2_SCROLL_FACTOR);
+                    var cx = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+                    sendWheel(wheelDelta, cx, avgY);
+                    t2PrevAvgY = avgY;
+                }
+                e.preventDefault();
+                return;
+            }
+
             if (tLongPressed) { e.preventDefault(); return; }
             var t = e.changedTouches[0];
             if (!tMoved && Math.abs(t.clientX - tStartX) + Math.abs(t.clientY - tStartY) > MOVE_TOL) {
@@ -418,11 +483,27 @@
             e.preventDefault();
         }, { passive: false });
         img.addEventListener('touchend', function (e) {
+            if (t2Active) {
+                t2Active = false;
+                clearTimeout(tTimer);
+                e.preventDefault();
+                return;
+            }
             clearTimeout(tTimer);
             var t = e.changedTouches[0];
             if (tLongPressed) { /* right-click already sent */ }
             else if (tDownSent) { sendInput('up', t.clientX, t.clientY); }   // end of drag
             else { sendInput('down', tStartX, tStartY); sendInput('up', tStartX, tStartY); } // tap = left click
+            e.preventDefault();
+        }, { passive: false });
+
+        // Safety net for cancelled touches (e.g. system gesture)
+        img.addEventListener('touchcancel', function (e) {
+            if (t2Active) t2Active = false;
+            clearTimeout(tTimer);
+            tDownSent = false;
+            tLongPressed = false;
+            tMoved = false;
             e.preventDefault();
         }, { passive: false });
 
