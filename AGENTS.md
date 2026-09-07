@@ -43,7 +43,7 @@ still **no `sql/` folders** — the schema is created in code.
 |--------|---------|----------------|
 | server | web-server | `WebServer.cs`, `Program.cs` |
 | server | input-control | `WebServer.cs`, `Program.cs` |
-| streaming | screen-capture | `ImageStreamingServer.cs`, `DxgiScreenCapture.cs`, `MjpegWriter.cs` |
+| streaming | screen-capture | `ImageStreamingServer.cs`, `WgcScreenCapture.cs`, `DxgiScreenCapture.cs`, `MjpegWriter.cs` |
 | streaming | audio-capture | `AudioStreamingServer.cs`, `PCMPlayerProcessor.js` |
 | streaming | display-control | `DisplayManager.cs`, `WebServer.cs` |
 | app | control-panel | `Program.cs`, `MainForm.cs`, `TeslaPcService.cs` |
@@ -61,7 +61,8 @@ TeslaPCInterface/
 ├── Program.cs                 # Entry point; startup/shutdown orchestration
 ├── WebServer.cs               # Unified HTTP/HTTPS server + routing + input WebSocket
 ├── ImageStreamingServer.cs    # Shared MJPEG capture loop, JPEG encoding, per-client send
-├── DxgiScreenCapture.cs       # DXGI Desktop Duplication capture (GDI fallback)
+├── WgcScreenCapture.cs        # Windows Graphics Capture (composited output incl. overlay video + cursor)
+├── DxgiScreenCapture.cs       # DXGI Desktop Duplication capture (fallback; GDI is last resort)
 ├── MjpegWriter.cs             # multipart/x-mixed-replace framing
 ├── AudioStreamingServer.cs    # WASAPI loopback capture + /ws/audio broadcast
 ├── PCMPlayerProcessor.js      # Client AudioWorklet (decode/resample/buffer/play)

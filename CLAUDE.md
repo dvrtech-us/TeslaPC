@@ -30,8 +30,9 @@ TeslaPCInterface/
 ├── MainForm.cs                # WinForms touch control panel (Dashboard + Log tabs)
 ├── TeslaPcService.cs          # Server lifecycle + status + hotspot-watchdog/ACME-renewal loops
 ├── WebServer.cs               # Unified HTTP/HTTPS server with path-based routing + input replay
-├── ImageStreamingServer.cs    # MJPEG screen capture (30 FPS, max 1280x720)
-├── DxgiScreenCapture.cs       # DXGI Desktop Duplication capture (GDI fallback)
+├── ImageStreamingServer.cs    # MJPEG screen capture loop (30 FPS, resolution cap)
+├── WgcScreenCapture.cs        # Windows Graphics Capture (preferred; composited output)
+├── DxgiScreenCapture.cs       # DXGI Desktop Duplication capture (fallback; GDI last)
 ├── AudioStreamingServer.cs    # WASAPI loopback audio capture via CSCore
 ├── TeslaBrowserBypass.cs      # Tesla in-car browser hotspot bypass (CGNAT IP + portproxy)
 ├── HotspotManager.cs          # Enable/disable Windows Mobile Hotspot (WinRT tethering)
