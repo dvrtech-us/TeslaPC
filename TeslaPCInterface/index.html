@@ -41,25 +41,7 @@
             autocorrect="off" autocapitalize="off" spellcheck="false" />
         <button class="btn" onclick="window.location.assign('/list.html')">&#128193; Files</button>
         <button class="btn" onclick="window.location.assign('/config.html')">&#9881; Settings</button>
-        <button type="button" id="resBtn" class="btn" title="Stream resolution" onclick="toggleResPicker(event)">1080p</button>
-        <button type="button" id="codecBtn" class="btn" title="Video codec" onclick="toggleCodecPicker(event)">MJPEG</button>
         <button class="btn" onclick="fitScreen()" title="Set the PC resolution to match this screen"><svg viewBox="0 0 24 24" class="btn-ic" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>Fit screen</button>
-    </div>
-    <div id="resPicker" class="res-picker" hidden>
-        <div class="res-picker-inner">
-            <div class="res-picker-title">Stream resolution</div>
-            <button type="button" class="btn res-choice" data-h="480" onclick="pickRes(480)">480p</button>
-            <button type="button" class="btn res-choice" data-h="720" onclick="pickRes(720)">720p</button>
-            <button type="button" class="btn res-choice" data-h="1080" onclick="pickRes(1080)">1080p</button>
-        </div>
-    </div>
-    <div id="codecPicker" class="res-picker" hidden>
-        <div class="res-picker-inner">
-            <div class="res-picker-title">Video codec (WebSocket)</div>
-            <button type="button" class="btn codec-choice" data-codec="mjpeg" onclick="pickCodec('mjpeg')">MJPEG</button>
-            <button type="button" class="btn codec-choice" data-codec="h264" onclick="pickCodec('h264')">H264</button>
-            <div class="res-picker-hint">H264 uses the native Windows encoder on the PC.</div>
-        </div>
     </div>
 
     <script src="av-scheduler.js"></script>
@@ -691,51 +673,8 @@
 
     </script>
     <script>
-        // Stream resolution picker (native <select> popups are broken on the Tesla browser).
-        var RES_OPTS = [480, 720, 1080];
-
-        function nearestRes(h) {
-            var best = RES_OPTS[0];
-            for (var i = 0; i < RES_OPTS.length; i++)
-                if (Math.abs(RES_OPTS[i] - h) < Math.abs(best - h)) best = RES_OPTS[i];
-            return best;
-        }
-
-        function updateResUi(h) {
-            document.getElementById('resBtn').textContent = h + 'p';
-            var choices = document.querySelectorAll('.res-choice');
-            for (var i = 0; i < choices.length; i++)
-                choices[i].classList.toggle('active', Number(choices[i].getAttribute('data-h')) === h);
-        }
-
-        function toggleResPicker(e) {
-            if (e) e.stopPropagation();
-            var p = document.getElementById('resPicker');
-            p.hidden = !p.hidden;
-        }
-
-        function closeResPicker() {
-            document.getElementById('resPicker').hidden = true;
-        }
-
-        function setRes(h) {
-            var b = new URLSearchParams();
-            b.set('streamHeight', h);
-            fetch('/config', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: b.toString() });
-        }
-
-        function pickRes(h) {
-            updateResUi(h);
-            setRes(h);
-            closeResPicker();
-        }
-
-        document.addEventListener('touchstart', function (e) {
-            var p = document.getElementById('resPicker');
-            if (p.hidden) return;
-            if (!p.contains(e.target) && e.target.id !== 'resBtn') closeResPicker();
-        }, { passive: true });
-
+        // Stream resolution and codec are configured on the Settings page (config.html);
+        // the main screen keeps only actions (Fit screen) and the display itself.
         function fitScreen() {
             var s = document.querySelector('.screen');
             var w = s ? s.clientWidth : window.innerWidth;
@@ -748,53 +687,8 @@
                 .catch(function () {});
         }
 
-        function updateCodecUi(codec) {
-            document.getElementById('codecBtn').textContent = codec === 'h264' ? 'H264' : 'MJPEG';
-            var choices = document.querySelectorAll('.codec-choice');
-            for (var i = 0; i < choices.length; i++)
-                choices[i].classList.toggle('active', choices[i].getAttribute('data-codec') === codec);
-        }
-
-        function toggleCodecPicker(e) {
-            if (e) e.stopPropagation();
-            var p = document.getElementById('codecPicker');
-            p.hidden = !p.hidden;
-            closeResPicker();
-        }
-
-        function closeCodecPicker() {
-            document.getElementById('codecPicker').hidden = true;
-        }
-
-        function setCodec(codec) {
-            var b = new URLSearchParams();
-            b.set('displayRenderer', codec);
-            b.set('displayTransport', 'websocket');
-            return fetch('/config', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: b.toString() })
-                .then(function () {
-                    if (sessionStarted && window.TeslaDisplay) {
-                        TeslaDisplay.stop();
-                        TeslaDisplay.start(onSessionLost);
-                    }
-                });
-        }
-
-        function pickCodec(codec) {
-            updateCodecUi(codec);
-            setCodec(codec);
-            closeCodecPicker();
-        }
-
-        document.addEventListener('touchstart', function (e) {
-            var p = document.getElementById('codecPicker');
-            if (p.hidden) return;
-            if (!p.contains(e.target) && e.target.id !== 'codecBtn') closeCodecPicker();
-        }, { passive: true });
-
         fetch('/config').then(function (r) { return r.json(); }).then(function (c) {
             if (!c) return;
-            if (c.streamHeight) updateResUi(nearestRes(c.streamHeight));
-            if (c.displayRenderer) updateCodecUi(c.displayRenderer);
             if (c.audioBoost != null) audioBoost = clampAudioBoost(c.audioBoost);
         }).catch(function () {});
     </script>

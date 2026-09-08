@@ -30,10 +30,10 @@ audio decode logic lives in `PCMPlayerProcessor.js`.
   the canvas.
 - Controls live in a fixed bottom `<div class="controlbar">` with large `.btn` targets: the
   **Keyboard** input (`#fakeKeyboard`), **Files** (→ `/list.html`), **Settings** (→
-  `/config.html`), **stream resolution** (`#resBtn` opens `#resPicker` with 480p/720p/1080p
-  buttons), **video codec** (`#codecBtn` opens `#codecPicker` with MJPEG/H264 buttons), and
-  **Fit screen**. Native `<select>` popups are avoided where Tesla browser behavior is unreliable.
-  Connect A/V via the **Tap to connect** screen overlay (no control-bar playback button).
+  `/config.html`), and **Fit screen**. Stream resolution and video codec are **not** on the main
+  screen — they live on the Settings page (`config.html`), which posts `streamHeight` /
+  `displayRenderer` to `/config`. Connect A/V via the **Tap to connect** screen overlay (no
+  control-bar playback button).
 
 ### URL helper
 

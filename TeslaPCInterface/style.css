@@ -131,44 +131,9 @@ html, body {
 .controlbar .btn.input { flex: 1 1 120px; min-width: 110px; }   /* keyboard takes the slack, stays reachable */
 .controlbar #resBtn { min-width: 84px; width: 92px; padding: 0 6px; }
 
-/* Stream resolution — button picker (Tesla browser breaks native <select> popups). */
-.res-picker {
-    position: fixed;
-    left: 0; right: 0;
-    bottom: calc(54px + 20px);
-    z-index: 15;
-    display: flex;
-    justify-content: center;
-    padding: 14px 12px;
-    background: rgba(13, 16, 21, .96);
-    backdrop-filter: blur(8px);
-    border-top: 1px solid rgba(255, 255, 255, .08);
-}
-.res-picker[hidden] { display: none !important; }
-.res-picker-inner {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-    justify-content: center;
-    width: 100%;
-    max-width: 520px;
-}
-.res-picker-title {
-    flex: 0 0 100%;
-    text-align: center;
-    color: var(--muted);
-    font-size: .95rem;
-    margin-bottom: 2px;
-}
+/* Stream resolution / codec choices — used on the Settings page (config.html). */
 .res-choice.active,
 .codec-choice.active { background-color: var(--accent); border-color: transparent; }
-.res-picker-hint {
-    flex: 0 0 100%;
-    text-align: center;
-    color: var(--muted);
-    font-size: .85rem;
-    line-height: 1.35;
-}
 .res-choices { display: flex; gap: 10px; flex-wrap: wrap; }
 .res-choices .btn { flex: 1 1 140px; min-height: 54px; }
 

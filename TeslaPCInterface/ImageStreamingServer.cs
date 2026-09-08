@@ -281,7 +281,8 @@ namespace Streaming
             bool needsResize = outWidth != screenSize.Width || outHeight != screenSize.Height;
 
             using Bitmap srcImage = new(screenSize.Width, screenSize.Height, PixelFormat.Format32bppArgb);
-            using Graphics? srcGraphics = useDxgi ? null : Graphics.FromImage(srcImage);
+            // The GDI Graphics is only for the CopyFromScreen fallback; WGC/DXGI write via LockBits.
+            using Graphics? srcGraphics = (useWgc || useDxgi) ? null : Graphics.FromImage(srcImage);
 
             using Bitmap? scaledImage = needsResize ? new Bitmap(outWidth, outHeight, PixelFormat.Format24bppRgb) : null;
             using Graphics? scaledGraphics = needsResize ? Graphics.FromImage(scaledImage!) : null;

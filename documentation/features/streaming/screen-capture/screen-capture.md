@@ -20,8 +20,10 @@ and stays black.
    or `/ws/display?renderer=mjpeg`). When at least one H264 client is connected, the frame is
    converted to NV12 by `Bgr24ToNv12Converter` and encoded by `H264MediaFoundationEncoder`.
 4. When the last client disconnects, the capture loop stops and releases its resources.
-5. The Client can select a stream resolution (480p / 720p / 1080p) from a dropdown in the
-   main screen or the Settings page. Changes apply immediately without a stream reconnect.
+5. The Client selects the stream resolution (480p / 720p / 1080p) and the WebSocket video codec
+   (MJPEG / H264) on the **Settings page** (`config.html`). Resolution applies immediately; a codec
+   change restarts display clients. The main screen keeps only the display and action buttons
+   (Files, Settings, Fit screen) — no inline resolution/codec pickers.
 
 ## Technical Flow
 
