@@ -141,3 +141,5 @@ _NCrunch*
 /terminals
 .mcp.json
 /debugging.md
+/mcps
+/publish

@@ -4,7 +4,11 @@ Captures the primary monitor and streams it to browsers as MJPEG or H264. MJPEG 
 over the legacy `/stream` HTTP route and the `/ws/display` WebSocket route. H264 is available
 only over `/ws/display` and is encoded by the native Windows Media Foundation H.264 encoder
 MFT (`mfh264enc.dll`). A single shared capture loop feeds all connected clients. Capture
-prefers DXGI Desktop Duplication (GPU) and falls back to GDI `CopyFromScreen`.
+backend chain: **Windows Graphics Capture (WGC)** → **DXGI Desktop Duplication** →
+**GDI `CopyFromScreen`**. WGC captures the fully composited DWM output, so hardware-overlay
+(MPO) video that renders black under DXGI duplication captures correctly, and the cursor is
+included. DRM-protected content (Netflix etc.) is excluded from **every** capture API by the OS
+and stays black.
 
 ## User Flow
 
@@ -44,9 +48,10 @@ prefers DXGI Desktop Duplication (GPU) and falls back to GDI `CopyFromScreen`.
 ### Shared capture loop (`CaptureLoop` -> `RunCaptureSession`)
 
 1. Snapshot `_restartEpoch` and the current `MaxWidth`/`MaxHeight` cap.
-2. `using var dxgiCapture = new DxgiScreenCapture()`; check `IsAvailable`.
-3. Screen size from `dxgiCapture.CaptureSize` (DXGI) or `Screen.PrimaryScreen.Bounds` (GDI);
-   saved as `screenSize` for the session.
+2. `using var wgcCapture = new WgcScreenCapture()`; if unavailable,
+   `using var dxgiCapture = new DxgiScreenCapture()`; check each `IsAvailable`.
+3. Screen size from the active backend's `CaptureSize` (WGC/DXGI) or
+   `Screen.PrimaryScreen.Bounds` (GDI); saved as `screenSize` for the session.
 4. Output size = the live screen scaled **uniformly** to fit the `MaxWidth × MaxHeight` cap box,
    preserving aspect ratio and never upscaling:
    `scale = min(1, MaxWidth/screenW, MaxHeight/screenH)`. So a 1080p screen with `MaxHeight=720`
@@ -56,7 +61,7 @@ prefers DXGI Desktop Duplication (GPU) and falls back to GDI `CopyFromScreen`.
 5. Allocate `srcImage` (`Format32bppArgb`) and, if resizing, `scaledImage` (`Format24bppRgb`).
 6. Resolve the JPEG codec (`GetJpegCodec`) and set `Encoder.Quality = 60L`.
 7. Per frame:
-   - `dxgiCapture.TryCapture(srcImage)` or `srcGraphics.CopyFromScreen(...)`.
+   - `wgcCapture.TryCapture(srcImage)`, `dxgiCapture.TryCapture(srcImage)`, or `srcGraphics.CopyFromScreen(...)`.
    - If resizing: `DrawImage` into `scaledImage`.
    - If `Volatile.Read(ref _httpClientCount) > 0 || DisplayWebSocket.NeedMjpeg`, JPEG-encode
      the scaled frame (`scaledImage.Save(...)` or `srcImage.Save(...)`). H264-only sessions
@@ -74,11 +79,11 @@ prefers DXGI Desktop Duplication (GPU) and falls back to GDI `CopyFromScreen`.
 8. `RunCaptureSession` returns `true` (restart) when either:
    - `_restartEpoch` has changed (bumped by `SetMaxResolution` or `RestartCapture`), **or**
    - `Screen.PrimaryScreen.Bounds` no longer matches the session's `screenSize` (display
-     resolution changed mid-session).
-   A `true` return causes `CaptureLoop` to immediately start a fresh session with a new
-   `DxgiScreenCapture` and correctly-sized buffers. DXGI Desktop Duplication cannot survive a
-   display-mode switch (the staging-texture size check in `DxgiScreenCapture.EnsureStagingTexture`
-   throws on a size mismatch), so a new session is required after any resolution change.
+     resolution changed mid-session), **or**
+   - the WGC backend became unavailable mid-session (monitor capture item closed).
+   A `true` return causes `CaptureLoop` to immediately start a fresh session, re-probing the
+   backend chain with correctly-sized buffers. Neither WGC nor DXGI duplication survives a
+   display-mode switch, so a new session is required after any resolution change.
 9. When no restart is needed, `RunCaptureSession` returns `false`, and the capture thread exits.
 
 ### Resolution cap — mutable at runtime
@@ -137,6 +142,25 @@ display-control routes to force a fresh DXGI session after a desktop resolution 
   `MFShutdown()`, and uninitializes COM only when this instance initialized COM on the same
   thread.
 
+### WGC capture (`WgcScreenCapture.cs`)
+
+- Public API mirrors `DxgiScreenCapture`: `IsAvailable`, `CaptureSize`, `TryCapture(Bitmap)`, `Dispose()`.
+- Init: `GraphicsCaptureSession.IsSupported()` → `D3D11CreateDevice` (hardware, `BgraSupport`) →
+  `CreateDirect3D11DeviceFromDXGIDevice` (WinRT `IDirect3DDevice`) →
+  `IGraphicsCaptureItemInterop.CreateForMonitor` on the primary monitor (`MonitorFromPoint(0,0)`)
+  → free-threaded `Direct3D11CaptureFramePool` (`B8G8R8A8UIntNormalized`, 2 buffers) →
+  `CreateCaptureSession` → `StartCapture()`. The yellow capture border is disabled where
+  `IsBorderRequired` exists and access allows (best-effort).
+- `TryCapture`: **drains** the frame pool to the newest frame (never serves stale frames to the
+  30 FPS consumer), skips frames whose `ContentSize` no longer matches `CaptureSize` (mode switch —
+  the session restart handles it), then copies GPU texture → cached staging texture → row-by-row
+  into the target `Bitmap` (same copy path as DXGI).
+- The monitor item's `Closed` event sets `IsAvailable = false`; the capture loop restarts the
+  session, which re-probes the chain.
+- Requires Windows 10 1903+ (monitor capture). On failure the constructor sets
+  `IsAvailable = false` and the session falls back to DXGI. `TESLAPC_NO_WGC=1` skips WGC entirely.
+- Includes the mouse cursor (WGC default); the DXGI and GDI paths do not draw the cursor.
+
 ### DXGI capture (`DxgiScreenCapture.cs`)
 
 - Public API: `IsAvailable` (bool), `CaptureSize` (Size), `TryCapture(Bitmap)` (bool), `Dispose()`.
@@ -155,6 +179,7 @@ display-control routes to force a fresh DXGI session after a desktop resolution 
 | Class | File | Responsibility |
 |-------|------|----------------|
 | `ImageStreamingServer` | `TeslaPCInterface/ImageStreamingServer.cs` | Shared capture loop, frame buffer, HTTP MJPEG send threads, WebSocket display publishing, JPEG encoding, H264 BGRA/BGR24 feed; mutable `MaxWidth`/`MaxHeight`; `SetMaxResolution`/`RestartCapture` |
+| `WgcScreenCapture` | `TeslaPCInterface/WgcScreenCapture.cs` | Windows Graphics Capture (composited DWM output, incl. MPO video + cursor); signals unavailability for DXGI fallback |
 | `DxgiScreenCapture` | `TeslaPCInterface/DxgiScreenCapture.cs` | DXGI Desktop Duplication capture; signals unavailability for GDI fallback |
 | `MjpegWriter` | `TeslaPCInterface/MjpegWriter.cs` | multipart/x-mixed-replace header + per-frame boundary framing |
 | `DisplayWebSocket` | `TeslaPCInterface/DisplayWebSocket.cs` | `/ws/display` negotiation, PTS-prefixed frame broadcast, H264 client tracking, native encoder lifetime |
@@ -199,6 +224,7 @@ so a slow client can recover decoder state after frame drops.
 | `TESLAPC_STREAM_HEIGHT` | `StreamHeightKey` | `1080` | Next capture-session restart (immediate if the server restarts the session) |
 | `TESLAPC_DISPLAY_RENDERER` | `DisplayRendererKey` | `mjpeg` | Next browser display connection |
 | `TESLAPC_DISPLAY_TRANSPORT` | `DisplayTransportKey` | `websocket` | Next browser display connection |
+| `TESLAPC_NO_WGC` | (read directly in `WgcScreenCapture`) | unset | `1` disables Windows Graphics Capture (troubleshooting kill switch; forces DXGI/GDI) |
 
 ## Routes and Access Control
 

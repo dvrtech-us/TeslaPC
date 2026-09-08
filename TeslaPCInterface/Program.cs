@@ -46,11 +46,15 @@ namespace PrimaryProcess
 
 class InputData
 {
-    //{"Type":"click","X":820,"Y":45,"DisplaySize":{"width":1280,"height":720}}
+    // Mouse: {"Type":"move|down|up|rightclick","X":820,"Y":45,"DisplaySize":{"width":1280,"height":720}}
+    // Wheel:  {"Type":"wheel","Delta":-120,"X":820,"Y":45,"DisplaySize":{"width":1280,"height":720}}
     public string Type { get; set; }
 
     public int X { get; set; }
     public int Y { get; set; }
+
+    // For wheel events (positive/negative; server may normalize for Windows convention)
+    public int Delta { get; set; }
 
     public DisplaySize? DisplaySize { get; set; }
 
@@ -62,7 +66,7 @@ class InputData
         }
         var x = (int)((double)X / DisplaySize.width * System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width);
         var y = (int)((double)Y / DisplaySize.height * System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
-        return new InputData { X = x, Y = y, Type = Type };
+        return new InputData { X = x, Y = y, Type = Type, Delta = this.Delta };
     }
 }
 
@@ -89,6 +93,8 @@ public class Win32
     public const int MOUSEEVENTF_LEFTUP = 0x04;
     public const int MOUSEEVENTF_RIGHTDOWN = 0x08;
     public const int MOUSEEVENTF_RIGHTUP = 0x10;
+    public const int MOUSEEVENTF_WHEEL = 0x0800;
+    public const int MOUSEEVENTF_HWHEEL = 0x1000;
 
     [DllImport("user32.dll")]
     public static extern void SetCursorPos(int x, int y);

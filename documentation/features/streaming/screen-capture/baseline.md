@@ -13,7 +13,7 @@ streaming. Update only when intended behavior changes.
 - A slow client **skips** intermediate frames and always sends the latest available frame.
 - MJPEG response headers are written **synchronously on the HTTP handler thread** before the per-client send thread is queued (prevents http.sys 503).
 - `MjpegWriter` only frames pre-encoded JPEG bytes; all encoding happens in `ImageStreamingServer`.
-- `DxgiScreenCapture` is scoped to one `RunCaptureSession` (created with `using`, disposed at session end).
+- Capture backends (`WgcScreenCapture`/`DxgiScreenCapture`) are scoped to one `RunCaptureSession` (created with `using`, disposed at session end).
 - `/ws/display` sends a text format message first, then binary packets with an 8-byte
   little-endian host PTS prefix.
 - `/ws/display?renderer=mjpeg` sends JPEG payloads. `/ws/display?renderer=h264` sends complete
@@ -30,7 +30,15 @@ streaming. Update only when intended behavior changes.
 
 ## Capture-Source Rules
 
-- DXGI is preferred. GDI `CopyFromScreen` is used only when `DxgiScreenCapture.IsAvailable` is false at session start.
+- Backend priority is **WGC → DXGI → GDI**, probed in order at session start; the first available
+  backend is used for the whole session.
+- WGC's `TryCapture` drains the frame pool and copies only the **newest** frame; frames whose
+  content size no longer matches the session size are skipped (a session restart follows via the
+  bounds check).
+- `TESLAPC_NO_WGC=1` must disable WGC (constructor reports unavailable without probing the OS).
+- WGC includes the cursor; DXGI/GDI do not. DRM-protected regions are black in **all** backends
+  (OS-enforced; not a bug).
+- GDI `CopyFromScreen` is used only when both WGC and DXGI are unavailable at session start.
 - DXGI `AcquireNextFrame` uses a 16 ms timeout; a timeout publishes no frame for that tick.
 - DXGI `AccessLost`/`AccessDenied` triggers `RecreateDuplication()`; the current frame is skipped.
 - The staging texture is lazily created and reused; reallocated only when texture dimensions change.
@@ -70,9 +78,11 @@ streaming. Update only when intended behavior changes.
 
 - `RunCaptureSession` returns `true` (triggering a restart) when:
   - `_restartEpoch` differs from the value snapshotted at session start (set by `SetMaxResolution` or `RestartCapture`), **or**
-  - `Screen.PrimaryScreen.Bounds` no longer matches the `screenSize` captured at session start.
-- On a `true` return, `CaptureLoop` immediately calls `RunCaptureSession` again with fresh state.
-- DXGI Desktop Duplication cannot survive a display-mode switch; a new `DxgiScreenCapture` is
+  - `Screen.PrimaryScreen.Bounds` no longer matches the `screenSize` captured at session start, **or**
+  - the active WGC backend reports `IsAvailable == false` mid-session (monitor item closed).
+- On a `true` return, `CaptureLoop` immediately calls `RunCaptureSession` again with fresh state
+  (the backend chain is re-probed).
+- Neither WGC nor DXGI duplication survives a display-mode switch; new backend instances are
   constructed for every session.
 
 ## Access Control
@@ -82,6 +92,7 @@ streaming. Update only when intended behavior changes.
 
 ## Failure Behavior
 
+- WGC init failure (pre-1903 OS, no monitor, denied) → `IsAvailable = false`, DXGI is probed next.
 - DXGI init failure → `IsAvailable = false`, GDI fallback for the whole session.
 - Capture/encode error on a frame → logged, frame skipped, loop continues.
 - Native H264 encoder unavailable → H264 clients are negotiated as MJPEG.

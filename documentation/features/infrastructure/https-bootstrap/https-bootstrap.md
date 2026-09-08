@@ -10,7 +10,9 @@ value gates whether [web-server](../../server/web-server/web-server.md) binds th
 - **Trusted (production)** — when a hostname is configured via `--https-host <host>` (or env
   `TESLAPC_HTTPS_HOST`) the app obtains/renews a **Let's Encrypt** certificate **in-process** via
   [`AcmeCertificateManager`](../../../../TeslaPCInterface/AcmeCertificateManager.cs) (Certes,
-  DNS-01, Cloudflare API) and imports it to `LocalMachine\My`; the bootstrap then binds it. The
+  DNS-01, Cloudflare API) and imports it to `LocalMachine\My`; the bootstrap then binds it.
+  Issuance/renewal only runs **elevated** (import needs `LocalMachine\My` + machine keys); a
+  non-admin run keeps the existing cert and never contacts Let's Encrypt. The
   Tesla browses `https://<host>:8443/` (DNS A record → `100.64.0.1`) and gets **no warning**.
   See the runbook in `documentation/planning/Infrastructure/`.
 - **Self-signed (fallback)** — when no host is set, or no trusted cert is present yet (first boot,
@@ -25,11 +27,14 @@ Automatic at startup when elevated and not in `--localhost` mode. If it returns 
 
 `TryEnsureHttpsReady(int httpsPort, int httpPort, string? trustedHost)`, called from `TeslaPcService.StartAsync`:
 
-1. **Reuse existing http.sys config** — `IsHttpsAlreadyConfigured(httpsPort, httpPort)` returns `true`
-   when `HasSslBinding(httpsPort)` (any cert hash on `0.0.0.0:{port}`), `HasUrlReservation` for
-   `http://+:{httpPort}/`, and `HasUrlReservation` for `https://+:{httpsPort}/`. This path does **not**
-   require administrator privileges, so a scheduled-task or normal-user restart can still bind the
-   HTTPS listener after a prior elevated bootstrap.
+1. **Reuse existing http.sys config** — `IsHttpsAlreadyConfigured(httpsPort, httpPort, trustedHost)`
+   returns `true` when `HasHealthySslBinding(httpsPort, trustedHost)` and `HasUrlReservation` holds
+   for `http://+:{httpPort}/` and `https://+:{httpsPort}/`. A binding is *healthy* only if its
+   thumbprint exists in `LocalMachine\My`, is unexpired, and (when `trustedHost` is set) is not
+   superseded by a newer trusted cert — otherwise the flow falls through and rebinds (this is how
+   an ACME renewal reaches http.sys). The healthy-reuse path does **not** require administrator
+   privileges, so a scheduled-task or normal-user restart can still bind the HTTPS listener after
+   a prior elevated bootstrap.
 2. **Admin check** — if not already configured, non-admin logs a suggestion to use `--localhost` and
    returns `false`.
 3. **URL ACLs** — `EnsureUrlReservation` for `http://+:8080/` and `https://+:8443/` via `netsh http add urlacl url={url} user=Everyone` (not pre-checked; netsh silently succeeds or fails).

@@ -46,7 +46,7 @@ still **no `sql/` folders** — the schema is created in code.
 |--------|---------|----------------|
 | server | web-server | `WebServer.cs`, `Program.cs` |
 | server | input-control | `WebServer.cs`, `Program.cs` |
-| streaming | screen-capture | `ImageStreamingServer.cs`, `DxgiScreenCapture.cs`, `MjpegWriter.cs`, `DisplayWebSocket.cs`, `H264MediaFoundationEncoder.cs` |
+| streaming | screen-capture | `ImageStreamingServer.cs`, `WgcScreenCapture.cs`, `DxgiScreenCapture.cs`, `MjpegWriter.cs`, `DisplayWebSocket.cs`, `H264MediaFoundationEncoder.cs` |
 | streaming | audio-capture | `AudioStreamingServer.cs`, `PCMPlayerProcessor.js` |
 | streaming | display-control | `DisplayManager.cs`, `WebServer.cs` |
 | app | control-panel | `Program.cs`, `MainForm.cs`, `TeslaPcService.cs` |
@@ -64,7 +64,8 @@ TeslaPCInterface/
 ├── Program.cs                 # Entry point; startup/shutdown orchestration
 ├── WebServer.cs               # Unified HTTP/HTTPS server + routing + input WebSocket
 ├── ImageStreamingServer.cs    # Shared MJPEG capture loop, JPEG encoding, per-client send
-├── DxgiScreenCapture.cs       # DXGI Desktop Duplication capture (GDI fallback)
+├── WgcScreenCapture.cs        # Windows Graphics Capture (composited output incl. overlay video + cursor)
+├── DxgiScreenCapture.cs       # DXGI Desktop Duplication capture (fallback; GDI is last resort)
 ├── MjpegWriter.cs             # multipart/x-mixed-replace framing
 ├── DisplayWebSocket.cs        # WebSocket MJPEG/H264 display transport
 ├── H264MediaFoundationEncoder.cs # Native Windows Media Foundation H264 encoder
@@ -84,6 +85,9 @@ TeslaPCInterface/
 dotnet build TeslaPCInterface.sln
 dotnet run --project TeslaPCInterface/TeslaPCInterface.csproj
 ```
+
+Or from the repo root: `.\build.ps1` (Release; `-Configuration Debug` for debug,
+`-Publish` for a runnable folder in `.\publish`).
 
 Runtime flags / env:
 - `--localhost` — bind to local wildcard only; **skips** firewall + HTTPS bootstrap.
@@ -123,7 +127,7 @@ no bypass).
 ## Current Known Gaps (documented, not bugs)
 
 - **No authentication** on any route; access is controlled only at the network layer.
-- Mouse supports left-click, drag, and right-click (long-press on touch); **no scroll-wheel** yet. Keyboard input is implemented (typing, named keys, and paste, replayed host-side via `SendKeys`); the `keybd_event` P/Invoke remains declared but unused.
+- Mouse supports left-click, drag, right-click (long-press on touch), mouse wheel, and two-finger vertical scroll on touch (mapped to wheel). Keyboard input is implemented (typing, named keys, and paste, replayed host-side via `SendKeys`); the `keybd_event` P/Invoke remains declared but unused.
 - Static files are read via `File.ReadAllText` (UTF-8), so binary assets (e.g. `.png`/`.jpg`) are not served correctly. Video playback does **not** use this path — it streams via the ffmpeg/MJPEG media pipeline.
 - `bindSSLCert.bat` and `SslCertificateBootstrap.cs` diverge slightly (extra port cleanup, explicit subject) — see the https-bootstrap baseline.
 - **SQLite advisory GHSA-2m69-gcr7-jv3q** on `SQLitePCLRaw.lib.e_sqlite3` (transitive via

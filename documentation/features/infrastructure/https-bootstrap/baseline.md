@@ -12,11 +12,28 @@ Known-good invariants. Update only when intended behavior changes.
   `AcmeCertificateManager` (Certes + Cloudflare DNS-01) obtains a Let's Encrypt cert at startup and
   renews it when < 30 days remain (12 h background timer), importing to `LocalMachine\My` with
   friendly name `TeslaPC LE (<host>)`. With no token it does nothing and the self-signed path runs.
+- **ACME never contacts Let's Encrypt without elevation.** Import requires admin
+  (`LocalMachine\My` + machine key set), so a non-elevated run skips the request: it keeps a
+  valid-but-expiring cert (logs the days left) or logs that issuance is deferred. This prevents
+  one wasted LE issuance per non-admin start.
+- **Stale challenge TXT records are swept before create.** Every existing
+  `_acme-challenge.<host>` TXT record is deleted (best-effort, logged) before the new challenge
+  record is created, so a crashed prior attempt cannot wedge renewals with Cloudflare's
+  "identical record already exists" error.
+- **The cert-store scan is per-cert fault tolerant.** One unreadable/malformed certificate in
+  `LocalMachine\My` is logged and skipped; it must never abort the scan and trigger a re-issue
+  while a valid `TeslaPC LE (<host>)` cert is present (`GetBestCertificateDaysLeft`).
 - The http.sys AppId is exactly `{A253521A-C31E-457C-AADD-C0E42A87EA0F}` and is identical in `SslCertificateBootstrap.cs` and `bindSSLCert.bat` — the two paths are interchangeable.
 - `TeslaPC Dev Cert` is the **sole** lookup key for finding, reusing, and cleaning up certificates; changing it orphans existing certs.
 - `RemoveBrokenCertificates()` always runs **before** `GetOrCreateCertificate()` — certs with inaccessible private keys are pruned before reuse is attempted.
 - A cert is reused only if it satisfies all of: friendly name matches, `NotAfter > UtcNow`, `HasPrivateKey`, and `GetRSAPrivateKey() != null`.
 - `IsCertificateBound()` is checked before binding; if the bound hash already matches, no rebind occurs and it returns `true`.
+- **Bindings are reused only when healthy.** The startup short-circuit
+  (`IsHttpsAlreadyConfigured` → `HasHealthySslBinding`) accepts an existing 8443 binding only if
+  the bound thumbprint exists in `LocalMachine\My`, is unexpired, and (with a trusted host set) is
+  not superseded by a newer trusted cert. A stale binding falls through to a rebind on elevated
+  runs — this is what propagates an ACME renewal to http.sys — and to an honest HTTP-only fallback
+  on non-elevated runs.
 - The binding is always to `0.0.0.0:8443`.
 - Private-key ACLs **must** grant Read to `NETWORK SERVICE`, `SYSTEM`, and `LOCAL SERVICE`; http.sys runs as `NETWORK SERVICE` and cannot load the cert otherwise.
 - On bind failure, the cert is removed, regenerated, and the prepare+bind sequence is retried once.

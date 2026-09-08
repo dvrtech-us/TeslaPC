@@ -8,8 +8,8 @@ remains declared but unused — keyboard goes through `SendKeys`, not `keybd_eve
 ## User Flow
 
 1. The browser opens a WebSocket to `/ws/input` on page load.
-2. As the user moves, presses, or releases the mouse over the video image, the client sends a JSON event.
-3. The server scales the coordinates from the browser's display size to the host's primary-screen resolution and replays the action with `SetCursorPos` + `mouse_event`.
+2. As the user moves, presses, releases, scrolls the mouse (or performs two-finger touch scroll), the client sends a JSON event.
+3. The server scales the coordinates from the browser's display size to the host's primary-screen resolution (for pointer events) and replays actions with `SetCursorPos` + `mouse_event` (including `MOUSEEVENTF_WHEEL`).
 
 ## Technical Flow
 
@@ -24,31 +24,48 @@ remains declared but unused — keyboard goes through `SendKeys`, not `keybd_eve
 ### Message protocol
 
 ```json
-{ "Type": "click|move|down|up", "X": 820, "Y": 45, "DisplaySize": { "width": 1280, "height": 720 } }
+{ "Type": "move|down|up|rightclick", "X": 820, "Y": 45, "DisplaySize": { "width": 1280, "height": 720 } }
+{ "Type": "wheel", "Delta": -120, "X": 500, "Y": 300, "DisplaySize": { "width": 1280, "height": 720 } }
 ```
 
-- `Type` — event kind. Only `"down"` and `"up"` produce button events; all types move the cursor.
+- `Type` — event kind.
+  - Pointer: `"move"`, `"down"`, `"up"`, `"rightclick"`. Only down/up/rightclick produce button actions; all pointer types move the cursor via `SetCursorPos`.
+  - `"wheel"` — scroll. `Delta` is the scroll amount (typically a browser `deltaY` value or a scaled touch delta). X/Y (if present) are used to position the cursor before emitting the wheel.
 - `X`, `Y` — coordinates in the browser's rendered image space.
 - `DisplaySize` — the rendered pixel size of the video `<img>` element, used for scaling.
+- `Delta` — wheel-specific; the signed scroll delta. The server inverts the sign so that typical client "scroll down" values produce the expected direction on Windows.
 
-### Coordinate scaling (`MousePosition.GetAdjusted`, `Program.cs:143`)
+### Coordinate scaling (`InputData.GetAdjusted`, `Program.cs`)
 
+- Applies only to `X`/`Y` when `DisplaySize` is provided (used for pointer and wheel positioning).
 - If `DisplaySize` is null, coordinates pass through unchanged.
 - Otherwise: `x = (int)(X / DisplaySize.width * Screen.PrimaryScreen.Bounds.Width)`, same for `y`.
-- Returns a new `MousePosition` with scaled `X`/`Y` and the same `Type` (`DisplaySize` is not copied onto the result).
+- `Delta` (wheel) is preserved as-is; it is never scaled.
+- Returns a new `InputData` instance.
 
-### Replay (`WebServer.cs:298` onward)
+### Replay (`WebServer.cs`)
 
-| Order | Action | Condition |
-|-------|--------|-----------|
-| 1 | `Win32.SetCursorPos(x, y)` | always |
-| 2 | `Win32.mouse_event(MOUSEEVENTF_LEFTDOWN, …)` | `Type == "down"` |
-| 3 | `Win32.mouse_event(MOUSEEVENTF_LEFTUP, …)` | `Type == "up"` |
-| 4 | `Win32.mouse_event(MOUSEEVENTF_RIGHTDOWN, …)` then `MOUSEEVENTF_RIGHTUP` | `Type == "rightclick"` |
+Pointer events (non-`wheel`) always call `SetCursorPos` first, then emit button events as needed.
+
+| Action | Condition |
+|--------|-----------|
+| `Win32.SetCursorPos(x, y)` | always for pointer events; for wheel only when X/Y/DisplaySize were supplied |
+| `Win32.mouse_event(MOUSEEVENTF_LEFTDOWN, …)` | `Type == "down"` |
+| `Win32.mouse_event(MOUSEEVENTF_LEFTUP, …)` | `Type == "up"` |
+| `Win32.mouse_event(MOUSEEVENTF_RIGHTDOWN, …)` + `RIGHTUP` | `Type == "rightclick"` |
+| `Win32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, -Delta, 0)` | `Type == "wheel"` (sign inverted on server) |
+
+Wheel messages can include an X/Y position; when present the cursor is moved to that point before the wheel is emitted so the scroll affects the element under the pointer.
 
 The client produces `"rightclick"` from a desktop right-mouse (`contextmenu`) event or a touch
-**long-press** (~0.5 s). No handling exists for `"click"`/`"move"` beyond the cursor move, or for
-middle-click and scroll.
+**long-press** (~0.5 s).
+
+### Wheel & Touch Scroll
+
+- Desktop: `wheel` events on the stream image forward `e.deltaY`.
+- Touch (Tesla and tablets): when two or more simultaneous touches are detected, the handlers switch to scroll mode. The average vertical movement of the first two fingers is scaled (see `T2_SCROLL_FACTOR` in `index.html`), **negated** (natural touch convention: content follows the fingers, so dragging down scrolls up), and sent as wheel deltas. Single-touch tap/drag/long-press logic is bypassed while multi-touch is active.
+- Client: `TeslaPCInterface/index.html` (`sendWheel`, wheel listener, two-finger logic in touch handlers).
+- Server always runs the wheel through the existing scaling path for coordinates (when provided) before calling `mouse_event`.
 
 ### Keyboard (`WebServer.handleKey`)
 
@@ -75,7 +92,7 @@ replayed with `SendKeys.SendWait`. The client sends **exactly one message per ke
 | Class | File | Responsibility |
 |-------|------|----------------|
 | `WebServer.AcceptWebSocketAsync` | `TeslaPCInterface/WebServer.cs` | Accepts the input WebSocket and replays events |
-| `MousePosition` | `TeslaPCInterface/Program.cs` | DTO + coordinate scaling (`GetAdjusted`) |
+| `InputData` | `TeslaPCInterface/Program.cs` | DTO for pointer + wheel messages + coordinate scaling (`GetAdjusted`) |
 | `DisplaySize` | `TeslaPCInterface/Program.cs` | Nested DTO carrying the browser's rendered image dimensions |
 | `Win32` | `TeslaPCInterface/Program.cs` | P/Invoke to `user32.dll` |
 
@@ -89,7 +106,9 @@ replayed with `SendKeys.SendWait`. The client sends **exactly one message per ke
 | `ClientToScreen(IntPtr, ref POINT)` | user32 | declared, unused |
 | `keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo)` | user32 | declared, **unused** (keyboard uses `SendKeys`, not `keybd_event`) |
 
-Constants: `MOUSEEVENTF_LEFTDOWN = 0x02`, `MOUSEEVENTF_LEFTUP = 0x04`.
+Constants (in `Win32`, `Program.cs`):
+`MOUSEEVENTF_LEFTDOWN = 0x02`, `LEFTUP = 0x04`, `RIGHTDOWN = 0x08`, `RIGHTUP = 0x10`,
+`WHEEL = 0x0800`, `HWHEEL = 0x1000` (horizontal prepared for future use).
 
 ## Routes and Access Control
 
@@ -103,7 +122,7 @@ No authentication. Anyone who can reach the WebSocket can drive the mouse.
 
 - Hosted directly inside `WebServer`; no separate class.
 - Depends on `Screen.PrimaryScreen.Bounds` for the scaling denominator.
-- Client side is implemented in [web-ui](../../client/web-ui/web-ui.md) (`sendMouseEvent`).
+- Client side (mouse, wheel, touch gestures) is implemented in [web-ui](../../client/web-ui/web-ui.md) (`sendInput`, `sendWheel`, touch + wheel listeners in `index.html`).
 
 ## Database Schema
 

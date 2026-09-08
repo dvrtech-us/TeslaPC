@@ -780,25 +780,45 @@ public class WebServer
                     else
                     {
                         var inputData = JsonSerializer.Deserialize<InputData>(message);
-                        //move the mouse
-                        inputData = inputData.GetAdjusted();
-                        Log.Debug($"Mouse {inputData.Type} -> {inputData.X},{inputData.Y}");
+                        var adjusted = inputData.GetAdjusted();
 
-                        Win32.SetCursorPos(inputData.X, inputData.Y);
-                        if (inputData.Type == "down")
+                        if (inputData.Type == "wheel")
                         {
-                            Win32.mouse_event(Win32.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+                            // Optional: position cursor at the wheel location if coords were supplied.
+                            // This makes the wheel affect the control under the pointer.
+                            bool hasPosition = inputData.DisplaySize != null || inputData.X != 0 || inputData.Y != 0;
+                            if (hasPosition)
+                            {
+                                Win32.SetCursorPos(adjusted.X, adjusted.Y);
+                            }
+                            // Delta sign: client sends natural browser deltaY. We invert so positive
+                            // client delta (typical "scroll down") produces expected remote scroll direction
+                            // with Windows MOUSEEVENTF_WHEEL (positive = scroll up / wheel forward).
+                            int wheelDelta = -adjusted.Delta;
+                            Log.Debug($"Wheel delta={wheelDelta} (raw {inputData.Delta})");
+                            Win32.mouse_event(Win32.MOUSEEVENTF_WHEEL, 0, 0, wheelDelta, 0);
                         }
-
-                        if (inputData.Type == "up")
+                        else
                         {
-                            Win32.mouse_event(Win32.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
-                        }
+                            //move the mouse (existing behavior for move/down/up/rightclick)
+                            Log.Debug($"Mouse {adjusted.Type} -> {adjusted.X},{adjusted.Y}");
 
-                        if (inputData.Type == "rightclick")
-                        {
-                            Win32.mouse_event(Win32.MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0);
-                            Win32.mouse_event(Win32.MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0);
+                            Win32.SetCursorPos(adjusted.X, adjusted.Y);
+                            if (adjusted.Type == "down")
+                            {
+                                Win32.mouse_event(Win32.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+                            }
+
+                            if (adjusted.Type == "up")
+                            {
+                                Win32.mouse_event(Win32.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+                            }
+
+                            if (adjusted.Type == "rightclick")
+                            {
+                                Win32.mouse_event(Win32.MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0);
+                                Win32.mouse_event(Win32.MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0);
+                            }
                         }
                     }
                 }

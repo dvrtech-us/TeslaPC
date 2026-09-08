@@ -23,8 +23,13 @@ Known-good invariants for the browser client. Update only when intended behavior
 
 ## Input Rules
 
-- Mouse listeners use `TeslaDisplay.getStreamSize()` so coordinates account for either MJPEG
-  image natural size or H264 negotiated stream size.
+- Mouse + wheel + touch listeners are attached to `#screenSurface` (the img-or-canvas display
+  element): `click`, `mousemove`, `mousedown`, `mouseup`, `wheel`, `contextmenu`, and the touch
+  events.
+- `mapPoint` uses `TeslaDisplay.getStreamSize()` so coordinates account for either MJPEG image
+  natural size or H264 negotiated stream size; both pointer and wheel share it.
+- `wheel` events send `{ Type: "wheel", Delta: e.deltaY, X, Y, DisplaySize }`.
+- Two-finger vertical drag on touch also produces wheel messages (average finger dy scaled by T2_SCROLL_FACTOR and **negated** — natural direction, content follows the fingers; single-touch state is bypassed).
 - All keyboard paths send over `/ws/input` via `sendKey(key, code)` (`{Type:'key', Key, KeyCode}`) or `sendText(text)`.
 - Paste is forwarded regardless of whether `#fakeKeyboard` is focused: a `document`-level `paste` listener reads `clipboardData.getData('text')` and calls `sendText`; it also fires when the user pastes into the box itself (the box's own `input` event is suppressed by `preventDefault()`).
 - Physical keyboard typing is captured page-wide by a `document`-level `keydown` listener; the user does **not** need to focus `#fakeKeyboard` for keystrokes to be forwarded.
