@@ -81,6 +81,10 @@ internal static class AcmeCertificateManager
             string recordName = $"_acme-challenge.{host}";
 
             string zoneId = await GetZoneIdAsync(host, cloudflareToken!);
+            // A crashed prior attempt can leave the challenge TXT record behind; Cloudflare then
+            // rejects the re-create with "an identical record already exists" (LE reuses the pending
+            // authorization, so the token/value repeats). Clear any stale records first.
+            await DeleteExistingTxtRecordsAsync(zoneId, recordName, cloudflareToken!);
             string recordId = await CreateTxtRecordAsync(zoneId, recordName, dnsValue, cloudflareToken!);
             try
             {
@@ -232,6 +236,32 @@ internal static class AcmeCertificateManager
         if (!resp.IsSuccessStatusCode) throw new InvalidOperationException($"Cloudflare create TXT failed: {body}");
         using var doc = JsonDocument.Parse(body);
         return doc.RootElement.GetProperty("result").GetProperty("id").GetString()!;
+    }
+
+    /// <summary>Deletes every TXT record with the given name (stale challenge leftovers).</summary>
+    private static async Task DeleteExistingTxtRecordsAsync(string zoneId, string name, string token)
+    {
+        try
+        {
+            using var req = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"https://api.cloudflare.com/client/v4/zones/{zoneId}/dns_records?type=TXT&name={Uri.EscapeDataString(name)}&per_page=100");
+            AuthorizeCloudflare(req, token);
+            using var resp = await Http.SendAsync(req);
+            if (!resp.IsSuccessStatusCode) return;
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            foreach (var record in doc.RootElement.GetProperty("result").EnumerateArray())
+            {
+                string? id = record.GetProperty("id").GetString();
+                if (id == null) continue;
+                Console.WriteLine($"[ACME] Removing stale challenge TXT record for {name}.");
+                await DeleteTxtRecordAsync(zoneId, id, token);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ACME] Stale TXT cleanup failed (continuing): {ex.Message}");
+        }
     }
 
     private static async Task DeleteTxtRecordAsync(string zoneId, string recordId, string token)

@@ -16,6 +16,10 @@ Known-good invariants. Update only when intended behavior changes.
   (`LocalMachine\My` + machine key set), so a non-elevated run skips the request: it keeps a
   valid-but-expiring cert (logs the days left) or logs that issuance is deferred. This prevents
   one wasted LE issuance per non-admin start.
+- **Stale challenge TXT records are swept before create.** Every existing
+  `_acme-challenge.<host>` TXT record is deleted (best-effort, logged) before the new challenge
+  record is created, so a crashed prior attempt cannot wedge renewals with Cloudflare's
+  "identical record already exists" error.
 - **The cert-store scan is per-cert fault tolerant.** One unreadable/malformed certificate in
   `LocalMachine\My` is logged and skipped; it must never abort the scan and trigger a re-issue
   while a valid `TeslaPC LE (<host>)` cert is present (`GetBestCertificateDaysLeft`).
