@@ -19,7 +19,7 @@ internal static class SslCertificateBootstrap
 
     public static bool TryEnsureHttpsReady(int httpsPort, int httpPort, string? trustedHost = null)
     {
-        if (IsHttpsAlreadyConfigured(httpsPort, httpPort))
+        if (IsHttpsAlreadyConfigured(httpsPort, httpPort, trustedHost))
         {
             Console.WriteLine($"[SSL] HTTPS already configured on port {httpsPort} (reusing existing http.sys bindings).");
             return true;
@@ -390,18 +390,61 @@ internal static class SslCertificateBootstrap
         }
     }
 
-    private static bool IsHttpsAlreadyConfigured(int httpsPort, int httpPort) =>
-        HasSslBinding(httpsPort)
+    private static bool IsHttpsAlreadyConfigured(int httpsPort, int httpPort, string? trustedHost) =>
+        HasHealthySslBinding(httpsPort, trustedHost)
         && HasUrlReservation($"http://+:{httpPort}/")
         && HasUrlReservation($"https://+:{httpsPort}/");
 
-    private static bool HasSslBinding(int port)
+    /// <summary>
+    /// True only when 8443's binding references a certificate that still exists in
+    /// LocalMachine\My, is not expired, and — when a trusted host is configured — is not
+    /// superseded by a newer trusted cert (e.g. after an ACME renewal, whose import removes the
+    /// old cert and would otherwise leave http.sys serving a hash with no cert behind it).
+    /// </summary>
+    private static bool HasHealthySslBinding(int port, string? trustedHost)
     {
         var result = RunNetsh($"http show sslcert ipport=0.0.0.0:{port}");
         if (result.exitCode != 0)
             return false;
 
-        return Regex.IsMatch(result.output, @"(?i)Certificate Hash\s*:\s*[a-f0-9]+");
+        var match = Regex.Match(result.output, @"(?i)Certificate Hash\s*:\s*([a-f0-9]+)");
+        if (!match.Success)
+            return false;
+
+        string boundThumbprint = NormalizeThumbprint(match.Groups[1].Value);
+        try
+        {
+            using var store = new X509Store(StoreName.My, StoreLocation.LocalMachine);
+            store.Open(OpenFlags.ReadOnly);
+
+            var matches = store.Certificates.Find(X509FindType.FindByThumbprint, boundThumbprint, validOnly: false);
+            using var boundCert = matches.Count > 0 ? new X509Certificate2(matches[0]) : null;
+            if (boundCert == null || boundCert.NotAfter <= DateTime.Now)
+            {
+                Console.WriteLine($"[SSL] Bound certificate {boundThumbprint} is missing from the store or expired; rebinding.");
+                return false;
+            }
+
+            if (!string.IsNullOrWhiteSpace(trustedHost))
+            {
+                using var best = GetTrustedCertificate(trustedHost!);
+                if (best != null
+                    && NormalizeThumbprint(best.Thumbprint) != boundThumbprint
+                    && best.NotAfter > boundCert.NotAfter)
+                {
+                    Console.WriteLine($"[SSL] A newer trusted certificate for {trustedHost} is available; rebinding.");
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            // Can't inspect the store (e.g. access) — keep the old reuse behavior.
+            Console.WriteLine($"[SSL] Could not verify the bound certificate ({ex.Message}); reusing the binding.");
+            return true;
+        }
     }
 
     private static bool HasUrlReservation(string url)

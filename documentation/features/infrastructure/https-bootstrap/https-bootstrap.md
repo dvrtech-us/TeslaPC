@@ -27,11 +27,14 @@ Automatic at startup when elevated and not in `--localhost` mode. If it returns 
 
 `TryEnsureHttpsReady(int httpsPort, int httpPort, string? trustedHost)`, called from `TeslaPcService.StartAsync`:
 
-1. **Reuse existing http.sys config** — `IsHttpsAlreadyConfigured(httpsPort, httpPort)` returns `true`
-   when `HasSslBinding(httpsPort)` (any cert hash on `0.0.0.0:{port}`), `HasUrlReservation` for
-   `http://+:{httpPort}/`, and `HasUrlReservation` for `https://+:{httpsPort}/`. This path does **not**
-   require administrator privileges, so a scheduled-task or normal-user restart can still bind the
-   HTTPS listener after a prior elevated bootstrap.
+1. **Reuse existing http.sys config** — `IsHttpsAlreadyConfigured(httpsPort, httpPort, trustedHost)`
+   returns `true` when `HasHealthySslBinding(httpsPort, trustedHost)` and `HasUrlReservation` holds
+   for `http://+:{httpPort}/` and `https://+:{httpsPort}/`. A binding is *healthy* only if its
+   thumbprint exists in `LocalMachine\My`, is unexpired, and (when `trustedHost` is set) is not
+   superseded by a newer trusted cert — otherwise the flow falls through and rebinds (this is how
+   an ACME renewal reaches http.sys). The healthy-reuse path does **not** require administrator
+   privileges, so a scheduled-task or normal-user restart can still bind the HTTPS listener after
+   a prior elevated bootstrap.
 2. **Admin check** — if not already configured, non-admin logs a suggestion to use `--localhost` and
    returns `false`.
 3. **URL ACLs** — `EnsureUrlReservation` for `http://+:8080/` and `https://+:8443/` via `netsh http add urlacl url={url} user=Everyone` (not pre-checked; netsh silently succeeds or fails).

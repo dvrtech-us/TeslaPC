@@ -28,6 +28,12 @@ Known-good invariants. Update only when intended behavior changes.
 - `RemoveBrokenCertificates()` always runs **before** `GetOrCreateCertificate()` — certs with inaccessible private keys are pruned before reuse is attempted.
 - A cert is reused only if it satisfies all of: friendly name matches, `NotAfter > UtcNow`, `HasPrivateKey`, and `GetRSAPrivateKey() != null`.
 - `IsCertificateBound()` is checked before binding; if the bound hash already matches, no rebind occurs and it returns `true`.
+- **Bindings are reused only when healthy.** The startup short-circuit
+  (`IsHttpsAlreadyConfigured` → `HasHealthySslBinding`) accepts an existing 8443 binding only if
+  the bound thumbprint exists in `LocalMachine\My`, is unexpired, and (with a trusted host set) is
+  not superseded by a newer trusted cert. A stale binding falls through to a rebind on elevated
+  runs — this is what propagates an ACME renewal to http.sys — and to an honest HTTP-only fallback
+  on non-elevated runs.
 - The binding is always to `0.0.0.0:8443`.
 - Private-key ACLs **must** grant Read to `NETWORK SERVICE`, `SYSTEM`, and `LOCAL SERVICE`; http.sys runs as `NETWORK SERVICE` and cannot load the cert otherwise.
 - On bind failure, the cert is removed, regenerated, and the prepare+bind sequence is retried once.
