@@ -21,7 +21,7 @@ Known-good invariants for screen capture and MJPEG streaming. Update only when i
   content size no longer matches the session size are skipped (a session restart follows via the
   bounds check).
 - `TESLAPC_NO_WGC=1` must disable WGC (constructor reports unavailable without probing the OS).
-- WGC includes the cursor; DXGI/GDI do not. DRM-protected regions are black in **all** backends
+- WGC sets `IsCursorCaptureEnabled = false` when that property exists (Win10 2004+), so the host cursor is not in the stream. DXGI/GDI never draw the cursor. DRM-protected regions are black in **all** backends
   (OS-enforced; not a bug).
 - GDI `CopyFromScreen` is used only when both WGC and DXGI are unavailable at session start.
 - DXGI `AcquireNextFrame` uses a 16 ms timeout; a timeout publishes no frame for that tick.

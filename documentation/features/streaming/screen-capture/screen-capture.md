@@ -77,8 +77,9 @@ display-control routes to force a fresh DXGI session after a desktop resolution 
   `CreateDirect3D11DeviceFromDXGIDevice` (WinRT `IDirect3DDevice`) →
   `IGraphicsCaptureItemInterop.CreateForMonitor` on the primary monitor (`MonitorFromPoint(0,0)`)
   → free-threaded `Direct3D11CaptureFramePool` (`B8G8R8A8UIntNormalized`, 2 buffers) →
-  `CreateCaptureSession` → `StartCapture()`. The yellow capture border is disabled where
-  `IsBorderRequired` exists and access allows (best-effort).
+  `CreateCaptureSession` → `TryDisableCaptureBorder` → `TryDisableCursorCapture`
+  (`IsCursorCaptureEnabled = false` when the property exists, Win10 2004+) → `StartCapture()`.
+  The yellow capture border is disabled where `IsBorderRequired` exists and access allows (best-effort).
 - `TryCapture`: **drains** the frame pool to the newest frame (never serves stale frames to the
   30 FPS consumer), skips frames whose `ContentSize` no longer matches `CaptureSize` (mode switch —
   the session restart handles it), then copies GPU texture → cached staging texture → row-by-row
@@ -87,7 +88,7 @@ display-control routes to force a fresh DXGI session after a desktop resolution 
   session, which re-probes the chain.
 - Requires Windows 10 1903+ (monitor capture). On failure the constructor sets
   `IsAvailable = false` and the session falls back to DXGI. `TESLAPC_NO_WGC=1` skips WGC entirely.
-- Includes the mouse cursor (WGC default); the DXGI and GDI paths do not draw the cursor.
+- Does not include the mouse cursor when `IsCursorCaptureEnabled` can be set (Win10 2004+). Builds older than that keep the WGC default (cursor on). DXGI and GDI never draw the cursor.
 
 ### DXGI capture (`DxgiScreenCapture.cs`)
 
@@ -107,7 +108,7 @@ display-control routes to force a fresh DXGI session after a desktop resolution 
 | Class | File | Responsibility |
 |-------|------|----------------|
 | `ImageStreamingServer` | `TeslaPCInterface/ImageStreamingServer.cs` | Shared capture loop, frame buffer, per-client send threads, JPEG encoding; mutable `MaxWidth`/`MaxHeight`; `SetMaxResolution`/`RestartCapture` |
-| `WgcScreenCapture` | `TeslaPCInterface/WgcScreenCapture.cs` | Windows Graphics Capture (composited DWM output, incl. MPO video + cursor); signals unavailability for DXGI fallback |
+| `WgcScreenCapture` | `TeslaPCInterface/WgcScreenCapture.cs` | Windows Graphics Capture (composited DWM output, incl. MPO video; cursor capture off); signals unavailability for DXGI fallback |
 | `DxgiScreenCapture` | `TeslaPCInterface/DxgiScreenCapture.cs` | DXGI Desktop Duplication capture; signals unavailability for GDI fallback |
 | `MjpegWriter` | `TeslaPCInterface/MjpegWriter.cs` | multipart/x-mixed-replace header + per-frame boundary framing |
 

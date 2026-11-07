@@ -54,6 +54,15 @@
             </div>
 
             <label class="field">
+                <span class="flabel">Pointer input</span>
+                <select class="finput" name="inputMode">
+                    <option value="touch">Touch (default)</option>
+                    <option value="mouse">Mouse</option>
+                </select>
+                <span class="fhint">Touch sends a finger to Windows. Hold still for a right-click. Mouse moves the cursor and uses the on-screen long-press. Applies immediately; reload the screen page.</span>
+            </label>
+
+            <label class="field">
                 <span class="flabel">Log level</span>
                 <select class="finput" name="logLevel">
                     <option value="error">Error (quietest)</option>
@@ -102,6 +111,7 @@
                 form.acmeEmail.value = c.acmeEmail || '';
                 form.videoRoot.value = c.videoRoot || '';
                 if (c.logLevel) form.logLevel.value = c.logLevel;
+                if (c.inputMode) form.inputMode.value = c.inputMode;
                 if (c.streamHeight) setStreamHeight(nearestRes(c.streamHeight));
                 document.getElementById('verFooter').textContent = c.version ? ('TeslaPC v' + c.version) : '';
                 document.getElementById('cfState').textContent = c.cfTokenSet
@@ -119,6 +129,7 @@
             body.set('acmeEmail', form.acmeEmail.value);
             body.set('videoRoot', form.videoRoot.value);
             body.set('logLevel', form.logLevel.value);
+            body.set('inputMode', form.inputMode.value);
             body.set('streamHeight', form.streamHeight.value);
             if (form.cfToken.value) body.set('cfToken', form.cfToken.value);
 

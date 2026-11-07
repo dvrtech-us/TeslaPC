@@ -32,7 +32,7 @@ internal sealed class MainForm : Form
     private Label _serverDot = null!, _httpsDot = null!, _hotspotDot = null!, _clientsDot = null!, _clientsTxt = null!, _urlVal = null!;
     private Button _btnHotspot = null!;
     private TextBox _cfgHost = null!, _cfgToken = null!, _cfgEmail = null!, _cfgVideo = null!;
-    private ComboBox _cfgLog = null!;
+    private ComboBox _cfgLog = null!, _cfgInput = null!;
     private Label _cfgTokenState = null!, _cfgMsg = null!;
 
     public MainForm(string[] args)
@@ -258,6 +258,21 @@ internal sealed class MainForm : Form
         browse.Width = 140; browse.Height = 48; browse.Margin = new Padding(0, 0, 0, 16);
         root.Controls.Add(browse);
 
+        root.Controls.Add(new Label { Text = "Pointer input", AutoSize = true, ForeColor = TextC, Font = new Font("Segoe UI", 11F, FontStyle.Bold), Margin = new Padding(0, 0, 0, 4) });
+        _cfgInput = new ComboBox
+        {
+            Width = 260,
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Surface,
+            ForeColor = TextC,
+            Font = new Font("Segoe UI", 12F),
+            Margin = new Padding(0, 0, 0, 2)
+        };
+        _cfgInput.Items.AddRange(new object[] { "touch", "mouse" });
+        root.Controls.Add(_cfgInput);
+        root.Controls.Add(new Label { Text = "Touch (default) injects a finger. Hold still for a right-click. Mouse uses the cursor. Applies immediately; reload the screen page.", AutoSize = true, ForeColor = Muted, Font = new Font("Segoe UI", 9F), Margin = new Padding(2, 0, 0, 16), MaximumSize = new Size(620, 0) });
+
         root.Controls.Add(new Label { Text = "Log level", AutoSize = true, ForeColor = TextC, Font = new Font("Segoe UI", 11F, FontStyle.Bold), Margin = new Padding(0, 0, 0, 4) });
         _cfgLog = new ComboBox
         {
@@ -308,6 +323,7 @@ internal sealed class MainForm : Form
         _cfgEmail.Text = AppSettings.Get(AppSettings.AcmeEmailKey) ?? "";
         _cfgVideo.Text = _service.VideoRoot;
         _cfgLog.SelectedItem = Log.LevelName;
+        _cfgInput.SelectedItem = AppSettings.InputMode;
         _cfgToken.Text = "";
         bool tokenSet = !string.IsNullOrWhiteSpace(AppSettings.Get(AppSettings.CloudflareTokenKey));
         _cfgTokenState.Text = tokenSet
@@ -333,6 +349,7 @@ internal sealed class MainForm : Form
         };
         if (!string.IsNullOrWhiteSpace(_cfgVideo.Text)) toSave[AppSettings.VideoRootKey] = _cfgVideo.Text.Trim();
         if (_cfgLog.SelectedItem is string lvl) toSave[AppSettings.LogLevelKey] = lvl;
+        if (_cfgInput.SelectedItem is string mode) toSave[AppSettings.InputModeKey] = mode;
         if (!string.IsNullOrWhiteSpace(_cfgToken.Text)) toSave[AppSettings.CloudflareTokenKey] = _cfgToken.Text.Trim();
 
         try

@@ -44,6 +44,7 @@ Known-good invariants. Update only when intended behavior changes.
   the other settings. `logLevel` is **not** a secret and is always included in the response.
 - `logLevel` is **not** part of the `restartNeeded` flag returned by `POST /config`; it takes
   effect live.
+- `GET /config` includes `inputMode`: `touch` (default when `TESLAPC_INPUT_MODE` is unset or any value other than `mouse`) or `mouse`. `POST /config` accepts `inputMode` of `touch` or `mouse` and applies it live (`AppSettings.UseTouchInput`). It is not part of `restartNeeded`. The screen page reads it once on load, so that page must be reloaded after a change.
 - `GET /config` includes `streamHeight` (integer — current `_imageStreamer.MaxHeight`; default
   `1080`). `POST /config` accepts `streamHeight` (240–2160); calls
   `_imageStreamer.SetMaxResolution(h*4, h)` immediately and persists via `AppSettings.Save`.

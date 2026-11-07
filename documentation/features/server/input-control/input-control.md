@@ -1,7 +1,9 @@
 # Input Control
 
-Remote mouse and keyboard control delivered from the browser over a WebSocket and replayed on
-the host. Mouse uses Win32 P/Invoke (`SetCursorPos`/`mouse_event`); keyboard is replayed with
+Remote pointer and keyboard control delivered from the browser over a WebSocket and replayed on
+the host. The default pointer mode is touch (`TouchInput.InjectTouchInput`). Mouse mode uses
+Win32 `SetCursorPos`/`mouse_event`. The mode is `AppSettings.InputMode` (`TESLAPC_INPUT_MODE`,
+default `touch`). Keyboard is replayed with
 `System.Windows.Forms.SendKeys.SendWait` via `WebServer.handleKey`. (The `keybd_event` P/Invoke
 remains declared but unused — keyboard goes through `SendKeys`, not `keybd_event`.)
 
@@ -45,7 +47,13 @@ remains declared but unused — keyboard goes through `SendKeys`, not `keybd_eve
 
 ### Replay (`WebServer.cs`)
 
-Pointer events (non-`wheel`) always call `SetCursorPos` first, then emit button events as needed.
+When `AppSettings.UseTouchInput` is true (the default), `down` / `move` / `up` go to `TouchInput`
+(`TeslaPCInterface/TouchInput.cs`). `down` starts one contact (`pointerId` 1). `move` updates it
+only while it is down (hover is ignored). `up` ends it. A 100 ms timer repeats an update frame
+while the contact is down so Windows press-and-hold is not cancelled. The socket close calls
+`TouchInput.EndContact`. `rightclick` is still a mouse right button. `wheel` is always a mouse wheel.
+
+In mouse mode, pointer events (non-`wheel`) always call `SetCursorPos` first, then emit button events as needed.
 
 | Action | Condition |
 |--------|-----------|

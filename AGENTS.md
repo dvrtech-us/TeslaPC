@@ -61,7 +61,7 @@ TeslaPCInterface/
 ├── Program.cs                 # Entry point; startup/shutdown orchestration
 ├── WebServer.cs               # Unified HTTP/HTTPS server + routing + input WebSocket
 ├── ImageStreamingServer.cs    # Shared MJPEG capture loop, JPEG encoding, per-client send
-├── WgcScreenCapture.cs        # Windows Graphics Capture (composited output incl. overlay video + cursor)
+├── WgcScreenCapture.cs        # Windows Graphics Capture (composited output incl. overlay video; cursor off)
 ├── DxgiScreenCapture.cs       # DXGI Desktop Duplication capture (fallback; GDI is last resort)
 ├── MjpegWriter.cs             # multipart/x-mixed-replace framing
 ├── AudioStreamingServer.cs    # WASAPI loopback capture + /ws/audio broadcast

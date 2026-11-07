@@ -16,9 +16,9 @@ namespace Streaming;
 /// <summary>
 /// Captures the primary monitor using Windows.Graphics.Capture (WGC). Unlike DXGI Desktop
 /// Duplication, WGC captures the fully composited DWM output, so hardware-overlay (MPO) video
-/// that shows as a black rectangle under duplication renders correctly. It also includes the
-/// cursor by default. DRM-protected content still renders black — that exclusion applies to
-/// every capture API by design.
+/// that shows as a black rectangle under duplication renders correctly. The system cursor is
+/// turned off (`IsCursorCaptureEnabled = false`) when the OS exposes that property. DRM-protected
+/// content still renders black — that exclusion applies to every capture API by design.
 ///
 /// Falls back to unavailable state if initialization fails (pre-1903 Windows, no monitor,
 /// or TESLAPC_NO_WGC=1); caller should use DXGI, then GDI.
@@ -87,6 +87,7 @@ internal sealed class WgcScreenCapture : IDisposable
 
         _session = _framePool.CreateCaptureSession(_item);
         TryDisableCaptureBorder(_session);
+        TryDisableCursorCapture(_session);
         _session.StartCapture();
     }
 
@@ -122,6 +123,24 @@ internal sealed class WgcScreenCapture : IDisposable
         finally
         {
             Marshal.Release(abi);
+        }
+    }
+
+    /// <summary>
+    /// WGC draws the system cursor into frames by default. The remote client already drives
+    /// the pointer, so the host cursor is noise. Win10 2004+; older builds keep the cursor.
+    /// </summary>
+    private static void TryDisableCursorCapture(GraphicsCaptureSession session)
+    {
+        try
+        {
+            if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 19041)
+                && ApiInformation.IsPropertyPresent("Windows.Graphics.Capture.GraphicsCaptureSession", "IsCursorCaptureEnabled"))
+                session.IsCursorCaptureEnabled = false;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Capture] Could not hide the WGC cursor: {ex.Message}");
         }
     }
 

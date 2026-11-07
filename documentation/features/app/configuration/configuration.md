@@ -39,6 +39,7 @@ web UI.
    - The Cloudflare token field is a password input with placeholder
      `leave blank to keep current`; its value is **never pre-filled** (the server never
      returns the token).
+   - Pointer input is a `<select name="inputMode">` with `touch` (default) and `mouse`.
    - The log-level field is a `<select name="logLevel">` with options `error`, `warn`,
      `info`, `debug`; pre-selected from the `logLevel` value returned by `GET /config`.
    - The stream-resolution field is a three-button choice group (`#resChoices`, values `480` /
@@ -114,7 +115,7 @@ is left intact.
 Returns a JSON object with the current non-secret settings:
 
 ```json
-{ "httpsHost": "my.example.com", "acmeEmail": "admin@example.com", "videoRoot": "C:\\video\\", "cfTokenSet": true, "logLevel": "info", "streamHeight": 1080, "version": "1.0.0" }
+{ "httpsHost": "my.example.com", "acmeEmail": "admin@example.com", "videoRoot": "C:\\video\\", "cfTokenSet": true, "logLevel": "info", "streamHeight": 1080, "inputMode": "touch", "version": "1.0.0" }
 ```
 
 `cfTokenSet` is `true` when `TESLAPC_CF_TOKEN` is set to a non-empty value. **The token
@@ -209,7 +210,7 @@ A full process restart is not required; the in-app Restart is sufficient.
 
 | Route | Method | Protocol | Auth | Handler |
 |-------|--------|----------|------|---------|
-| `/config` | GET | HTTP/HTTPS | none | `WebServer.HandleConfig` — returns `{ httpsHost, acmeEmail, videoRoot, cfTokenSet, logLevel, streamHeight, version }` JSON |
+| `/config` | GET | HTTP/HTTPS | none | `WebServer.HandleConfig` — returns `{ httpsHost, acmeEmail, videoRoot, cfTokenSet, logLevel, streamHeight, inputMode, version }` JSON |
 | `/config` | POST | HTTP/HTTPS | none | `WebServer.HandleConfig` — saves settings, applies video folder / log level / stream height live, returns `{ saved, restartNeeded }` JSON |
 | `/config.html` | GET | HTTP/HTTPS | none | Static page served from `TeslaPCInterface/config.html` |
 | `/version` | GET | HTTP/HTTPS | none | `WebServer.HandleRequest` — returns `{ "version": "<version>" }` JSON (e.g. `{ "version": "1.0.0" }`); lightweight endpoint for health checks or external tooling |

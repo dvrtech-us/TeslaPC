@@ -221,12 +221,18 @@ public class WebServer
             string? cfToken = form.Get("cfToken");
             string? logLevel = form.Get("logLevel");
             string? streamHeight = form.Get("streamHeight");
+            string? inputMode = form.Get("inputMode");
 
             if (host != null) toSave[AppSettings.HttpsHostKey] = host.Trim();
             if (email != null) toSave[AppSettings.AcmeEmailKey] = email.Trim();
             if (videoRoot != null && !string.IsNullOrWhiteSpace(videoRoot)) toSave[AppSettings.VideoRootKey] = videoRoot.Trim();
             if (Log.Parse(logLevel) is { } _) toSave[AppSettings.LogLevelKey] = logLevel!.Trim().ToLowerInvariant();
             if (int.TryParse(streamHeight, out var sh) && sh >= 240 && sh <= 2160) toSave[AppSettings.StreamHeightKey] = sh.ToString();
+            if (inputMode != null)
+            {
+                string mode = inputMode.Trim().ToLowerInvariant();
+                if (mode is "touch" or "mouse") toSave[AppSettings.InputModeKey] = mode;
+            }
             // Only overwrite the token when a non-blank value is supplied (the form leaves it blank to keep).
             if (!string.IsNullOrWhiteSpace(cfToken)) toSave[AppSettings.CloudflareTokenKey] = cfToken.Trim();
 
@@ -265,6 +271,7 @@ public class WebServer
             videoRoot = _media.Root,
             logLevel = Log.LevelName,
             streamHeight = _imageStreamer.MaxHeight,
+            inputMode = AppSettings.InputMode,
             version = AppSettings.Version,
             cfTokenSet = !string.IsNullOrWhiteSpace(AppSettings.Get(AppSettings.CloudflareTokenKey))
         };
@@ -741,9 +748,25 @@ public class WebServer
                             Log.Debug($"Wheel delta={wheelDelta} (raw {inputData.Delta})");
                             Win32.mouse_event(Win32.MOUSEEVENTF_WHEEL, 0, 0, wheelDelta, 0);
                         }
+                        else if (AppSettings.UseTouchInput)
+                        {
+                            if (adjusted.Type is "down" or "move" or "up")
+                            {
+                                Log.Debug($"Touch {adjusted.Type} -> {adjusted.X},{adjusted.Y}");
+                                if (adjusted.Type == "down") TouchInput.Down(adjusted.X, adjusted.Y);
+                                else if (adjusted.Type == "move") TouchInput.Move(adjusted.X, adjusted.Y);
+                                else TouchInput.Up(adjusted.X, adjusted.Y);
+                            }
+                            else if (adjusted.Type == "rightclick")
+                            {
+                                Win32.SetCursorPos(adjusted.X, adjusted.Y);
+                                Win32.mouse_event(Win32.MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0);
+                                Win32.mouse_event(Win32.MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0);
+                            }
+                        }
                         else
                         {
-                            //move the mouse (existing behavior for move/down/up/rightclick)
+                            // Mouse mode, wheel-adjacent pointer, or an explicit right-click.
                             Log.Debug($"Mouse {adjusted.Type} -> {adjusted.X},{adjusted.Y}");
 
                             Win32.SetCursorPos(adjusted.X, adjusted.Y);
@@ -778,6 +801,8 @@ public class WebServer
                 Console.WriteLine($"WebSocket error: {e.Message}");
             }
         }
+
+        TouchInput.EndContact();
     }
 
     private void handleKey(KeyData inputData)

@@ -209,7 +209,7 @@ namespace Streaming
         private bool RunCaptureSession()
         {
             int epoch = Volatile.Read(ref _restartEpoch);
-            // Backend chain: WGC (composited output, includes MPO video + cursor) -> DXGI
+            // Backend chain: WGC (composited output, includes MPO video; cursor capture off) -> DXGI
             // Desktop Duplication -> GDI CopyFromScreen.
             using var wgcCapture = new WgcScreenCapture();
             bool useWgc = wgcCapture.IsAvailable;

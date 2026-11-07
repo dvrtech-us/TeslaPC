@@ -19,6 +19,7 @@ public static class AppSettings
     public const string VideoRootKey = "TESLAPC_VIDEO_ROOT";
     public const string LogLevelKey = "TESLAPC_LOG_LEVEL";
     public const string StreamHeightKey = "TESLAPC_STREAM_HEIGHT";
+    public const string InputModeKey = "TESLAPC_INPUT_MODE";
 
     public const string DefaultVideoRoot = @"C:\video\";
     public const int DefaultStreamHeight = 1080;
@@ -45,6 +46,15 @@ public static class AppSettings
             .InformationalVersion.Split('+')[0]
         ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString()
         ?? "0.0.0";
+
+    /// <summary>
+    /// How pointer events are replayed. <c>touch</c> (default) injects a touch contact.
+    /// <c>mouse</c> uses <c>SetCursorPos</c> and <c>mouse_event</c>.
+    /// </summary>
+    public static string InputMode =>
+        string.Equals(Get(InputModeKey), "mouse", StringComparison.OrdinalIgnoreCase) ? "mouse" : "touch";
+
+    public static bool UseTouchInput => InputMode == "touch";
 
     /// <summary>Configured video folder, or the default when unset/blank.</summary>
     public static string VideoRoot

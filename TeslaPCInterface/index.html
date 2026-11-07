@@ -74,6 +74,10 @@
         let audioConnecting = false;
         let intentionalAudioClose = false;
         let sessionStarted = false;
+        // "touch" (default) keeps a finger down so Windows press-and-hold is the right-click.
+        // "mouse" is the cursor path, with the page's own 500 ms long-press.
+        var inputMode = 'touch';
+        function touchMode() { return inputMode !== 'mouse'; }
 
         function showConnectOverlay() {
             var root = document.getElementById('screenOverlay');
@@ -397,13 +401,19 @@
             mouseSocket.send(JSON.stringify(payload));
         }
 
-        // Mouse (desktop).
+        // Mouse (desktop). In touch mode a move with no button is hover and is dropped.
         img.addEventListener('click', function (e) { sendInput('click', e.clientX, e.clientY); });
-        img.addEventListener('mousemove', function (e) { sendInput('move', e.clientX, e.clientY); });
+        img.addEventListener('mousemove', function (e) {
+            if (touchMode() && !e.buttons) return;
+            sendInput('move', e.clientX, e.clientY);
+        });
         img.addEventListener('mousedown', function (e) { sendInput('down', e.clientX, e.clientY); });
         img.addEventListener('mouseup', function (e) { sendInput('up', e.clientX, e.clientY); });
-        // Desktop right mouse button -> right-click on the host.
-        img.addEventListener('contextmenu', function (e) { sendInput('rightclick', e.clientX, e.clientY); e.preventDefault(); });
+        // Desktop right mouse button. Touch mode lets Windows press-and-hold do this instead.
+        img.addEventListener('contextmenu', function (e) {
+            e.preventDefault();
+            if (!touchMode()) sendInput('rightclick', e.clientX, e.clientY);
+        });
 
         // Mouse wheel / trackpad scroll (desktop + some touchpads).
         // We always preventDefault so it doesn't scroll the page itself.
@@ -442,10 +452,16 @@
             var t = e.changedTouches[0];
             tStartX = t.clientX; tStartY = t.clientY;
             tMoved = false; tDownSent = false; tLongPressed = false;
-            tTimer = setTimeout(function () {
-                tLongPressed = true;
-                sendInput('rightclick', tStartX, tStartY);
-            }, LONG_PRESS_MS);
+            if (touchMode()) {
+                // Contact stays down. Windows press-and-hold turns a still finger into a right-click.
+                sendInput('down', tStartX, tStartY);
+                tDownSent = true;
+            } else {
+                tTimer = setTimeout(function () {
+                    tLongPressed = true;
+                    sendInput('rightclick', tStartX, tStartY);
+                }, LONG_PRESS_MS);
+            }
             e.preventDefault();
         }, { passive: false });
         img.addEventListener('touchmove', function (e) {
@@ -473,6 +489,11 @@
 
             if (tLongPressed) { e.preventDefault(); return; }
             var t = e.changedTouches[0];
+            if (touchMode()) {
+                sendInput('move', t.clientX, t.clientY);
+                e.preventDefault();
+                return;
+            }
             if (!tMoved && Math.abs(t.clientX - tStartX) + Math.abs(t.clientY - tStartY) > MOVE_TOL) {
                 tMoved = true;
                 clearTimeout(tTimer);          // it's a drag, not a long-press
@@ -491,7 +512,8 @@
             }
             clearTimeout(tTimer);
             var t = e.changedTouches[0];
-            if (tLongPressed) { /* right-click already sent */ }
+            if (touchMode()) { sendInput('up', t.clientX, t.clientY); }
+            else if (tLongPressed) { /* right-click already sent */ }
             else if (tDownSent) { sendInput('up', t.clientX, t.clientY); }   // end of drag
             else { sendInput('down', tStartX, tStartY); sendInput('up', tStartX, tStartY); } // tap = left click
             e.preventDefault();
@@ -665,6 +687,7 @@
         }
 
         fetch('/config').then(function (r) { return r.json(); }).then(function (c) {
+            if (c && c.inputMode) inputMode = c.inputMode;
             if (!c || !c.streamHeight) return;
             updateResUi(nearestRes(c.streamHeight));
         }).catch(function () {});
