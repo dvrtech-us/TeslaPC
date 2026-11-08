@@ -7,83 +7,49 @@
 
 ## Project Overview
 
-**TeslaPC** is a Windows remote desktop streaming application built with .NET 10.0 and C#. It streams screen content, system audio, and accepts mouse/keyboard input through a web-based interface accessible via any browser.
+**TeslaPC** is a Rust remote-desktop server for Windows and Linux. One binary serves the screen
+as MJPEG, system audio as PCM, and mouse, touch, and keyboard input to a browser. The Tesla
+in-car browser is reached with a CGNAT address (`100.64.0.1`) on the Windows Mobile Hotspot or,
+on Linux, on `TESLAPC_BYPASS_IFACE`.
 
 ## Architecture
 
-The application runs a single unified HTTP/HTTPS server on ports 8080 (HTTP) and 8443 (HTTPS). All services are routed by path:
+HTTP is on port `8080`. HTTPS is on port `8443`, terminated with rustls inside the process.
+`--localhost` binds `127.0.0.1:8080` only and skips the firewall, ACME, HTTPS, and the bypass.
 
 | Route | Protocol | Purpose |
 |-------|----------|---------|
-| `/` | HTTP | Web UI (`index.html`, JS, CSS) |
-| `/stream` | HTTP | MJPEG screen capture streaming |
-| `/ws/input` | WebSocket | Mouse & keyboard input |
-| `/ws/audio` | WebSocket | System audio streaming (WASAPI loopback) |
+| `/` | HTTP | Web UI (embedded assets, PNG served as bytes) |
+| `/stream` | HTTP | Shared MJPEG screen (`boundary`, JPEG quality 60, 30 FPS) |
+| `/ws/input` | WebSocket | Pointer, wheel, and keys. Any WebSocket that is not `/ws/audio` |
+| `/ws/audio` | WebSocket | One JSON format text frame, then raw PCM |
+| `/list.html` | HTTP | Generated folder listing under the video root |
+| `/config` | HTTP | `GET`/`POST` settings. The Cloudflare token is never returned |
+| `/version` | HTTP | `{ "version": "<crate version>" }` |
+| `/media/*` | HTTP | ffmpeg playback into `/stream` and `/ws/audio` |
+| `/display/*` | HTTP | Desktop mode info, aspect match, and set |
+| `/hotspot` | HTTP | `POST` Mobile Hotspot on/off from the Settings page |
 
-`TeslaBrowserBypass.cs` optionally adds a CGNAT secondary IP (`100.64.0.1`) to the Windows Mobile Hotspot adapter with port forwarding so the Tesla in-car browser can connect (it blocks RFC 1918 private IPs).
+## Source
 
-### Source Files
-
-```
-TeslaPCInterface/
-├── Program.cs                 # WinExe entry: loads .env, runs MainForm
-├── MainForm.cs                # WinForms touch control panel (Dashboard + Log tabs)
-├── TeslaPcService.cs          # Server lifecycle + status + hotspot-watchdog/ACME-renewal loops
-├── WebServer.cs               # Unified HTTP/HTTPS server with path-based routing + input replay
-├── ImageStreamingServer.cs    # MJPEG screen capture loop (30 FPS, resolution cap)
-├── WgcScreenCapture.cs        # Windows Graphics Capture (preferred; composited output)
-├── DxgiScreenCapture.cs       # DXGI Desktop Duplication capture (fallback; GDI last)
-├── AudioStreamingServer.cs    # WASAPI loopback audio capture via CSCore
-├── TeslaBrowserBypass.cs      # Tesla in-car browser hotspot bypass (CGNAT IP + portproxy)
-├── HotspotManager.cs          # Enable/disable Windows Mobile Hotspot (WinRT tethering)
-├── FirewallBootstrap.cs       # Inbound firewall rule for 8080/8443
-├── SslCertificateBootstrap.cs # Bind trusted/self-signed cert to 8443 (http.sys)
-├── AcmeCertificateManager.cs  # In-app Let's Encrypt (Certes + Cloudflare DNS-01)
-├── MjpegWriter.cs             # MJPEG multipart boundary encoder
-├── index.html                 # Single-page web UI (vanilla JS, Web Audio API)
-├── PCMPlayerProcessor.js      # AudioWorklet processor for PCM audio playback
-├── .env.example               # Config template (copy to .env; gitignored)
-├── TeslaPCInterface.csproj    # Project file (.NET 10.0, WinForms, WinExe)
-├── TeslaPCInterface.sln       # Visual Studio solution
-└── bindSSLCert.bat            # Binds SSL cert to HTTPS port 8443 (requires admin)
-```
+The crate is `teslapc/`. `teslapc/src/decisions/` holds the tested protocol functions.
+`teslapc/src/win.rs`, `teslapc/src/win_capture.rs`, and `teslapc/src/linux.rs` perform the OS calls. `teslapc/assets/` is the browser UI.
 
 ## Build & Run
 
-**Prerequisites**: .NET 10.0 SDK, Windows (uses Win32 APIs)
-
 ```bash
-# Build
-dotnet build TeslaPCInterface.sln
-
-# Run
-dotnet run --project TeslaPCInterface/TeslaPCInterface.csproj
+cargo build --manifest-path teslapc/Cargo.toml
+cargo test --manifest-path teslapc/Cargo.toml
+.\build.ps1
+teslapc\target\debug\teslapc.exe --localhost
 ```
 
-For HTTPS support, run `bindSSLCert.bat` as administrator first. Tesla browser bypass requires administrator privileges.
-
-## Key Dependencies (NuGet)
-
-- **CSCore 1.2.1.2** - WASAPI loopback audio capture
-- **NAudio 2.2.1** - Audio processing
-- **System.Net.WebSockets 4.3.0** - WebSocket protocol
-
-## Code Conventions
-
-- **Language**: C# with nullable reference types enabled and implicit usings
-- **Naming**: PascalCase for classes, methods, and properties (standard C# conventions)
-- **Platform**: Windows-only (P/Invoke to `user32.dll` for `SetCursorPos`, `mouse_event`, `keybd_event`)
-- **Frontend**: Vanilla JavaScript with no frameworks - HTML5 Canvas, Web Audio API, WebSockets
-- **Ports**: Hardcoded in source (8080 HTTP, 8443 HTTPS)
-- **No formal linting or formatting configuration**
+`teslapc service install` registers a Windows service or writes a systemd unit. The service
+runs the same binary with `--service` and no window.
 
 ## Testing
 
-No automated test suite exists. Manual testing by running the application and connecting via browser.
-
-## Git Workflow
-
-- **Main branch**: `main`
-- **No CI/CD pipeline** configured
-- **No pre-commit hooks**
-- Commit messages are short and descriptive
+`cargo test` calls the shipped decision functions (scaling, wheel sign, SendKeys mapping,
+stream fit, MJPEG headers, audio keepalive, config save, watched threshold, display choice,
+WebSocket classification, renewal, Linux bypass rules, Linux evdev records, hotspot wait,
+display-mode parsers, and portal ScreenCast messages). There is no separate GUI test.

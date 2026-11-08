@@ -1,0 +1,501 @@
+//! Calls the shipped decision functions. Expected values are written out here;
+//! the test does not reimplement the functions it checks.
+
+use std::collections::HashMap;
+use std::path::Path;
+
+use teslapc::assets;
+use teslapc::decisions::audio::{format_message, should_inject_silence, KeepaliveInput, KEEPALIVE_POLL_MS, SILENCE_MAX_MS, SILENCE_START_MS};
+use teslapc::decisions::bypass::linux_bypass_plan;
+use teslapc::decisions::capture::{backend_after_frame, first_capture_backend, BackendStep, CaptureBackend};
+use teslapc::decisions::config::{apply_config_body, public_config_json, PublicConfig, KEY_CF_TOKEN};
+use teslapc::decisions::display::{best_for_aspect, Mode};
+use teslapc::decisions::history::{watched_now, WATCHED_FRACTION};
+use teslapc::decisions::input::{expand_paste, map_key, scale_pointer, touch_event_applies, wheel_delta, TOUCH_REPEAT_MS};
+use teslapc::decisions::listing::{render_guts, resolve_browse, FileProgress};
+use teslapc::decisions::media::{ffmpeg_video_args, linux_missing_ffmpeg_error, windows_vlc_plan};
+use teslapc::decisions::renewal::{acme_directory_url, needs_renewal, staging_from_env, RENEWAL_CHECK_HOURS, RENEW_WHEN_DAYS_LEFT};
+use teslapc::decisions::socket::{classify_socket, SocketRole};
+use teslapc::decisions::stream::{clamp_stream_height, fit_frame, mjpeg_content_type, mjpeg_part, JPEG_QUALITY, SLOW_CLIENT_WAIT_MS};
+
+const TOKEN: &str = "cf-token-SHOULD-NOT-LEAK-9f3a";
+
+#[test]
+fn pointer_scales_from_display_size_and_passes_through_when_missing() {
+    let screen = (1920, 1080);
+    let scaled = scale_pointer(820, 45, -120, Some((1280, 720)), screen);
+    assert_eq!(scaled.x, 1230);
+    assert_eq!(scaled.y, 67);
+    assert_eq!(scaled.delta, -120);
+
+    let passed = scale_pointer(820, 45, -120, None, screen);
+    assert_eq!((passed.x, passed.y, passed.delta), (820, 45, -120));
+}
+
+#[test]
+fn wheel_sign_is_inverted() {
+    assert_eq!(wheel_delta(120), -120);
+    assert_eq!(wheel_delta(-40), 40);
+    assert_eq!(wheel_delta(0), 0);
+}
+
+#[test]
+fn key_and_paste_mapping_matches_sendkeys() {
+    assert_eq!(map_key("A").as_deref(), Some("A"));
+    assert_eq!(map_key("+").as_deref(), Some("{+}"));
+    assert_eq!(map_key("^").as_deref(), Some("{^}"));
+    assert_eq!(map_key("%").as_deref(), Some("{%}"));
+    assert_eq!(map_key("~").as_deref(), Some("{~}"));
+    assert_eq!(map_key("(").as_deref(), Some("{(}"));
+    assert_eq!(map_key(")").as_deref(), Some("{)}"));
+    assert_eq!(map_key("{").as_deref(), Some("{{}"));
+    assert_eq!(map_key("}").as_deref(), Some("{}}"));
+    assert_eq!(map_key("[").as_deref(), Some("{[}"));
+    assert_eq!(map_key("]").as_deref(), Some("{]}"));
+    assert_eq!(map_key("ArrowLeft").as_deref(), Some("{LEFT}"));
+    assert_eq!(map_key("Enter").as_deref(), Some("{ENTER}"));
+    assert_eq!(map_key("F12").as_deref(), Some("{F12}"));
+    assert_eq!(map_key("Shift"), None);
+    assert_eq!(map_key("CapsLock"), None);
+    assert_eq!(map_key("ArrowLeftExtra"), None);
+    assert_eq!(map_key(""), None);
+
+    assert_eq!(
+        expand_paste("Hi+\r\n\t"),
+        vec![
+            "H".to_string(),
+            "i".to_string(),
+            "{+}".to_string(),
+            "{ENTER}".to_string(),
+            "{TAB}".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn touch_ignores_hover_and_repeats_every_100ms() {
+    assert!(!touch_event_applies("move", false));
+    assert!(!touch_event_applies("up", false));
+    assert!(touch_event_applies("down", false));
+    assert!(touch_event_applies("move", true));
+    assert!(!touch_event_applies("down", true));
+    assert_eq!(TOUCH_REPEAT_MS, 100);
+}
+
+#[test]
+fn stream_height_clamp_and_uniform_scale_never_upscales() {
+    assert_eq!(clamp_stream_height(1080), 1080);
+    assert_eq!(clamp_stream_height(240), 240);
+    assert_eq!(clamp_stream_height(2160), 2160);
+    assert_eq!(clamp_stream_height(100), 1080);
+    assert_eq!(clamp_stream_height(2161), 1080);
+
+    assert_eq!(fit_frame(1920, 1080, 1080), (1920, 1080));
+    assert_eq!(fit_frame(1920, 1080, 720), (1280, 720));
+    assert_eq!(fit_frame(1920, 1200, 1080), (1728, 1080));
+    assert_eq!(fit_frame(800, 600, 1080), (800, 600));
+    assert_eq!(JPEG_QUALITY, 60);
+    assert_eq!(SLOW_CLIENT_WAIT_MS, 1000);
+}
+
+#[test]
+fn mjpeg_part_headers() {
+    assert_eq!(mjpeg_content_type(), "multipart/x-mixed-replace; boundary=boundary");
+    let jpeg = [0xFF, 0xD8, 0xFF, 0xD9];
+    let part = mjpeg_part(&jpeg);
+    let text = String::from_utf8_lossy(&part);
+    assert!(text.starts_with("\r\n--boundary\r\nContent-Type: image/jpeg\r\nContent-Length: 4\r\n\r\n"));
+    assert!(part.ends_with(b"\r\n"));
+    assert!(part.windows(4).any(|w| w == jpeg));
+}
+
+#[test]
+fn audio_format_and_silence_keepalive() {
+    assert_eq!(SILENCE_START_MS, 250);
+    assert_eq!(SILENCE_MAX_MS, 30_000);
+    assert_eq!(KEEPALIVE_POLL_MS, 20);
+
+    let json = format_message(48000, 32, 2, "float");
+    assert!(json.contains("\"type\":\"format\""));
+    assert!(json.contains("\"sampleRate\":48000"));
+    assert!(json.contains("\"bitsPerSample\":32"));
+    assert!(json.contains("\"channels\":2"));
+    assert!(json.contains("\"sampleFormat\":\"float\""));
+
+    let base = KeepaliveInput {
+        idle_ms: 250,
+        queue_empty: true,
+        capturing: true,
+        media_mode: false,
+        has_clients: true,
+        typical_buffer_bytes: 3840,
+    };
+    assert!(should_inject_silence(base));
+    assert!(!should_inject_silence(KeepaliveInput { idle_ms: 249, ..base }));
+    assert!(!should_inject_silence(KeepaliveInput { idle_ms: 30_000, ..base }));
+    assert!(should_inject_silence(KeepaliveInput { idle_ms: 29_999, ..base }));
+    assert!(!should_inject_silence(KeepaliveInput { media_mode: true, ..base }));
+    assert!(!should_inject_silence(KeepaliveInput { queue_empty: false, ..base }));
+    assert!(!should_inject_silence(KeepaliveInput { has_clients: false, ..base }));
+    assert!(!should_inject_silence(KeepaliveInput { typical_buffer_bytes: 0, ..base }));
+    assert!(!should_inject_silence(KeepaliveInput { capturing: false, ..base }));
+}
+
+#[test]
+fn config_keeps_unknown_lines_and_blank_token_and_omits_token_from_get() {
+    let existing = format!(
+        "# keep me\r\nFOO=bar\r\n{KEY_CF_TOKEN}={TOKEN}\r\nTESLAPC_HTTPS_HOST=old.example\r\nOTHER=1\r\n"
+    );
+    let saved = apply_config_body(
+        &existing,
+        "httpsHost=new.example&acmeEmail=a%40b.co&videoRoot=D%3A%5Cmovies&logLevel=Debug&streamHeight=720&inputMode=Mouse&cfToken=",
+    );
+    assert!(saved.text.contains("# keep me"));
+    assert!(saved.text.contains("FOO=bar"));
+    assert!(saved.text.contains("OTHER=1"));
+    assert!(saved.text.contains("TESLAPC_HTTPS_HOST=new.example"));
+    assert!(saved.text.contains("TESLAPC_ACME_EMAIL=a@b.co"));
+    assert!(saved.text.contains(r"TESLAPC_VIDEO_ROOT=D:\movies"));
+    assert!(saved.text.contains("TESLAPC_LOG_LEVEL=debug"));
+    assert!(saved.text.contains("TESLAPC_STREAM_HEIGHT=720"));
+    assert!(saved.text.contains("TESLAPC_INPUT_MODE=mouse"));
+    assert!(saved.text.contains(&format!("{KEY_CF_TOKEN}={TOKEN}")));
+    assert!(saved.restart_needed);
+
+    let blank_only = apply_config_body(&saved.text, "logLevel=info");
+    assert!(!blank_only.restart_needed);
+    assert!(blank_only.text.contains("TESLAPC_LOG_LEVEL=info"));
+    assert!(blank_only.text.contains("FOO=bar"));
+    assert!(blank_only.text.contains(&format!("{KEY_CF_TOKEN}={TOKEN}")));
+
+    let public = public_config_json(&PublicConfig {
+        https_host: "new.example".into(),
+        acme_email: "a@b.co".into(),
+        video_root: r"D:\movies".into(),
+        log_level: "info".into(),
+        stream_height: 720,
+        input_mode: "mouse".into(),
+        version: teslapc::crate_version().into(),
+        cf_token_set: true,
+    });
+    assert!(!public.contains(TOKEN));
+    assert!(!public.contains("TESLAPC_CF_TOKEN"));
+    for field in ["httpsHost", "acmeEmail", "videoRoot", "logLevel", "streamHeight", "inputMode", "version", "cfTokenSet"] {
+        assert!(public.contains(field), "{field} missing from {public}");
+    }
+    assert_eq!(teslapc::crate_version(), env!("CARGO_PKG_VERSION"));
+}
+
+#[test]
+fn watched_is_sticky_at_95_percent() {
+    assert!((WATCHED_FRACTION - 0.95).abs() < f64::EPSILON);
+    assert!(!watched_now(94.0, 100.0, false));
+    assert!(watched_now(95.0, 100.0, false));
+    assert!(watched_now(10.0, 100.0, true));
+    assert!(!watched_now(100.0, 0.0, false));
+}
+
+#[test]
+fn display_mode_picks_nearest_aspect_inside_the_cap() {
+    let modes = [
+        Mode { w: 1920, h: 1080 },
+        Mode { w: 1680, h: 1050 },
+        Mode { w: 1280, h: 720 },
+        Mode { w: 1024, h: 768 },
+        Mode { w: 800, h: 600 },
+        Mode { w: 640, h: 480 },
+    ];
+    assert_eq!(best_for_aspect(&modes, 16.0 / 9.0, 1080), Some(Mode { w: 1920, h: 1080 }));
+    assert_eq!(best_for_aspect(&modes, 16.0 / 9.0, 720), Some(Mode { w: 1280, h: 720 }));
+    assert_eq!(best_for_aspect(&modes, 4.0 / 3.0, 1080), Some(Mode { w: 1024, h: 768 }));
+    assert_eq!(best_for_aspect(&[], 1.7, 1080), None);
+    assert_eq!(best_for_aspect(&modes, 0.0, 1080), None);
+
+    // 1920x960 is closer in area but 0.04 off 1.96. 1600x820 is within the
+    // 0.01 gap past that error, so the closer aspect wins.
+    let near = [Mode { w: 1920, h: 960 }, Mode { w: 1600, h: 820 }];
+    assert_eq!(best_for_aspect(&near, 1.96, 1080), Some(Mode { w: 1600, h: 820 }));
+}
+
+#[test]
+fn websocket_paths() {
+    assert_eq!(classify_socket("/ws/audio"), SocketRole::Audio);
+    assert_eq!(classify_socket("/WS/Audio"), SocketRole::Audio);
+    assert_eq!(classify_socket("/ws/audio/extra"), SocketRole::Audio);
+    assert_eq!(classify_socket("/ws/input"), SocketRole::Input);
+    assert_eq!(classify_socket("/anything"), SocketRole::Input);
+}
+
+#[test]
+fn renewal_under_30_days_and_staging_directory() {
+    assert_eq!(RENEW_WHEN_DAYS_LEFT, 30);
+    assert_eq!(RENEWAL_CHECK_HOURS, 12);
+    assert!(!needs_renewal(31));
+    assert!(needs_renewal(30));
+    assert!(needs_renewal(29));
+    assert!(needs_renewal(0));
+    assert!(needs_renewal(-1));
+    assert!(staging_from_env(Some("1")));
+    assert!(!staging_from_env(Some("0")));
+    assert!(acme_directory_url(true).contains("staging"));
+    assert!(!acme_directory_url(false).contains("staging"));
+}
+
+#[test]
+fn bypass_gating_and_linux_forward_plus_nat() {
+    let off_flag = linux_bypass_plan(true, Some("wlan0"), 8080, 8443);
+    assert!(!off_flag.enabled);
+    assert!(off_flag.nft_script.is_empty());
+
+    let off_empty = linux_bypass_plan(false, Some("  "), 8080, 8443);
+    assert!(!off_empty.enabled);
+    let off_missing = linux_bypass_plan(false, None, 8080, 8443);
+    assert!(!off_missing.enabled);
+
+    let on = linux_bypass_plan(false, Some("wlan0"), 8080, 8443);
+    assert!(on.enabled);
+    assert_eq!(on.address_cidr, "100.64.0.1/10");
+    assert!(on.nft_script.contains("8080"));
+    assert!(on.nft_script.contains("8443"));
+    assert!(on.nft_script.contains("dnat to 127.0.0.1:8080"));
+    assert!(on.nft_script.contains("dnat to 127.0.0.1:8443"));
+    assert!(on.nft_script.contains("masquerade"));
+    assert!(on.nft_script.contains("chain forward"));
+}
+
+#[test]
+fn vlc_plan_and_linux_missing_ffmpeg_and_video_filter() {
+    let plan = windows_vlc_plan(r"D:\video\a.mp4");
+    assert_eq!(plan.image_name, "vlc.exe");
+    assert_eq!(plan.wait_ms, 2000);
+    assert_eq!(plan.executable, r"C:\Program Files\VideoLAN\VLC\vlc.exe");
+    assert_eq!(plan.arguments, " -vvv \"D:\\video\\a.mp4\" --fullscreen");
+
+    let err = linux_missing_ffmpeg_error();
+    assert!(err.contains("ffmpeg"));
+    assert!(err.to_ascii_lowercase().contains("does not launch"));
+
+    let args = ffmpeg_video_args(r"D:\video\a.mp4", 12.5, 720);
+    assert!(args.contains("scale=-2:'min(720,ih)',fps=30"));
+    assert!(args.contains("-c:v mjpeg -q:v 6"));
+}
+
+#[test]
+fn black_frame_tries_the_next_backend() {
+    assert_eq!(first_capture_backend(false), CaptureBackend::Wgc);
+    assert_eq!(first_capture_backend(true), CaptureBackend::Dxgi);
+    let black = vec![0u8; 16];
+    let color = {
+        let mut px = vec![0u8; 16];
+        px[2] = 255;
+        px
+    };
+    assert_eq!(
+        backend_after_frame(CaptureBackend::Wgc, true, &black),
+        BackendStep::Switch(CaptureBackend::Dxgi)
+    );
+    assert_eq!(
+        backend_after_frame(CaptureBackend::Dxgi, false, &[]),
+        BackendStep::Switch(CaptureBackend::Gdi)
+    );
+    assert_eq!(
+        backend_after_frame(CaptureBackend::Gdi, true, &black),
+        BackendStep::Keep(CaptureBackend::Gdi)
+    );
+    assert_eq!(
+        backend_after_frame(CaptureBackend::Wgc, true, &color),
+        BackendStep::Keep(CaptureBackend::Wgc)
+    );
+}
+
+#[test]
+fn browse_paths_stay_under_the_root_and_folders_render_first() {
+    let root = Path::new(r"C:\video");
+    assert!(resolve_browse(root, None).is_ok());
+    assert!(resolve_browse(root, Some(r"C:\video\movies")).is_ok());
+    assert!(resolve_browse(root, Some(r"C:\video\..\Windows")).is_err());
+
+    let mut progress = HashMap::new();
+    progress.insert(
+        r"c:\video\b.mp4".to_string(),
+        FileProgress { position: 95.0, duration: 100.0, watched: true },
+    );
+    let html = render_guts(
+        r"C:\video",
+        r"C:\video",
+        true,
+        None,
+        &[r"C:\video\Folder".to_string()],
+        &[(r"C:\video\b.mp4".to_string(), "b.mp4".to_string())],
+        &progress,
+    );
+    let folder_at = html.find("row folder").unwrap();
+    let file_at = html.find("row file").unwrap();
+    assert!(folder_at < file_at);
+    assert!(html.contains("Watched"));
+
+    let missing = render_guts(r"C:\video", r"C:\video\nope", false, None, &[], &[], &HashMap::new());
+    assert!(missing.contains("doesn't exist"));
+}
+
+#[test]
+fn png_asset_is_raw_bytes() {
+    let asset = assets::asset("/teslapc.png").unwrap();
+    assert_eq!(asset.content_type, "image/png");
+    assert!(asset.bytes.starts_with(&[0x89, b'P', b'N', b'G']));
+    assert!(!asset.html);
+}
+
+#[test]
+fn linux_uinput_records_cover_touch_mouse_wheel_and_keys() {
+    use teslapc::decisions::linux_input::{linux_abs_axes, linux_key_events, linux_pointer_events, linux_repeat_events, linux_wheel_events, ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_SLOT, ABS_MT_TRACKING_ID, ABS_X, ABS_Y, BTN_LEFT, EV_ABS, EV_KEY, EV_REL, KEY_ENTER, KEY_LEFTCTRL, KEY_U, LINUX_WHEEL_NOTCH, REL_WHEEL};
+
+    let screen = (1920, 1080);
+    let axes = linux_abs_axes(screen.0, screen.1);
+    let x_max = axes.iter().find(|axis| axis.code == ABS_X).unwrap().maximum;
+    let y_max = axes.iter().find(|axis| axis.code == ABS_Y).unwrap().maximum;
+    let mt_x_max = axes.iter().find(|axis| axis.code == ABS_MT_POSITION_X).unwrap().maximum;
+    let mt_y_max = axes.iter().find(|axis| axis.code == ABS_MT_POSITION_Y).unwrap().maximum;
+    assert_eq!(x_max, 1920);
+    assert_eq!(y_max, 1080);
+    assert_eq!(mt_x_max, 1920);
+    assert_eq!(mt_y_max, 1080);
+
+    let edge = linux_pointer_events("down", 1920, 1080, false, screen);
+    assert_eq!(edge.iter().find(|event| event.type_ == EV_ABS && event.code == ABS_X).unwrap().value, x_max);
+    assert_eq!(edge.iter().find(|event| event.type_ == EV_ABS && event.code == ABS_Y).unwrap().value, y_max);
+
+    let touch = linux_pointer_events("down", 10, 20, true, screen);
+    assert!(touch.iter().any(|event| event.type_ == EV_ABS && event.code == ABS_MT_SLOT && event.value == 0));
+    assert!(touch.iter().any(|event| event.type_ == EV_ABS && event.code == ABS_MT_TRACKING_ID && event.value == 1));
+    assert!(touch.iter().any(|event| event.type_ == EV_ABS && event.code == ABS_MT_POSITION_X && event.value == 10));
+
+    let mouse = linux_pointer_events("down", 3, 4, false, screen);
+    assert!(mouse.iter().any(|event| event.type_ == EV_ABS && event.code == ABS_X && event.value == 3));
+    assert!(mouse.iter().any(|event| event.type_ == EV_KEY && event.code == BTN_LEFT && event.value == 1));
+
+    let (notch, rest) = linux_wheel_events(-LINUX_WHEEL_NOTCH, 0);
+    assert_eq!(rest, 0);
+    assert!(notch.iter().any(|event| event.type_ == EV_REL && event.code == REL_WHEEL && event.value == -1));
+    let (partial, rest) = linux_wheel_events(-40, 0);
+    assert!(partial.iter().all(|event| event.code != REL_WHEEL));
+    assert_eq!(rest, -40);
+    let (filled, rest) = linux_wheel_events(-80, rest);
+    assert_eq!(rest, 0);
+    assert!(filled.iter().any(|event| event.type_ == EV_REL && event.code == REL_WHEEL && event.value == -1));
+
+    let enter = linux_key_events("{ENTER}");
+    assert!(enter.iter().any(|event| event.type_ == EV_KEY && event.code == KEY_ENTER && event.value == 1));
+    assert!(enter.iter().any(|event| event.type_ == EV_KEY && event.code == KEY_ENTER && event.value == 0));
+
+    let unicode = linux_key_events("{+}");
+    assert!(unicode.iter().any(|event| event.type_ == EV_KEY && event.code == KEY_LEFTCTRL && event.value == 1));
+    assert!(unicode.iter().any(|event| event.type_ == EV_KEY && event.code == KEY_U && event.value == 1));
+
+    let repeat = linux_repeat_events(10, 20, screen);
+    assert!(repeat.iter().any(|event| event.type_ == EV_ABS && event.code == ABS_MT_SLOT && event.value == 0));
+    assert!(repeat.iter().any(|event| event.type_ == EV_ABS && event.code == ABS_MT_POSITION_X && event.value == 10));
+}
+
+#[test]
+fn hotspot_fresh_on_waits_2000_and_watchdog_repairs_a_missing_address() {
+    use teslapc::decisions::bypass::{hotspot_step, HotspotReport, HotspotSource};
+
+    let fresh = hotspot_step(HotspotSource::SettingsOn, false, HotspotReport::TurnedOn, false);
+    assert_eq!(fresh.wait_ms, 2000);
+    assert!(fresh.setup_bypass);
+
+    let settings_missing = hotspot_step(HotspotSource::SettingsOn, false, HotspotReport::AlreadyOn, false);
+    assert_eq!(settings_missing.wait_ms, 1500);
+    assert!(settings_missing.setup_bypass);
+
+    let settings_present = hotspot_step(HotspotSource::SettingsOn, false, HotspotReport::AlreadyOn, true);
+    assert!(!settings_present.setup_bypass);
+
+    let manual = hotspot_step(HotspotSource::Watchdog, true, HotspotReport::TurnedOn, false);
+    assert!(!manual.setup_bypass);
+
+    let watchdog_fresh = hotspot_step(HotspotSource::Watchdog, false, HotspotReport::TurnedOn, false);
+    assert_eq!(watchdog_fresh.wait_ms, 2000);
+    assert!(watchdog_fresh.setup_bypass);
+
+    let watchdog_missing = hotspot_step(HotspotSource::Watchdog, false, HotspotReport::AlreadyOn, false);
+    assert_eq!(watchdog_missing.wait_ms, 0);
+    assert!(watchdog_missing.setup_bypass);
+
+    let watchdog_present = hotspot_step(HotspotSource::Watchdog, false, HotspotReport::AlreadyOn, true);
+    assert!(!watchdog_present.setup_bypass);
+}
+
+#[test]
+fn linux_display_query_lists_modes_and_wayland_uses_wlr_randr() {
+    use teslapc::decisions::display::{best_for_aspect, choose_display_query, display_set_args, parse_wlr_randr, parse_xrandr, Mode};
+
+    let xrandr = "\
+eDP-1 connected primary 1920x1080+0+0
+   1920x1080     60.00*+
+   1600x900      60.00
+   1280x720      60.00
+   1024x768      60.00
+HDMI-1 disconnected
+";
+    let wlr = "\
+eDP-1
+  1920x1080 px, 60.000000 Hz (current)
+  1280x720 px, 60.000000 Hz
+  1024x768 px, 60.000000 Hz
+";
+    let parsed = parse_xrandr(xrandr).unwrap();
+    assert_eq!(parsed.output, "eDP-1");
+    assert_eq!(parsed.current, (1920, 1080));
+    assert!(parsed.modes.len() >= 4);
+    assert!(parsed.modes.contains(&(1280, 720)));
+    assert!(parsed.modes.contains(&(1024, 768)));
+
+    let wlr_parsed = parse_wlr_randr(wlr).unwrap();
+    assert!(wlr_parsed.modes.len() >= 3);
+    assert_eq!(choose_display_query(xrandr, wlr, true).unwrap().modes, wlr_parsed.modes);
+    assert_eq!(choose_display_query(xrandr, "", false).unwrap().output, "eDP-1");
+
+    let set = display_set_args(true, "eDP-1", 1280, 720);
+    assert_eq!(set[0], "wlr-randr");
+    assert_eq!(set, ["wlr-randr", "--output", "eDP-1", "--mode", "1280x720"]);
+    assert_eq!(display_set_args(false, "eDP-1", 1920, 1080)[0], "xrandr");
+
+    let modes: Vec<Mode> = parsed.modes.iter().map(|(w, h)| Mode { w: *w, h: *h }).collect();
+    let picked = best_for_aspect(&modes, 1024.0 / 768.0, 1080).unwrap();
+    assert_eq!((picked.w, picked.h), (1024, 768));
+}
+
+#[test]
+fn portal_messages_round_trip_and_the_hand_built_response_parses() {
+    use teslapc::decisions::portal::{create_session_message, parse_dbus_header, parse_portal_response, pipewire_hello, portal_response_body, PortalResponse};
+
+    let message = create_session_message(7, "tok", "h1");
+    assert_eq!(message[0], b'l');
+    assert_eq!(message[1], 1);
+    assert_eq!(u32::from_le_bytes(message[8..12].try_into().unwrap()), 7);
+    let fields_len = u32::from_le_bytes(message[12..16].try_into().unwrap()) as usize;
+    let header = parse_dbus_header(&message[16..16 + fields_len]);
+    assert_eq!(header.member.as_deref(), Some("CreateSession"));
+    assert_eq!(header.signature.as_deref(), Some("a{sv}"));
+    assert!(message.windows(3).any(|window| window == b"tok"));
+
+    let session = [
+        0x00, 0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x00, b's', b'e', b's', b's', b'i', b'o', b'n', b'_', b'h', b'a', b'n', b'd', b'l', b'e', 0x00, 0x01, b'o', 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, b'/', b's', 0x00,
+    ];
+    assert_eq!(parse_portal_response(&session).unwrap(), PortalResponse::Session("/s".into()));
+
+    let node = [
+        0x00, 0x00, 0x00, 0x00, 0x28, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, b's', b't', b'r', b'e', b'a', b'm', b's', 0x00, 0x09, b'a', b'(', b'u', b'a', b'{', b's', b'v', b'}', b')', 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+    assert_eq!(parse_portal_response(&node).unwrap(), PortalResponse::Node(7));
+    assert_eq!(parse_portal_response(&portal_response_body(0, Some("/s"), None)).unwrap(), PortalResponse::Session("/s".into()));
+    assert_eq!(parse_portal_response(&portal_response_body(2, None, None)).unwrap(), PortalResponse::Failed(2));
+    assert_eq!(parse_portal_response(&portal_response_body(0, None, Some(42))).unwrap(), PortalResponse::Node(42));
+
+    let hello = pipewire_hello(1);
+    assert_eq!(hello.len(), 16);
+    assert_eq!(&hello[..8], &[0, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(u32::from_le_bytes(hello[8..12].try_into().unwrap()), 1);
+}

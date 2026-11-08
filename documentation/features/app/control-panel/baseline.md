@@ -1,34 +1,7 @@
-# Desktop Control Panel — Behavior Baseline
+# Process Control — Behavior Baseline
 
-Known-good invariants. Update only when intended behavior changes.
-
-## Invariants
-
-- The app is **`WinExe`** (windowed). `Program.Main` is `[STAThread]`, loads `.env`, and runs `MainForm`.
-- `MainForm` is borderless and sized to `Screen.PrimaryScreen.WorkingArea` (fills the desktop, the
-  taskbar stays visible). It is not topmost (other windows layer above; the panel is the backdrop).
-- The server stack is started on the form's `Shown` event on a **background thread**, so the long
-  startup never freezes the UI; it is stopped on `FormClosing` (waits up to 5 s).
-- `Console.Out` is redirected to the Log tab and **teed** to the original stream.
-- `AppendLog` always writes to a bounded in-memory `StringBuilder` buffer (cap 120 000 chars;
-  trimmed to 90 000). It writes to the `RichTextBox` (`AppendToBox`, marshal + trim +
-  `ScrollToCaret`) **only when `_logPanel.Visible` is true**. When the Log tab is hidden, no
-  `RichTextBox` work occurs — only the buffer grows.
-- When the Log tab is opened (`ShowTab`), `ShowLogBuffer` replaces the `RichTextBox` content
-  with the full in-memory buffer in one pass; subsequent lines then flow through `AppendToBox`
-  directly while the tab remains visible.
-- The buffer cap (120 000 chars) and trim target (90 000 chars) are applied in `AppendLog`
-  before the optional `AppendToBox` call, so both the buffer and the `RichTextBox` stay bounded.
-- The app calls `SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)`
-  on start to keep the system and display awake (screen capture stalls if the monitor sleeps).
-- Dashboard status is refreshed every 2 s from `TeslaPcService` (server, HTTPS mode, hotspot,
-  client count, primary URL). The Toggle-Hotspot button is hidden when the bypass is disabled.
-- All server behavior (capture, web server, bypass, bootstrap, watchdog, renewal) is unchanged —
-  it was moved verbatim from `Program.Main` into `TeslaPcService`.
-
-## Controls
-
-- **Toggle Hotspot** — turns the hotspot off (and sets `ManuallyOff` so the watchdog leaves it) or
-  back on (and re-attaches the bypass).
-- **Restart** — stops and re-creates the `TeslaPcService` in-process.
-- **Minimize** / **Quit** — minimize to taskbar / close the app.
+- The process has no window and no WinForms log tab.
+- Logs are stdout lines.
+- `teslapc service install` is the non-interactive install entry on Windows and Linux.
+- A denied install is logged. HTTP does not depend on the service being registered.
+- `--service` runs the same server.
