@@ -32,6 +32,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $manifest = Join-Path $PSScriptRoot 'teslapc\Cargo.toml'
+
+# A normal PowerShell has no LIB. VS 18 link.exe then cannot open msvcrt.lib.
+if (-not $env:LIB -or -not (Test-Path -LiteralPath (Join-Path ($env:LIB -split ';' | Select-Object -First 1) 'msvcrt.lib'))) {
+    $env:LIB = 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\lib\x64;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\ucrt\x64;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x64'
+    $env:INCLUDE = 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\include;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared'
+}
+
 if ($Configuration -eq 'Release') {
     Write-Host "Building Release ..."
     cargo build --manifest-path $manifest --release
