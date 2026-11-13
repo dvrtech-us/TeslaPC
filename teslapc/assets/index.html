@@ -40,18 +40,9 @@
             autocorrect="off" autocapitalize="off" spellcheck="false" />
         <button class="btn" onclick="window.location.assign('/list.html')">&#128193; Files</button>
         <button class="btn" onclick="window.location.assign('/config.html')">&#9881; Settings</button>
-        <button type="button" id="resBtn" class="btn" title="Stream resolution" onclick="toggleResPicker(event)">1080p</button>
-        <button class="btn" onclick="fitScreen()" title="Set the PC resolution to match this screen">&#9974; Fit screen</button>
+        <button type="button" id="fitBtn" class="btn" onclick="fitScreen(this)" title="Set the PC resolution to match this screen">&#9974; Fit screen</button>
+        <span id="streamInfo" class="stream-info" aria-hidden="true" tabindex="-1">&mdash;</span>
     </div>
-    <div id="resPicker" class="res-picker" hidden>
-        <div class="res-picker-inner">
-            <div class="res-picker-title">Stream resolution</div>
-            <button type="button" class="btn res-choice" data-h="480" onclick="pickRes(480)">480p</button>
-            <button type="button" class="btn res-choice" data-h="720" onclick="pickRes(720)">720p</button>
-            <button type="button" class="btn res-choice" data-h="1080" onclick="pickRes(1080)">1080p</button>
-        </div>
-    </div>
-
     <!-- Include the WebSocket JavaScript library -->
 
 
@@ -110,12 +101,15 @@
             showDisconnectOverlay();
         }
 
+        // Video transport used by this page. The indicator text is derived from this.
+        var VIDEO_STREAM = { path: '/stream', format: 'MJPEG' };
+
         // Connect MJPEG /stream in the same user gesture as audio (avoids seconds of video-ahead-of-audio).
         function startVideoStream() {
             var el = document.getElementById('streamImg');
             if (!el) return;
             el.removeAttribute('src');
-            el.src = '/stream?_=' + Date.now();
+            el.src = VIDEO_STREAM.path + '?_=' + Date.now();
         }
 
         async function startAudioPlayback() {
@@ -629,67 +623,79 @@
 
     </script>
     <script>
-        // Stream resolution picker (native <select> popups are broken on the Tesla browser).
-        var RES_OPTS = [480, 720, 1080];
+        // Fit screen: ask the PC for the display mode closest in shape to this screen,
+        // and report the result in the button's own label.
+        var fitBusy = false;
+        var fitTimer = null;
+        var fitLabel = null;
+        var fitGuard = null;
 
-        function nearestRes(h) {
-            var best = RES_OPTS[0];
-            for (var i = 0; i < RES_OPTS.length; i++)
-                if (Math.abs(RES_OPTS[i] - h) < Math.abs(best - h)) best = RES_OPTS[i];
-            return best;
+        function fitShow(btn, text) {
+            if (fitTimer) clearTimeout(fitTimer);
+            btn.textContent = text;
+            fitTimer = setTimeout(function () {
+                btn.textContent = fitLabel;
+                fitTimer = null;
+            }, 4000);
         }
 
-        function updateResUi(h) {
-            document.getElementById('resBtn').textContent = h + 'p';
-            var choices = document.querySelectorAll('.res-choice');
-            for (var i = 0; i < choices.length; i++)
-                choices[i].classList.toggle('active', Number(choices[i].getAttribute('data-h')) === h);
+        function fitDone(btn) {
+            fitBusy = false;
+            if (fitGuard) { clearTimeout(fitGuard); fitGuard = null; }
+            btn.disabled = false;
         }
 
-        function toggleResPicker(e) {
-            if (e) e.stopPropagation();
-            var p = document.getElementById('resPicker');
-            p.hidden = !p.hidden;
-        }
-
-        function closeResPicker() {
-            document.getElementById('resPicker').hidden = true;
-        }
-
-        function setRes(h) {
-            var b = new URLSearchParams();
-            b.set('streamHeight', h);
-            fetch('/config', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: b.toString() });
-        }
-
-        function pickRes(h) {
-            updateResUi(h);
-            setRes(h);
-            closeResPicker();
-        }
-
-        document.addEventListener('touchstart', function (e) {
-            var p = document.getElementById('resPicker');
-            if (p.hidden) return;
-            if (!p.contains(e.target) && e.target.id !== 'resBtn') closeResPicker();
-        }, { passive: true });
-
-        function fitScreen() {
+        function fitScreen(btn) {
+            if (fitBusy) return;
+            fitBusy = true;
+            if (fitLabel === null) fitLabel = btn.textContent;
             var s = document.querySelector('.screen');
             var w = s ? s.clientWidth : window.innerWidth;
             var h = s ? s.clientHeight : window.innerHeight;
-            var btn = event && event.target;
-            if (btn) { btn.disabled = true; setTimeout(function () { btn.disabled = false; }, 2500); }
+            btn.disabled = true;
+            var settled = false;
+            fitGuard = setTimeout(function () {
+                if (settled) return;
+                settled = true;
+                fitDone(btn);
+                fitShow(btn, 'Could not change the PC display');
+            }, 5000);
             fetch('/display/match?w=' + w + '&h=' + h)
-                .then(function (r) { return r.json(); })
-                .then(function (d) { console.log('Display now ' + d.width + 'x' + d.height + (d.changed ? ' (changed)' : '')); })
-                .catch(function () {});
+                .then(function (r) {
+                    if (!r.ok) throw new Error('status ' + r.status);
+                    return r.json();
+                })
+                .then(function (d) {
+                    if (settled) return;
+                    settled = true;
+                    fitDone(btn);
+                    var size = d.width + 'x' + d.height;
+                    fitShow(btn, d.changed ? ('PC display set to ' + size) : ('PC display unchanged (' + size + ')'));
+                })
+                .catch(function () {
+                    if (settled) return;
+                    settled = true;
+                    fitDone(btn);
+                    fitShow(btn, 'Could not change the PC display');
+                });
         }
+
+        // Read-only indicator: real size of the received picture plus the video format.
+        function updateStreamInfo() {
+            var el = document.getElementById('streamInfo');
+            var im = document.getElementById('streamImg');
+            var lost = document.getElementById('disconnectPanel');
+            if (!el || !im) return;
+            var w = im.naturalWidth, h = im.naturalHeight;
+            var text = (w > 0 && h > 0 && !(lost && !lost.hidden))
+                ? (w + '\u00d7' + h + ' \u00b7 ' + VIDEO_STREAM.format)
+                : '\u2014';
+            if (el.textContent !== text) el.textContent = text;
+        }
+        setInterval(updateStreamInfo, 1000);
 
         fetch('/config').then(function (r) { return r.json(); }).then(function (c) {
             if (c && c.inputMode) inputMode = c.inputMode;
-            if (!c || !c.streamHeight) return;
-            updateResUi(nearestRes(c.streamHeight));
         }).catch(function () {});
     </script>
 </body>

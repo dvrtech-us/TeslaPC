@@ -423,6 +423,27 @@ fn png_asset_is_raw_bytes() {
 }
 
 #[test]
+fn main_page_has_no_resolution_picker_and_settings_applies_it_on_tap() {
+    let text = |path: &str| String::from_utf8(assets::asset(path).unwrap().bytes.to_vec()).unwrap();
+    let index = text("/index.html");
+    for gone in ["resBtn", "toggleResPicker", "pickRes", "resPicker"] {
+        assert!(!index.contains(gone), "index.html still has {gone}");
+    }
+    assert!(index.contains("inputMode"));
+    assert!(index.contains("id=\"streamInfo\""));
+    assert!(index.contains("fitScreen(this)"));
+
+    let config = text("/config.html");
+    assert!(config.contains("Largest picture height sent to the car"));
+    assert!(config.contains("A video that is already playing keeps its size"));
+    assert!(config.contains("changes the PC's real display resolution"));
+    assert!(config.contains("does not restore the previous resolution"));
+    assert!(config.contains("Nothing to save."));
+    assert!(!config.contains("body.set('streamHeight', form"));
+    assert!(!config.contains("name=\"streamHeight\""));
+}
+
+#[test]
 fn linux_uinput_records_cover_touch_mouse_wheel_and_keys() {
     use teslapc::decisions::linux_input::{linux_abs_axes, linux_key_events, linux_pointer_events, linux_repeat_events, linux_wheel_events, ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_SLOT, ABS_MT_TRACKING_ID, ABS_X, ABS_Y, BTN_LEFT, EV_ABS, EV_KEY, EV_REL, KEY_ENTER, KEY_LEFTCTRL, KEY_U, LINUX_WHEEL_NOTCH, REL_WHEEL};
 

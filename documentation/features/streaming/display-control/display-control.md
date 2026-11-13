@@ -4,6 +4,6 @@
 
 `best_for_aspect` picks the mode whose aspect is closest to the viewport, heights in `[480, max(480, stream height)]`. A near-tie within `0.01` prefers the larger area. The desktop changes only when the chosen mode differs. `try_set_mode` uses `ChangeDisplaySettingsW`. A refused change returns the current mode and `changed: false`.
 
-The resolution picker (`480`, `720`, `1080`) posts `streamHeight` only. It does not change the desktop.
+The Settings page resolution buttons (`480`, `720`, `1080`) post `streamHeight` only on tap. They do not change the desktop. The main page has no resolution control. Its Fit screen button calls `/display/match`; because `changed: false` also covers a refused mode change or no eligible mode, the page says `PC display unchanged (<w>x<h>)`, not that the display already fits. The server does not restore the previous resolution.
 
 Linux `display_snapshot` runs `xrandr --query` and `wlr-randr`, then `choose_display_query`. Wayland prefers the wlr-randr mode list. `try_set_mode` uses `display_set_args`: `wlr-randr --output <name> --mode WxH` when the session is Wayland and wlr-randr returned modes, otherwise `xrandr --output <name> --mode WxH`. A failure returns `changed: false`.
