@@ -159,6 +159,12 @@ pub fn grab_dxgi() -> Result<GrabOutcome, String> {
                     return Err(format!("AcquireNextFrame: {err}"));
                 }
                 Ok(()) => {
+                    if !crate::decisions::capture::dxgi_frame_has_image(info.LastPresentTime) {
+                        // Pointer-only update, or the first acquire after DuplicateOutput, whose
+                        // texture can still be black. The desktop image did not change.
+                        let _ = dup.ReleaseFrame();
+                        return Ok(GrabOutcome::NoFrame);
+                    }
                     let resource = match resource {
                         Some(resource) => resource,
                         None => {

@@ -123,3 +123,10 @@ pub fn no_frame_action(produced_since_selected: bool, have_last_jpeg: bool, ms_s
         NoFrameAction::Wait
     }
 }
+
+/// `DXGI_OUTDUPL_FRAME_INFO::LastPresentTime` is zero when the desktop image was not updated
+/// (a pointer-only update, or the first acquire after `DuplicateOutput`, whose texture can
+/// be black). Such a frame is "no new frame", not a picture to judge or encode.
+pub fn dxgi_frame_has_image(last_present_time: i64) -> bool {
+    last_present_time != 0
+}

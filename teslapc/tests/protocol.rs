@@ -829,3 +829,11 @@ fn touch_repeat_only_keeps_a_held_contact_alive_on_the_default_desktop() {
     assert!(!touch_repeat_applies(true, false));
     assert!(!touch_repeat_applies(false, false));
 }
+
+#[test]
+fn dxgi_frame_without_a_present_time_is_not_a_picture() {
+    use teslapc::decisions::capture::dxgi_frame_has_image;
+    assert!(!dxgi_frame_has_image(0));
+    assert!(dxgi_frame_has_image(1));
+    assert!(dxgi_frame_has_image(133_000_000_000));
+}
