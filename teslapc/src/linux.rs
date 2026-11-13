@@ -21,14 +21,15 @@ use crate::decisions::display::{choose_display_query, display_set_args};
 use crate::decisions::linux_input::{linux_abs_axes, linux_key_events, linux_pointer_events, linux_repeat_events, linux_wheel_events, EvdevEvent, BTN_LEFT, BTN_RIGHT, BTN_TOUCH, EV_ABS, EV_KEY, EV_REL, KEY_DELETE, REL_WHEEL};
 use crate::decisions::portal::{create_session_message, parse_dbus_header, parse_object_path, parse_portal_response, pipewire_hello, select_sources_message, start_message, PortalResponse};
 use crate::paths;
-use crate::platform::Grab;
+use crate::platform::{Grab, GrabOutcome};
 use crate::state::App;
 
-pub fn grab(backend: CaptureBackend) -> Result<Grab, String> {
+pub fn grab(backend: CaptureBackend) -> Result<GrabOutcome, String> {
     match backend {
         CaptureBackend::Wgc => grab_portal(),
         CaptureBackend::Dxgi | CaptureBackend::Gdi => grab_x11(),
     }
+    .map(GrabOutcome::Frame)
 }
 
 fn is_wayland() -> bool {

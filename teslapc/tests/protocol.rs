@@ -7,7 +7,7 @@ use std::path::Path;
 use teslapc::assets;
 use teslapc::decisions::audio::{cover_silence, format_message, is_silent, keepalive_bytes, keepalive_noise, should_inject_silence, KeepaliveInput, KEEPALIVE_NOISE_AMPLITUDE, KEEPALIVE_POLL_MS, SILENCE_MAX_MS, SILENCE_START_MS};
 use teslapc::decisions::bypass::linux_bypass_plan;
-use teslapc::decisions::capture::{backend_after_frame, first_capture_backend, BackendStep, CaptureBackend};
+use teslapc::decisions::capture::{backend_after_frame, first_capture_backend, no_frame_action, BackendStep, CaptureBackend, NoFrameAction, NO_FRAME_FAIL_MS, REPUBLISH_INTERVAL_MS};
 use teslapc::decisions::config::{apply_config_body, public_config_json, PublicConfig, KEY_CF_TOKEN};
 use teslapc::decisions::display::{best_for_aspect, Mode};
 use teslapc::decisions::history::{watched_now, WATCHED_FRACTION};
@@ -353,6 +353,28 @@ fn black_frame_tries_the_next_backend() {
         backend_after_frame(CaptureBackend::Wgc, true, &color),
         BackendStep::Keep(CaptureBackend::Wgc)
     );
+}
+
+#[test]
+fn still_screen_keeps_the_backend_and_republishes_the_last_jpeg() {
+    assert_eq!(REPUBLISH_INTERVAL_MS, 1000);
+    assert_eq!(NO_FRAME_FAIL_MS, 2000);
+    // A backend that has produced a frame never fails on "no new frame", however long it is still.
+    assert_eq!(no_frame_action(true, true, 600_000, 0), NoFrameAction::Wait);
+    assert_eq!(no_frame_action(true, true, 600_000, 999), NoFrameAction::Wait);
+    assert_eq!(no_frame_action(true, true, 600_000, 1000), NoFrameAction::Republish);
+    // No stored JPEG (the encode failed) means nothing to repeat.
+    assert_eq!(no_frame_action(true, false, 600_000, 5000), NoFrameAction::Wait);
+}
+
+#[test]
+fn backend_that_never_produced_a_frame_fails_after_two_seconds() {
+    assert_eq!(no_frame_action(false, false, 0, 0), NoFrameAction::Wait);
+    assert_eq!(no_frame_action(false, false, 1999, 5000), NoFrameAction::Wait);
+    assert_eq!(no_frame_action(false, false, 2000, 0), NoFrameAction::Fail);
+    // A JPEG left over from a previous backend is not repeated for one that has produced nothing.
+    assert_eq!(no_frame_action(false, true, 1500, 5000), NoFrameAction::Wait);
+    assert_eq!(no_frame_action(false, true, 2500, 5000), NoFrameAction::Fail);
 }
 
 #[test]

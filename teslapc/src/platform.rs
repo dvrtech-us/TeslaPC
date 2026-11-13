@@ -10,7 +10,15 @@ pub struct Grab {
     pub height: i32,
 }
 
-pub fn grab(backend: CaptureBackend) -> Result<Grab, String> {
+/// What one capture attempt produced. `Err` is a failed backend; `NoFrame` is a healthy session
+/// with nothing new to show (a still screen under WGC or DXGI).
+#[derive(Debug)]
+pub enum GrabOutcome {
+    Frame(Grab),
+    NoFrame,
+}
+
+pub fn grab(backend: CaptureBackend) -> Result<GrabOutcome, String> {
     #[cfg(windows)]
     {
         return crate::win::grab(backend);

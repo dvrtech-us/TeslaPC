@@ -17,25 +17,25 @@ use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SetCursorPos, Se
 
 use crate::decisions::bypass::{windows_portproxy_args, BYPASS_IP, HOTSPOT_WATCHDOG_MS};
 use crate::decisions::capture::CaptureBackend;
-use crate::platform::Grab;
+use crate::platform::{Grab, GrabOutcome};
 use crate::state::App;
 
-pub fn grab(backend: CaptureBackend) -> Result<Grab, String> {
+pub fn grab(backend: CaptureBackend) -> Result<GrabOutcome, String> {
     match backend {
         CaptureBackend::Wgc => grab_wgc(),
         CaptureBackend::Dxgi => grab_dxgi(),
-        CaptureBackend::Gdi => grab_gdi(),
+        CaptureBackend::Gdi => grab_gdi().map(GrabOutcome::Frame),
     }
 }
 
-fn grab_wgc() -> Result<Grab, String> {
+fn grab_wgc() -> Result<GrabOutcome, String> {
     if std::env::var("TESLAPC_NO_WGC").ok().as_deref() == Some("1") {
         return Err("TESLAPC_NO_WGC=1".into());
     }
     crate::win_capture::grab_wgc()
 }
 
-fn grab_dxgi() -> Result<Grab, String> {
+fn grab_dxgi() -> Result<GrabOutcome, String> {
     crate::win_capture::grab_dxgi()
 }
 

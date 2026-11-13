@@ -1,4 +1,4 @@
-//! Capture-backend order and the black-frame handoff.
+//! Capture-backend order, the black-frame handoff, and what to do when a backend has no new frame.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureBackend {
@@ -73,4 +73,40 @@ pub fn backend_after_frame(current: CaptureBackend, capture_ok: bool, bgra: &[u8
 
 pub fn session_should_restart(epoch_at_start: u64, epoch_now: u64) -> bool {
     epoch_at_start != epoch_now
+}
+
+/// A backend that has never produced a frame since it was (re)selected and keeps reporting
+/// "no new frame" for this long is treated as failed so the loop moves on.
+pub const NO_FRAME_FAIL_MS: u64 = 2000;
+
+/// While the screen is still, the last JPEG is published again at most this often so MJPEG
+/// clients keep receiving parts.
+pub const REPUBLISH_INTERVAL_MS: u64 = 1000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoFrameAction {
+    /// Stay on this backend and retry on the next tick.
+    Wait,
+    /// Publish the stored last JPEG again (no re-encode).
+    Republish,
+    /// The backend never produced a frame: treat it as failed.
+    Fail,
+}
+
+/// What the capture loop does when the backend reports "no new frame".
+/// `produced_since_selected`: this backend has delivered a real frame since it was selected.
+/// `ms_since_selected`: time since the backend was (re)selected.
+/// `ms_since_publish`: time since the last JPEG (new or repeated) was published.
+pub fn no_frame_action(produced_since_selected: bool, have_last_jpeg: bool, ms_since_selected: u64, ms_since_publish: u64) -> NoFrameAction {
+    if produced_since_selected {
+        if have_last_jpeg && ms_since_publish >= REPUBLISH_INTERVAL_MS {
+            NoFrameAction::Republish
+        } else {
+            NoFrameAction::Wait
+        }
+    } else if ms_since_selected >= NO_FRAME_FAIL_MS {
+        NoFrameAction::Fail
+    } else {
+        NoFrameAction::Wait
+    }
 }

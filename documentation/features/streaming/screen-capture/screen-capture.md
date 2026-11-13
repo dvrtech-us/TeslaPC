@@ -16,11 +16,23 @@
 
 `first_capture_backend` starts at WGC unless `TESLAPC_NO_WGC=1`, then DXGI, then GDI. `backend_after_frame` switches to the next backend when the grab fails or `frame_is_black` is true. After GDI, a black frame is kept so the chain is not retried forever inside one frame. `grab_gdi` uses `BitBlt` and `GetDIBits`.
 
-`win_capture::grab_wgc` calls `RoInitialize`, creates a `GraphicsCaptureItem` for the primary monitor, turns cursor capture off (`SetIsCursorCaptureEnabled(false)`) and the yellow border off (`SetIsBorderRequired(false)`) when the OS allows it, and copies a BGRA frame. `win_capture::grab_dxgi` calls `DuplicateOutput` and `AcquireNextFrame`, then copies the texture. A failure is the OS error text. `TESLAPC_NO_WGC=1` returns before WGC is opened.
+Every backend's grab returns `Result<GrabOutcome, String>` (`platform.rs`). `GrabOutcome::Frame` is a new frame. `GrabOutcome::NoFrame` means the session is healthy and nothing changed. `Err` is a failed backend. WGC and DXGI only deliver a frame when the screen changes, so a still screen is `NoFrame`, not a failure. Only `Err`, a black frame, or a backend that never produced a frame (below) advances the backend order.
+
+`win_capture::grab_wgc` calls `RoInitialize`, creates a `GraphicsCaptureItem` for the primary monitor, turns cursor capture off (`SetIsCursorCaptureEnabled(false)`) and the yellow border off (`SetIsBorderRequired(false)`) when the OS allows it, and copies a BGRA frame. `TryGetNextFrame` is called once per grab. The `windows` crate maps a null frame to `Error::empty()`, whose code is `S_OK`; `grab_wgc` treats an error with a success code as `NoFrame` and keeps the session. Any other error, or a surface or texture failure, drops the session and returns `Err`. `win_capture::grab_dxgi` calls `DuplicateOutput`, then one `AcquireNextFrame` with `DXGI_ACQUIRE_TIMEOUT_MS` (`100`) per grab, then copies the texture and always calls `ReleaseFrame`. `DXGI_ERROR_WAIT_TIMEOUT` keeps the session and returns `NoFrame`. `DXGI_ERROR_ACCESS_LOST`, `DXGI_ERROR_INVALID_CALL`, and `DXGI_ERROR_SESSION_DISCONNECTED` drop the duplication and reopen it once in the same call; a failed reopen, or a second loss, is `Err`. Other errors drop the session and return `Err`. A failure is the OS error text. `TESLAPC_NO_WGC=1` returns before WGC is opened.
+
+## Still screen
+
+`decisions::capture::no_frame_action` decides what `capture_loop` does on `NoFrame`:
+
+- The backend has produced a real frame since it was selected: stay on it. If a last JPEG is stored and `REPUBLISH_INTERVAL_MS` (`1000`) has passed since the last publish, publish the stored JPEG again through `App::publish_jpeg` (new `seq`, no re-encode). A connected client therefore gets a part at least once a second on a still screen. A client that connects later already receives the stored frame from the watch channel.
+- The backend has not produced a frame since it was (re)selected: wait, and after `NO_FRAME_FAIL_MS` (`2000`) treat it as `Err` (next backend).
+- The selection timer and "produced" flag reset on a backend switch, a `capture_epoch` change, and while the loop is idle (no `/stream` client or `media_mode`). A `capture_epoch` change also clears the stored JPEG.
+
+The per-frame line `[Capture] <backend> frame WxH` is written with `App::log("debug", ...)`, so it only prints when `TESLAPC_LOG_LEVEL=debug`.
 
 ## Linux
 
-On Wayland, `grab_portal` opens an xdg-desktop-portal ScreenCast session (`CreateSession`, `SelectSources`, `Start`) and reads a PipeWire frame for the returned node with `gst-launch-1.0 pipewiresrc`. The PNG is decoded to BGRA. If `gst-launch-1.0` cannot start, the error includes a read of the `pipewire-0` socket. On X11, `grab_x11` asks XComposite to name the root pixmap when the server allows it, and copies pixels with MIT-SHM `shm_get_image` (ZPixmap into the shared-memory segment). A missing MIT-SHM extension is the returned error. A logged-in desktop session is still required.
+On Wayland, `grab_portal` opens an xdg-desktop-portal ScreenCast session (`CreateSession`, `SelectSources`, `Start`) and reads a PipeWire frame for the returned node with `gst-launch-1.0 pipewiresrc`. The PNG is decoded to BGRA. If `gst-launch-1.0` cannot start, the error includes a read of the `pipewire-0` socket. On X11, `grab_x11` asks XComposite to name the root pixmap when the server allows it, and copies pixels with MIT-SHM `shm_get_image` (ZPixmap into the shared-memory segment). A missing MIT-SHM extension is the returned error. A logged-in desktop session is still required. Linux backends always return `GrabOutcome::Frame`.
 
 ## Media
 

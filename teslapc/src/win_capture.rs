@@ -11,7 +11,7 @@ use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TY
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING, ID3D11Device, ID3D11DeviceContext, ID3D11Resource, ID3D11Texture2D,
 };
-use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO, IDXGIAdapter, IDXGIAdapter1, IDXGIDevice, IDXGIFactory1, IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource};
+use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_INVALID_CALL, DXGI_ERROR_SESSION_DISCONNECTED, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO, IDXGIAdapter, IDXGIAdapter1, IDXGIDevice, IDXGIFactory1, IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource};
 use windows::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTOPRIMARY};
 use windows::Win32::Media::Audio::{eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, WAVEFORMATEX};
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED};
@@ -23,8 +23,11 @@ use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
 use windows::Graphics::DirectX::DirectXPixelFormat;
 use windows::Graphics::SizeInt32;
 
-use crate::platform::Grab;
+use crate::platform::{Grab, GrabOutcome};
 use crate::state::{App, AudioFormat};
+
+/// One short wait per DXGI grab; the capture loop paces the retries.
+const DXGI_ACQUIRE_TIMEOUT_MS: u32 = 100;
 
 struct WgcLive {
     device: ID3D11Device,
@@ -44,7 +47,7 @@ thread_local! {
     static DXGI: RefCell<Option<DxgiLive>> = const { RefCell::new(None) };
 }
 
-pub fn grab_wgc() -> Result<Grab, String> {
+pub fn grab_wgc() -> Result<GrabOutcome, String> {
     unsafe {
         if let Err(err) = RoInitialize(RO_INIT_MULTITHREADED) {
             if err.code() != RPC_E_CHANGED_MODE {
@@ -60,38 +63,38 @@ pub fn grab_wgc() -> Result<Grab, String> {
             let live = open_wgc().map_err(|e| e.to_string())?;
             WGC.with(|slot| *slot.borrow_mut() = Some(live));
         }
-        let mut last_err = String::from("Direct3D11CaptureFramePool::TryGetNextFrame returned no frame");
-        for _ in 0..20 {
-            let got = WGC.with(|slot| {
-                let live = slot.borrow();
-                let live = live.as_ref()?;
-                match live.pool.TryGetNextFrame() {
-                    Ok(frame) => Some(Ok(frame)),
-                    Err(err) => Some(Err(err.to_string())),
-                }
-            });
-            match got {
-                Some(Ok(frame)) => {
-                    let surface = frame.Surface().map_err(|e| format!("Direct3D11CaptureFrame::Surface: {e}"))?;
-                    let access: IDirect3DDxgiInterfaceAccess = surface.cast().map_err(|e| format!("IDirect3DDxgiInterfaceAccess: {e}"))?;
-                    let tex: ID3D11Texture2D = access.GetInterface().map_err(|e| format!("GetInterface(ID3D11Texture2D): {e}"))?;
-                    let grab = WGC.with(|slot| {
-                        let live = slot.borrow();
-                        let live = live.as_ref().ok_or_else(|| "WGC session dropped".to_string())?;
-                        read_texture(&live.context, &live.device, &tex)
-                    })?;
-                    let _ = frame.Close();
-                    println!("[Capture] WGC frame {}x{}, cursor capture off", grab.width, grab.height);
-                    let _ = std::io::Write::flush(&mut std::io::stdout());
-                    return Ok(grab);
-                }
-                Some(Err(err)) => last_err = err,
-                None => last_err = "WGC session was not stored".into(),
+        let drop_session = || WGC.with(|slot| *slot.borrow_mut() = None);
+        let got = WGC.with(|slot| slot.borrow().as_ref().map(|live| live.pool.TryGetNextFrame()));
+        let frame = match got {
+            Some(Ok(frame)) => frame,
+            // WGC only produces a frame when the screen changes. The projection maps a null
+            // frame to `Error::empty()`, whose code is S_OK, so a success code here means
+            // "no new frame" and the session is healthy.
+            Some(Err(err)) if err.code().is_ok() => return Ok(GrabOutcome::NoFrame),
+            Some(Err(err)) => {
+                drop_session();
+                return Err(format!("WGC TryGetNextFrame: {err}"));
             }
-            thread::sleep(Duration::from_millis(20));
+            None => return Err("WGC session was not stored".into()),
+        };
+        let grab = (|| {
+            let surface = frame.Surface().map_err(|e| format!("Direct3D11CaptureFrame::Surface: {e}"))?;
+            let access: IDirect3DDxgiInterfaceAccess = surface.cast().map_err(|e| format!("IDirect3DDxgiInterfaceAccess: {e}"))?;
+            let tex: ID3D11Texture2D = access.GetInterface().map_err(|e| format!("GetInterface(ID3D11Texture2D): {e}"))?;
+            WGC.with(|slot| {
+                let live = slot.borrow();
+                let live = live.as_ref().ok_or_else(|| "WGC session dropped".to_string())?;
+                read_texture(&live.context, &live.device, &tex)
+            })
+        })();
+        let _ = frame.Close();
+        match grab {
+            Ok(grab) => Ok(GrabOutcome::Frame(grab)),
+            Err(err) => {
+                drop_session();
+                Err(err)
+            }
         }
-        WGC.with(|slot| *slot.borrow_mut() = None);
-        Err(format!("WGC TryGetNextFrame: {last_err}"))
     }
 }
 
@@ -116,24 +119,33 @@ unsafe fn open_wgc() -> windows::core::Result<WgcLive> {
     Ok(WgcLive { device, context, pool, _session: session })
 }
 
-pub fn grab_dxgi() -> Result<Grab, String> {
+/// One `AcquireNextFrame` per call. A wait timeout means the screen did not change: the session
+/// is kept and the result is `NoFrame`. A lost duplication (desktop switch, mode change,
+/// sleep/resume) is reopened once in place; only a failed reopen is an `Err`.
+pub fn grab_dxgi() -> Result<GrabOutcome, String> {
     unsafe {
-        if DXGI.with(|slot| slot.borrow().is_none()) {
-            let live = open_dxgi().map_err(|e| format!("DXGI DuplicateOutput: {e}"))?;
-            DXGI.with(|slot| *slot.borrow_mut() = Some(live));
-        }
-        let (dup, device, context) = DXGI.with(|slot| {
-            let live = slot.borrow();
-            let live = live.as_ref().ok_or_else(|| "DXGI session dropped".to_string())?;
-            Ok::<_, String>((live.dup.clone(), live.device.clone(), live.context.clone()))
-        })?;
-        let mut last = String::from("AcquireNextFrame was not called");
-        for _ in 0..8 {
+        let mut reopened = false;
+        loop {
+            if DXGI.with(|slot| slot.borrow().is_none()) {
+                let live = open_dxgi().map_err(|e| format!("DXGI DuplicateOutput: {e}"))?;
+                DXGI.with(|slot| *slot.borrow_mut() = Some(live));
+            }
+            let (dup, device, context) = DXGI.with(|slot| {
+                let live = slot.borrow();
+                let live = live.as_ref().ok_or_else(|| "DXGI session dropped".to_string())?;
+                Ok::<_, String>((live.dup.clone(), live.device.clone(), live.context.clone()))
+            })?;
             let mut info = std::mem::zeroed::<DXGI_OUTDUPL_FRAME_INFO>();
             let mut resource: Option<IDXGIResource> = None;
-            match dup.AcquireNextFrame(100, &mut info, &mut resource) {
-                Err(err) if err.code() == DXGI_ERROR_WAIT_TIMEOUT => {
-                    last = format!("AcquireNextFrame: {err}");
+            match dup.AcquireNextFrame(DXGI_ACQUIRE_TIMEOUT_MS, &mut info, &mut resource) {
+                Err(err) if err.code() == DXGI_ERROR_WAIT_TIMEOUT => return Ok(GrabOutcome::NoFrame),
+                Err(err) if dxgi_session_lost(err.code()) => {
+                    DXGI.with(|slot| *slot.borrow_mut() = None);
+                    if reopened {
+                        return Err(format!("AcquireNextFrame after reopen: {err}"));
+                    }
+                    reopened = true;
+                    println!("[Capture] DXGI duplication lost ({err}); reopening.");
                 }
                 Err(err) => {
                     DXGI.with(|slot| *slot.borrow_mut() = None);
@@ -158,16 +170,15 @@ pub fn grab_dxgi() -> Result<Grab, String> {
                     };
                     let grab = read_texture(&context, &device, &tex);
                     let _ = dup.ReleaseFrame();
-                    let grab = grab?;
-                    println!("[Capture] DXGI frame {}x{}", grab.width, grab.height);
-                    let _ = std::io::Write::flush(&mut std::io::stdout());
-                    return Ok(grab);
+                    return grab.map(GrabOutcome::Frame);
                 }
             }
         }
-        DXGI.with(|slot| *slot.borrow_mut() = None);
-        Err(last)
     }
+}
+
+fn dxgi_session_lost(code: windows::core::HRESULT) -> bool {
+    code == DXGI_ERROR_ACCESS_LOST || code == DXGI_ERROR_INVALID_CALL || code == DXGI_ERROR_SESSION_DISCONNECTED
 }
 
 unsafe fn open_dxgi() -> windows::core::Result<DxgiLive> {
