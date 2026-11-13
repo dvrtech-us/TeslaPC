@@ -658,7 +658,7 @@
                 if (settled) return;
                 settled = true;
                 fitDone(btn);
-                fitShow(btn, 'Could not change the PC display');
+                fitShow(btn, 'Change failed');
             }, 5000);
             fetch('/display/match?w=' + w + '&h=' + h)
                 .then(function (r) {
@@ -670,13 +670,13 @@
                     settled = true;
                     fitDone(btn);
                     var size = d.width + 'x' + d.height;
-                    fitShow(btn, d.changed ? ('PC display set to ' + size) : ('PC display unchanged (' + size + ')'));
+                    fitShow(btn, d.changed ? ('PC set to ' + size) : ('Unchanged ' + size));
                 })
                 .catch(function () {
                     if (settled) return;
                     settled = true;
                     fitDone(btn);
-                    fitShow(btn, 'Could not change the PC display');
+                    fitShow(btn, 'Change failed');
                 });
         }
 

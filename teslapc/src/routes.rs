@@ -523,6 +523,8 @@ async fn fallback(State(app): State<App>, req: Request) -> Response {
         Some(asset) => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, asset.content_type)
+            // Pages are embedded in the binary; a new build must not be hidden by the browser cache.
+            .header(header::CACHE_CONTROL, "no-cache")
             .body(Body::from(Bytes::from(asset.bytes)))
             .unwrap(),
         None => StatusCode::NOT_FOUND.into_response(),
@@ -540,6 +542,7 @@ fn html_response(bytes: Vec<u8>, port: u16, host: &str) -> Response {
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+        .header(header::CACHE_CONTROL, "no-cache")
         .body(Body::from(html))
         .unwrap()
 }
