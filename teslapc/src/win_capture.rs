@@ -255,6 +255,7 @@ pub fn run_loopback(app: App) -> Result<(), String> {
         CoTaskMemFree(Some(mix as *const core::ffi::c_void));
         let capture: IAudioCaptureClient = client.GetService().map_err(|e| format!("IAudioClient::GetService(IAudioCaptureClient): {e}"))?;
         client.Start().map_err(|e| format!("IAudioClient::Start: {e}"))?;
+        app.inner.pcm.set_sample_kind(format.bits_per_sample, format.sample_format == "float");
         if let Ok(mut slot) = app.inner.audio_format.lock() {
             *slot = format;
         }
@@ -278,8 +279,13 @@ pub fn run_loopback(app: App) -> Result<(), String> {
             capture.GetBuffer(&mut data, &mut count, &mut flags, None, None).map_err(|e| format!("IAudioCaptureClient::GetBuffer: {e}"))?;
             let nbytes = count as usize * block.max(1);
             if !data.is_null() && nbytes > 0 && !app.inner.pcm.media_mode.load(std::sync::atomic::Ordering::Relaxed) {
-                let slice = std::slice::from_raw_parts(data, nbytes);
-                app.inner.pcm.push(bytes::Bytes::copy_from_slice(slice), true);
+                // AUDCLNT_BUFFERFLAGS_SILENT: the buffer content is undefined and stands for silence.
+                let pcm = if flags & 0x2 != 0 {
+                    bytes::Bytes::from(vec![0u8; nbytes])
+                } else {
+                    bytes::Bytes::copy_from_slice(std::slice::from_raw_parts(data, nbytes))
+                };
+                app.inner.pcm.push(pcm, true);
             }
             capture.ReleaseBuffer(count).map_err(|e| format!("IAudioCaptureClient::ReleaseBuffer: {e}"))?;
         }
@@ -291,7 +297,8 @@ unsafe fn describe_wave(mix: *mut WAVEFORMATEX) -> AudioFormat {
     let mut is_float = fmt.wFormatTag == 3;
     if fmt.wFormatTag == 0xFFFE {
         let sub = std::ptr::read_unaligned((mix as *const u8).add(24) as *const windows::core::GUID);
-        is_float = sub.to_u128() & 0xffff == 3;
+        // KSDATAFORMAT_SUBTYPE_IEEE_FLOAT is 00000003-0000-0010-8000-00aa00389b71.
+        is_float = sub.data1 == 3;
     }
     AudioFormat::from_wave(fmt.nSamplesPerSec, fmt.wBitsPerSample, fmt.nChannels, is_float)
 }

@@ -461,10 +461,15 @@ pub async fn touch_repeat(app: App) {
 }
 
 pub async fn silence_keepalive(app: App) {
+    let mut last_tick = std::time::Instant::now();
     loop {
         tokio::time::sleep(Duration::from_millis(crate::decisions::audio::KEEPALIVE_POLL_MS)).await;
+        // The sleep overshoots, so each buffer covers the time that really passed.
+        let elapsed_ms = last_tick.elapsed().as_millis() as u64;
+        last_tick = std::time::Instant::now();
         let input = crate::decisions::audio::KeepaliveInput {
             idle_ms: app.inner.pcm.idle_ms(),
+            silent_ms: app.inner.pcm.silent_ms(),
             queue_empty: app.inner.pcm.queue_empty(),
             capturing: app.inner.pcm.capturing.load(Ordering::Relaxed),
             media_mode: app.inner.pcm.media_mode.load(Ordering::Relaxed),
@@ -472,8 +477,13 @@ pub async fn silence_keepalive(app: App) {
             typical_buffer_bytes: app.inner.pcm.typical_bytes.load(Ordering::Relaxed),
         };
         if crate::decisions::audio::should_inject_silence(input) {
-            let n = input.typical_buffer_bytes;
-            app.inner.pcm.push(Bytes::from(vec![0u8; n]), false);
+            let n = app
+                .inner
+                .audio_format
+                .lock()
+                .map(|f| crate::decisions::audio::keepalive_bytes(elapsed_ms, f.sample_rate, f.bits_per_sample, f.channels))
+                .unwrap_or(0);
+            app.inner.pcm.push(app.inner.pcm.noise(n), false);
         }
     }
 }

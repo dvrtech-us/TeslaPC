@@ -3,14 +3,14 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::process::Child;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use bytes::Bytes;
 use tokio::sync::{mpsc, Notify, watch};
 
-use crate::decisions::audio::{format_message, sample_format_name};
+use crate::decisions::audio::{cover_silence, format_message, is_silent, keepalive_noise, sample_format_name};
 use crate::decisions::config::{input_mode_from, parse_log_level, KEY_INPUT_MODE, KEY_LOG_LEVEL, KEY_STREAM_HEIGHT, KEY_VIDEO_ROOT};
 use crate::decisions::stream::{clamp_stream_height, DEFAULT_STREAM_HEIGHT};
 use crate::paths;
@@ -64,7 +64,13 @@ pub struct PcmHub {
     pub media_mode: AtomicBool,
     pub capturing: AtomicBool,
     pub typical_bytes: AtomicUsize,
+    /// Last captured packet of any content.
     pub last_real: Mutex<Instant>,
+    /// Last captured packet that held sound.
+    pub last_sound: Mutex<Instant>,
+    /// Sample width and float flag of the capture format, for keepalive noise.
+    pub sample_kind: Mutex<(u16, bool)>,
+    pub noise_seed: AtomicU32,
 }
 
 impl PcmHub {
@@ -78,6 +84,9 @@ impl PcmHub {
             capturing: AtomicBool::new(false),
             typical_bytes: AtomicUsize::new(0),
             last_real: Mutex::new(Instant::now()),
+            last_sound: Mutex::new(Instant::now()),
+            sample_kind: Mutex::new((32, true)),
+            noise_seed: AtomicU32::new(0),
         }
     }
 
@@ -85,15 +94,44 @@ impl PcmHub {
         self.queue.lock().map(|q| q.is_empty()).unwrap_or(true)
     }
 
+    pub fn set_sample_kind(&self, bits_per_sample: u16, is_float: bool) {
+        if let Ok(mut kind) = self.sample_kind.lock() {
+            *kind = (bits_per_sample, is_float);
+        }
+    }
+
+    /// `nbytes` of keepalive noise in the capture sample format.
+    pub fn noise(&self, nbytes: usize) -> Bytes {
+        let (bits, is_float) = self.sample_kind.lock().map(|k| *k).unwrap_or((32, true));
+        let mut seed = self.noise_seed.load(Ordering::Relaxed);
+        let out = keepalive_noise(nbytes, bits, is_float, &mut seed);
+        self.noise_seed.store(seed, Ordering::Relaxed);
+        Bytes::from(out)
+    }
+
+    /// `real` is a captured packet. A silent captured packet is replaced with keepalive noise
+    /// until the silence has lasted `SILENCE_MAX_MS`, then it is sent as captured.
     pub fn push(&self, bytes: Bytes, real: bool) {
-        if self.client_count.load(Ordering::Relaxed) == 0 || bytes.is_empty() {
+        if bytes.is_empty() {
             return;
         }
+        let mut bytes = bytes;
         if real {
+            let now = Instant::now();
             if let Ok(mut last) = self.last_real.lock() {
-                *last = Instant::now();
+                *last = now;
             }
             self.typical_bytes.store(bytes.len(), Ordering::Relaxed);
+            if !is_silent(&bytes) {
+                if let Ok(mut last) = self.last_sound.lock() {
+                    *last = now;
+                }
+            } else if cover_silence(self.silent_ms()) {
+                bytes = self.noise(bytes.len());
+            }
+        }
+        if self.client_count.load(Ordering::Relaxed) == 0 {
+            return;
         }
         if let Ok(mut q) = self.queue.lock() {
             q.push_back(bytes);
@@ -102,6 +140,13 @@ impl PcmHub {
             }
         }
         self.notify.notify_one();
+    }
+
+    pub fn silent_ms(&self) -> u64 {
+        self.last_sound
+            .lock()
+            .map(|t| t.elapsed().as_millis() as u64)
+            .unwrap_or(0)
     }
 
     pub fn idle_ms(&self) -> u64 {

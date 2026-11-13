@@ -16,7 +16,7 @@ pub mod renewal;
 pub mod socket;
 pub mod stream;
 
-pub use audio::{format_message, should_inject_silence, KeepaliveInput, KEEPALIVE_POLL_MS, SILENCE_MAX_MS, SILENCE_START_MS};
+pub use audio::{cover_silence, format_message, is_silent, keepalive_bytes, keepalive_noise, should_inject_silence, KeepaliveInput, KEEPALIVE_NOISE_AMPLITUDE, KEEPALIVE_POLL_MS, SILENCE_MAX_MS, SILENCE_START_MS};
 pub use bypass::linux_bypass_plan;
 pub use capture::{backend_after_frame, first_capture_backend, frame_is_black, BackendStep, CaptureBackend};
 pub use config::apply_config_body;

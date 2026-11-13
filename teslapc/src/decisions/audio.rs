@@ -1,17 +1,23 @@
-//! Audio format announcement and silence-keepalive decision.
+//! Audio format announcement, silence detection, and the keepalive-noise decision.
 
 use serde_json::json;
 
-/// Inject silence only after the loopback has been idle this long.
+/// Inject keepalive noise only after the loopback has delivered no packet for this long.
 pub const SILENCE_START_MS: u64 = 250;
-/// Stop injecting after this much continuous idle time.
-pub const SILENCE_MAX_MS: u64 = 30_000;
+/// Silence shorter than this is covered with keepalive noise so the remote player keeps the
+/// audio source. After this much continuous silence the noise stops.
+pub const SILENCE_MAX_MS: u64 = 10_000;
+/// Peak of the keepalive noise as a fraction of full scale (about -72 dBFS).
+pub const KEEPALIVE_NOISE_AMPLITUDE: f32 = 1.0 / 4096.0;
 /// How often the keepalive task wakes.
 pub const KEEPALIVE_POLL_MS: u64 = 20;
 
 #[derive(Debug, Clone, Copy)]
 pub struct KeepaliveInput {
+    /// Time since the last captured packet of any content.
     pub idle_ms: u64,
+    /// Time since the last captured packet that held sound.
+    pub silent_ms: u64,
     pub queue_empty: bool,
     pub capturing: bool,
     pub media_mode: bool,
@@ -26,7 +32,63 @@ pub fn should_inject_silence(input: KeepaliveInput) -> bool {
         && input.typical_buffer_bytes > 0
         && input.queue_empty
         && input.idle_ms >= SILENCE_START_MS
-        && input.idle_ms < SILENCE_MAX_MS
+        && cover_silence(input.silent_ms)
+}
+
+/// Longest stretch one keepalive buffer may cover, so a stalled task cannot queue a burst.
+pub const KEEPALIVE_MAX_CHUNK_MS: u64 = 100;
+
+/// Bytes of keepalive audio that cover `elapsed_ms` of real time, in whole frames.
+pub fn keepalive_bytes(elapsed_ms: u64, sample_rate: u32, bits_per_sample: u16, channels: u16) -> usize {
+    let frame = (bits_per_sample as usize / 8) * channels as usize;
+    let frames = sample_rate as u64 * elapsed_ms.min(KEEPALIVE_MAX_CHUNK_MS) / 1000;
+    frames as usize * frame
+}
+
+/// A packet is silent when every byte is zero. That holds for float and integer PCM.
+pub fn is_silent(pcm: &[u8]) -> bool {
+    pcm.iter().all(|b| *b == 0)
+}
+
+/// Silence is covered with keepalive noise until it has lasted `SILENCE_MAX_MS`.
+pub fn cover_silence(silent_ms: u64) -> bool {
+    silent_ms < SILENCE_MAX_MS
+}
+
+/// `nbytes` of low-level white noise in the capture sample format. `seed` carries the
+/// generator state between calls. An unknown sample width yields zeros.
+pub fn keepalive_noise(nbytes: usize, bits_per_sample: u16, is_float: bool, seed: &mut u32) -> Vec<u8> {
+    let mut out = vec![0u8; nbytes];
+    let width = match (bits_per_sample, is_float) {
+        (32, true) | (32, false) => 4,
+        (24, false) => 3,
+        (16, false) => 2,
+        _ => return out,
+    };
+    if *seed == 0 {
+        *seed = 0x9E37_79B9;
+    }
+    for sample in out.chunks_exact_mut(width) {
+        let mut x = *seed;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        *seed = x;
+        let unit = ((x >> 8) as f32 / 8_388_608.0) - 1.0;
+        let value = unit * KEEPALIVE_NOISE_AMPLITUDE;
+        if is_float {
+            sample.copy_from_slice(&value.to_le_bytes());
+        } else {
+            let scale = match width {
+                2 => 32_768.0f64,
+                3 => 8_388_608.0,
+                _ => 2_147_483_648.0,
+            };
+            let int = (value as f64 * scale) as i32;
+            sample.copy_from_slice(&int.to_le_bytes()[..width]);
+        }
+    }
+    out
 }
 
 pub fn sample_format_name(bits_per_sample: u16, is_float: bool) -> String {

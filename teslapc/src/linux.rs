@@ -722,6 +722,7 @@ pub fn start_audio(app: App) {
             }
         };
         app.inner.pcm.capturing.store(true, std::sync::atomic::Ordering::Relaxed);
+        app.inner.pcm.set_sample_kind(32, true);
         if let Ok(mut fmt) = app.inner.audio_format.lock() {
             *fmt = crate::state::AudioFormat::from_wave(48000, 32, 2, true);
         }

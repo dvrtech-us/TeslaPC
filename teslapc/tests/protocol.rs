@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use teslapc::assets;
-use teslapc::decisions::audio::{format_message, should_inject_silence, KeepaliveInput, KEEPALIVE_POLL_MS, SILENCE_MAX_MS, SILENCE_START_MS};
+use teslapc::decisions::audio::{cover_silence, format_message, is_silent, keepalive_bytes, keepalive_noise, should_inject_silence, KeepaliveInput, KEEPALIVE_NOISE_AMPLITUDE, KEEPALIVE_POLL_MS, SILENCE_MAX_MS, SILENCE_START_MS};
 use teslapc::decisions::bypass::linux_bypass_plan;
 use teslapc::decisions::capture::{backend_after_frame, first_capture_backend, BackendStep, CaptureBackend};
 use teslapc::decisions::config::{apply_config_body, public_config_json, PublicConfig, KEY_CF_TOKEN};
@@ -112,7 +112,7 @@ fn mjpeg_part_headers() {
 #[test]
 fn audio_format_and_silence_keepalive() {
     assert_eq!(SILENCE_START_MS, 250);
-    assert_eq!(SILENCE_MAX_MS, 30_000);
+    assert_eq!(SILENCE_MAX_MS, 10_000);
     assert_eq!(KEEPALIVE_POLL_MS, 20);
 
     let json = format_message(48000, 32, 2, "float");
@@ -124,6 +124,7 @@ fn audio_format_and_silence_keepalive() {
 
     let base = KeepaliveInput {
         idle_ms: 250,
+        silent_ms: 250,
         queue_empty: true,
         capturing: true,
         media_mode: false,
@@ -132,13 +133,59 @@ fn audio_format_and_silence_keepalive() {
     };
     assert!(should_inject_silence(base));
     assert!(!should_inject_silence(KeepaliveInput { idle_ms: 249, ..base }));
-    assert!(!should_inject_silence(KeepaliveInput { idle_ms: 30_000, ..base }));
-    assert!(should_inject_silence(KeepaliveInput { idle_ms: 29_999, ..base }));
+    assert!(!should_inject_silence(KeepaliveInput { idle_ms: 10_000, silent_ms: 10_000, ..base }));
+    assert!(should_inject_silence(KeepaliveInput { idle_ms: 9_999, silent_ms: 9_999, ..base }));
+    // Silent packets kept arriving until now, so the packet gap is short but the silence is long.
+    assert!(!should_inject_silence(KeepaliveInput { idle_ms: 300, silent_ms: 10_000, ..base }));
     assert!(!should_inject_silence(KeepaliveInput { media_mode: true, ..base }));
     assert!(!should_inject_silence(KeepaliveInput { queue_empty: false, ..base }));
     assert!(!should_inject_silence(KeepaliveInput { has_clients: false, ..base }));
     assert!(!should_inject_silence(KeepaliveInput { typical_buffer_bytes: 0, ..base }));
     assert!(!should_inject_silence(KeepaliveInput { capturing: false, ..base }));
+}
+
+#[test]
+fn keepalive_noise_is_quiet_nonzero_and_stops_after_ten_seconds() {
+    assert!(cover_silence(0));
+    assert!(cover_silence(9_999));
+    assert!(!cover_silence(10_000));
+
+    assert!(is_silent(&[0u8; 3840]));
+    let mut one = [0u8; 3840];
+    one[1234] = 1;
+    assert!(!is_silent(&one));
+
+    let mut seed = 0u32;
+    let float = keepalive_noise(3840, 32, true, &mut seed);
+    assert_eq!(float.len(), 3840);
+    assert!(!is_silent(&float));
+    let peak = float.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]).abs()).fold(0.0f32, f32::max);
+    assert!(peak > 0.0 && peak <= KEEPALIVE_NOISE_AMPLITUDE);
+    // The generator state advances, so the next buffer differs.
+    assert_ne!(keepalive_noise(3840, 32, true, &mut seed), float);
+
+    let pcm16 = keepalive_noise(1920, 16, false, &mut seed);
+    assert!(!is_silent(&pcm16));
+    let peak16 = pcm16.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]]).unsigned_abs()).max().unwrap();
+    assert!(peak16 >= 1 && peak16 <= 8);
+
+    let pcm24 = keepalive_noise(2880, 24, false, &mut seed);
+    assert!(!is_silent(&pcm24));
+    let pcm32 = keepalive_noise(3840, 32, false, &mut seed);
+    let peak32 = pcm32.chunks_exact(4).map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]).unsigned_abs()).max().unwrap();
+    assert!(peak32 >= 1 && peak32 <= (1u32 << 31) / 4096);
+
+    // Keepalive buffers cover the elapsed time in whole frames, capped at 100 ms.
+    assert_eq!(keepalive_bytes(20, 48000, 32, 2), 960 * 8);
+    assert_eq!(keepalive_bytes(31, 48000, 32, 2), 1488 * 8);
+    assert_eq!(keepalive_bytes(31, 44100, 16, 2), 1367 * 4);
+    assert_eq!(keepalive_bytes(5_000, 48000, 32, 2), 4800 * 8);
+    assert_eq!(keepalive_bytes(0, 48000, 32, 2), 0);
+
+    // An unknown width stays silent, and a partial trailing sample is left zero.
+    assert!(is_silent(&keepalive_noise(100, 8, false, &mut seed)));
+    let odd = keepalive_noise(6, 32, true, &mut seed);
+    assert_eq!(&odd[4..], &[0, 0]);
 }
 
 #[test]
