@@ -116,6 +116,24 @@ pub fn expand_paste(text: &str) -> Vec<String> {
     out
 }
 
+/// Which injection path one pointer event takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerPath {
+    Touch,
+    Mouse,
+}
+
+/// Touch is used when the mode is touch, touch injection works, and the event is not a
+/// right click (touch has no right button). Otherwise the event goes through the mouse,
+/// including when touch is configured but unavailable.
+pub fn pointer_path(kind: &str, touch_mode: bool, touch_available: bool) -> PointerPath {
+    if touch_mode && touch_available && kind != "rightclick" {
+        PointerPath::Touch
+    } else {
+        PointerPath::Mouse
+    }
+}
+
 /// Hover (move or up with no contact) is ignored. A down is accepted. One contact only.
 pub fn touch_event_applies(kind: &str, contact_down: bool) -> bool {
     match kind {

@@ -13,6 +13,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT, VIRTUAL_KEY, VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F10, VK_F11, VK_F12, VK_F2, VK_F3, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_HOME, VK_INSERT, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::Input::Pointer::{InitializeTouchInjection, InjectTouchInput, POINTER_INFO, POINTER_TOUCH_INFO, POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT, POINTER_FLAG_INRANGE, POINTER_FLAG_UP, POINTER_FLAG_UPDATE, TOUCH_FEEDBACK_DEFAULT};
+use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SetCursorPos, SetProcessDPIAware, PT_TOUCH, SM_CXSCREEN, SM_CYSCREEN};
 
 use crate::decisions::bypass::{windows_portproxy_args, BYPASS_IP, HOTSPOT_WATCHDOG_MS};
@@ -106,7 +107,17 @@ pub fn primary_size() -> (i32, i32) {
 static TOUCH_READY: Mutex<bool> = Mutex::new(false);
 static TOUCH_XY: Mutex<(i32, i32, bool)> = Mutex::new((0, 0, false));
 
-pub fn probe_input() -> bool {
+/// Per-monitor v2 awareness, so `GetSystemMetrics` and `InjectTouchInput` both use physical
+/// pixels. Falls back to system awareness when the context call is refused.
+pub fn init_dpi_awareness() {
+    unsafe {
+        if SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2).is_err() {
+            let _ = SetProcessDPIAware();
+        }
+    }
+}
+
+pub fn probe_touch() -> bool {
     unsafe {
         match InitializeTouchInjection(1, TOUCH_FEEDBACK_DEFAULT) {
             Ok(()) => {
@@ -147,20 +158,21 @@ pub fn inject_wheel(delta: i32) {
 }
 
 pub fn end_contact() {
-    if let Ok(mut xy) = TOUCH_XY.lock() {
-        if xy.2 {
-            let (x, y, _) = *xy;
-            let _ = inject_touch("up", x, y);
+    // Copy the state out and drop the guard: `inject_touch` locks `TOUCH_XY` itself.
+    let (x, y, down) = TOUCH_XY.lock().map(|xy| *xy).unwrap_or((0, 0, false));
+    if down {
+        // `inject_touch("up")` stores the contact as up. Mark it up even if injection fails.
+        let _ = inject_touch("up", x, y);
+        if let Ok(mut xy) = TOUCH_XY.lock() {
             xy.2 = false;
         }
     }
 }
 
 pub fn repeat_touch() {
-    if let Ok(xy) = TOUCH_XY.lock() {
-        if xy.2 {
-            let _ = inject_touch("move", xy.0, xy.1);
-        }
+    let (x, y, down) = TOUCH_XY.lock().map(|xy| *xy).unwrap_or((0, 0, false));
+    if down {
+        let _ = inject_touch("move", x, y);
     }
 }
 
@@ -664,15 +676,34 @@ exit 2
 
 pub fn start_audio(app: App) {
     std::thread::Builder::new().name("WasapiLoopback".into()).spawn(move || {
-        if let Err(err) = run_loopback(app) {
-            println!("[Audio] WASAPI loopback unavailable: {err}");
-            let _ = std::io::Write::flush(&mut std::io::stdout());
+        // Each attempt starts from GetDefaultAudioEndpoint, so a new default device is picked up.
+        let mut last_error = String::new();
+        let mut wait_ms = 0u64;
+        loop {
+            let started = std::time::Instant::now();
+            let result = run_loopback(app.clone());
+            let ran_ms = started.elapsed().as_millis() as u64;
+            app.inner.pcm.capturing.store(false, Ordering::Relaxed);
+            let err = match result {
+                Ok(()) => "WASAPI loopback ended".to_string(),
+                Err(err) => err,
+            };
+            if ran_ms > crate::decisions::audio::LOOPBACK_HEALTHY_RUN_MS {
+                // A healthy run ended, so this failure is news even if the text repeats.
+                last_error.clear();
+            }
+            if err != last_error {
+                println!("[Audio] WASAPI loopback unavailable: {err}. Retrying.");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                last_error = err;
+            }
+            wait_ms = crate::decisions::audio::loopback_backoff_ms(wait_ms, ran_ms);
+            std::thread::sleep(Duration::from_millis(wait_ms));
         }
     }).ok();
 }
 
 fn run_loopback(app: App) -> Result<(), String> {
-    println!("[Audio] WASAPI loopback capture starting");
     crate::win_capture::run_loopback(app)
 }
 

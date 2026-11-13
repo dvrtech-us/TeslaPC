@@ -10,4 +10,5 @@
 - A `WAVE_FORMAT_EXTENSIBLE` mix format is float when the SubFormat GUID `data1 == 3`. A 32-bit float mix format is announced as `float`, not `pcm32`.
 - Media mode suppresses loopback. Stop restores it.
 - A failed loopback device does not stop HTTP.
+- Windows loopback retries forever. Waits are `1`, `2`, `4`, `8`, then `10` s (`loopback_backoff_ms`), reset after a run over `30` s. `capturing` is false between attempts. Each attempt re-reads the default render endpoint. A repeated error text is logged once, not per attempt.
 - Windows loopback is the default render endpoint. After `IAudioClient::Start`, `capturing` is true and `typical_bytes` comes from the mix format so silence keepalive can run.

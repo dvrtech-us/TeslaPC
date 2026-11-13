@@ -91,6 +91,23 @@ pub fn keepalive_noise(nbytes: usize, bits_per_sample: u16, is_float: bool, seed
     out
 }
 
+/// First wait after a failed loopback attempt.
+pub const LOOPBACK_BACKOFF_START_MS: u64 = 1_000;
+/// The wait doubles per consecutive failure up to this cap.
+pub const LOOPBACK_BACKOFF_MAX_MS: u64 = 10_000;
+/// A run longer than this counts as healthy and resets the backoff.
+pub const LOOPBACK_HEALTHY_RUN_MS: u64 = 30_000;
+
+/// Wait before the next loopback attempt. `previous_ms` is the last wait (0 before the
+/// first failure) and `ran_ms` is how long the attempt that just ended ran.
+/// The schedule is 1 s, 2 s, 4 s, 8 s, then 10 s; a run over 30 s starts it again at 1 s.
+pub fn loopback_backoff_ms(previous_ms: u64, ran_ms: u64) -> u64 {
+    if previous_ms == 0 || ran_ms > LOOPBACK_HEALTHY_RUN_MS {
+        return LOOPBACK_BACKOFF_START_MS;
+    }
+    previous_ms.saturating_mul(2).min(LOOPBACK_BACKOFF_MAX_MS)
+}
+
 pub fn sample_format_name(bits_per_sample: u16, is_float: bool) -> String {
     if is_float {
         return "float".to_string();

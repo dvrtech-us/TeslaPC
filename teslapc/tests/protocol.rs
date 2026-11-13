@@ -5,13 +5,13 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use teslapc::assets;
-use teslapc::decisions::audio::{cover_silence, format_message, is_silent, keepalive_bytes, keepalive_noise, should_inject_silence, KeepaliveInput, KEEPALIVE_NOISE_AMPLITUDE, KEEPALIVE_POLL_MS, SILENCE_MAX_MS, SILENCE_START_MS};
+use teslapc::decisions::audio::{cover_silence, format_message, is_silent, keepalive_bytes, keepalive_noise, loopback_backoff_ms, should_inject_silence, KeepaliveInput, KEEPALIVE_NOISE_AMPLITUDE, KEEPALIVE_POLL_MS, LOOPBACK_BACKOFF_MAX_MS, LOOPBACK_BACKOFF_START_MS, LOOPBACK_HEALTHY_RUN_MS, SILENCE_MAX_MS, SILENCE_START_MS};
 use teslapc::decisions::bypass::linux_bypass_plan;
 use teslapc::decisions::capture::{backend_after_frame, first_capture_backend, no_frame_action, BackendStep, CaptureBackend, NoFrameAction, NO_FRAME_FAIL_MS, REPUBLISH_INTERVAL_MS};
 use teslapc::decisions::config::{apply_config_body, public_config_json, PublicConfig, KEY_CF_TOKEN};
 use teslapc::decisions::display::{best_for_aspect, Mode};
 use teslapc::decisions::history::{watched_now, WATCHED_FRACTION};
-use teslapc::decisions::input::{expand_paste, map_key, scale_pointer, touch_event_applies, wheel_delta, TOUCH_REPEAT_MS};
+use teslapc::decisions::input::{expand_paste, map_key, pointer_path, scale_pointer, touch_event_applies, PointerPath, wheel_delta, TOUCH_REPEAT_MS};
 use teslapc::decisions::listing::{render_guts, resolve_browse, FileProgress};
 use teslapc::decisions::media::{ffmpeg_video_args, linux_missing_ffmpeg_error, windows_vlc_plan};
 use teslapc::decisions::renewal::{acme_directory_url, needs_renewal, staging_from_env, RENEWAL_CHECK_HOURS, RENEW_WHEN_DAYS_LEFT};
@@ -567,4 +567,30 @@ fn portal_messages_round_trip_and_the_hand_built_response_parses() {
     assert_eq!(hello.len(), 16);
     assert_eq!(&hello[..8], &[0, 0, 0, 0, 0, 0, 0, 0]);
     assert_eq!(u32::from_le_bytes(hello[8..12].try_into().unwrap()), 1);
+}
+
+#[test]
+fn pointer_falls_back_to_mouse_when_touch_is_unavailable() {
+    assert_eq!(pointer_path("down", true, true), PointerPath::Touch);
+    assert_eq!(pointer_path("move", true, true), PointerPath::Touch);
+    assert_eq!(pointer_path("up", true, true), PointerPath::Touch);
+    assert_eq!(pointer_path("rightclick", true, true), PointerPath::Mouse);
+    assert_eq!(pointer_path("down", true, false), PointerPath::Mouse);
+    assert_eq!(pointer_path("up", true, false), PointerPath::Mouse);
+    assert_eq!(pointer_path("down", false, true), PointerPath::Mouse);
+    assert_eq!(pointer_path("down", false, false), PointerPath::Mouse);
+}
+
+#[test]
+fn loopback_backoff_doubles_to_ten_seconds_and_resets_after_a_healthy_run() {
+    let mut wait = 0;
+    let mut seen = Vec::new();
+    for _ in 0..6 {
+        wait = loopback_backoff_ms(wait, 0);
+        seen.push(wait);
+    }
+    assert_eq!(seen, vec![1_000, 2_000, 4_000, 8_000, 10_000, 10_000]);
+    assert_eq!(loopback_backoff_ms(10_000, 30_001), 1_000);
+    assert_eq!(loopback_backoff_ms(4_000, 30_000), 8_000);
+    assert_eq!((LOOPBACK_BACKOFF_START_MS, LOOPBACK_BACKOFF_MAX_MS, LOOPBACK_HEALTHY_RUN_MS), (1_000, 10_000, 30_000));
 }

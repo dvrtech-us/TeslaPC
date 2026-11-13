@@ -49,10 +49,12 @@ pub fn primary_size() -> (i32, i32) {
     }
 }
 
+/// Mouse and keyboard injection is available. Windows `SendInput` needs no probe.
+/// On Linux this opens uinput, and a failure means no input at all.
 pub fn probe_input() -> bool {
     #[cfg(windows)]
     {
-        return crate::win::probe_input();
+        return true;
     }
     #[cfg(target_os = "linux")]
     {
@@ -61,6 +63,28 @@ pub fn probe_input() -> bool {
     #[cfg(not(any(windows, target_os = "linux")))]
     {
         false
+    }
+}
+
+/// Touch injection is available. Only called after `probe_input` succeeded. Windows runs
+/// `InitializeTouchInjection`. Linux touch uses the same uinput device, so it is available
+/// whenever input is.
+pub fn probe_touch() -> bool {
+    #[cfg(windows)]
+    {
+        return crate::win::probe_touch();
+    }
+    #[cfg(not(windows))]
+    {
+        true
+    }
+}
+
+/// Make the process DPI aware before anything reads screen metrics. No-op on Linux.
+pub fn init_dpi_awareness() {
+    #[cfg(windows)]
+    {
+        crate::win::init_dpi_awareness();
     }
 }
 

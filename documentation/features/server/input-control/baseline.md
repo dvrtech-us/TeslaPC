@@ -9,7 +9,10 @@
 - `rightclick` is a mouse right button.
 - `map_key("ArrowLeft")` is `{LEFT}`. `map_key("Shift")` is dropped. `map_key("+")` is `{+}`.
 - `expand_paste` turns `\r\n` into one `{ENTER}` and `\t` into `{TAB}`.
-- If input privilege is missing, injection is off and HTTP still starts.
+- If input privilege is missing (Linux uinput), injection is off and HTTP still starts.
+- On Windows a failed `InitializeTouchInjection` never turns input off: pointer events in touch mode use the mouse (`pointer_path`), and wheel and keys still work. `rightclick` is always the mouse.
+- `end_contact` and `repeat_touch` never hold `TOUCH_XY` while injecting. `end_contact` leaves the contact up.
+- The process is per-monitor-v2 DPI aware before any screen metric is read, so scaled pointer coordinates are physical pixels.
 - Linux `{ENTER}` is an `EV_KEY` tap of `KEY_ENTER` (down and up). A repeat while the contact is down is another slot-0 move.
 - Linux absolute position maxima equal the primary width and height. A pointer at that size is the axis maximum.
 - Linux `REL_WHEEL` is whole notches of 120 Windows units. A remainder smaller than one notch is kept for the next event.

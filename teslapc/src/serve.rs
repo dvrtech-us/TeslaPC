@@ -104,6 +104,7 @@ fn load_dotenv() {
 }
 
 async fn serve(opts: Opts) -> Result<(), String> {
+    platform::init_dpi_awareness();
     if let Some(host) = &opts.https_host {
         std::env::set_var(KEY_HTTPS_HOST, host);
     }
@@ -120,6 +121,14 @@ async fn serve(opts: Opts) -> Result<(), String> {
     app.inner.input_enabled.store(input_ok, std::sync::atomic::Ordering::Relaxed);
     if !input_ok {
         println!("[Input] Input privilege is missing. Input is disabled for this launch. HTTP will still start.");
+    }
+    let touch_ok = input_ok && platform::probe_touch();
+    app.inner.touch_enabled.store(touch_ok, std::sync::atomic::Ordering::Relaxed);
+    if input_ok && !touch_ok {
+        let touch_mode = app.inner.input_mode.lock().map(|m| m.as_str() != "mouse").unwrap_or(true);
+        if touch_mode {
+            println!("[Input] Touch injection is unavailable. Pointer events use the mouse instead.");
+        }
     }
     platform::start_audio(app.clone());
     crate::capture_loop::ensure_started(&app);

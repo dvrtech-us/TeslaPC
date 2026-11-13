@@ -14,7 +14,7 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_INVALID_CALL, DXGI_ERROR_SESSION_DISCONNECTED, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO, IDXGIAdapter, IDXGIAdapter1, IDXGIDevice, IDXGIFactory1, IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource};
 use windows::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTOPRIMARY};
 use windows::Win32::Media::Audio::{eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, WAVEFORMATEX};
-use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED};
+use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED};
 use windows::Win32::System::WinRT::Direct3D11::{CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess};
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
@@ -243,12 +243,26 @@ unsafe fn read_texture(context: &ID3D11DeviceContext, device: &ID3D11Device, src
     Ok(Grab { bgra, width, height })
 }
 
+/// Balances a successful `CoInitializeEx` (S_OK or S_FALSE) with `CoUninitialize`, so
+/// repeated loopback attempts on one thread do not leak COM references. Declared before
+/// every COM object in `run_loopback`, so it drops after them.
+struct ComScope(bool);
+
+impl Drop for ComScope {
+    fn drop(&mut self) {
+        if self.0 {
+            unsafe { CoUninitialize() };
+        }
+    }
+}
+
 pub fn run_loopback(app: App) -> Result<(), String> {
     unsafe {
         let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
         if hr.is_err() && hr != RPC_E_CHANGED_MODE {
             return Err(format!("CoInitializeEx: {hr}"));
         }
+        let _com = ComScope(hr.is_ok());
         let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None::<&windows::core::IUnknown>, CLSCTX_ALL).map_err(|e| format!("CoCreateInstance(MMDeviceEnumerator): {e}"))?;
         let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole).map_err(|e| format!("GetDefaultAudioEndpoint(eRender, eConsole): {e}"))?;
         let client: IAudioClient = device.Activate(CLSCTX_ALL, None).map_err(|e| format!("IMMDevice::Activate(IAudioClient): {e}"))?;

@@ -199,6 +199,8 @@ pub struct Inner {
     pub input_mode: Mutex<String>,
     pub stream_height: AtomicI32,
     pub input_enabled: AtomicBool,
+    /// Touch injection works. Pointer events use the mouse when this is false.
+    pub touch_enabled: AtomicBool,
     pub manual_hotspot_off: AtomicBool,
     pub stream_clients: AtomicUsize,
     pub capture_epoch: AtomicU64,
@@ -251,6 +253,7 @@ impl App {
                 input_mode: Mutex::new(mode),
                 stream_height: AtomicI32::new(height),
                 input_enabled: AtomicBool::new(true),
+                touch_enabled: AtomicBool::new(true),
                 manual_hotspot_off: AtomicBool::new(false),
                 stream_clients: AtomicUsize::new(0),
                 capture_epoch: AtomicU64::new(0),

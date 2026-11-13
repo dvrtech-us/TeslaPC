@@ -428,7 +428,8 @@ fn handle_input_text(app: &App, text: &str) -> Result<(), String> {
         return Ok(());
     }
     let touch = app.inner.input_mode.lock().map(|m| m.as_str() != "mouse").unwrap_or(true);
-    if touch && kind != "rightclick" {
+    let touch_ok = app.inner.touch_enabled.load(Ordering::Relaxed);
+    if crate::decisions::input::pointer_path(&kind, touch, touch_ok) == crate::decisions::input::PointerPath::Touch {
         let down = app.inner.touch_down.lock().map(|d| *d).unwrap_or(false);
         if !touch_event_applies(&kind, down) {
             return Ok(());
