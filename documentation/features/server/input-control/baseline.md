@@ -22,3 +22,4 @@
 ## Access
 
 No authentication. The input socket is every WebSocket that is not `/ws/audio`.
+- Windows touch frames go through a synthetic pointer device (`CreateSyntheticPointerDevice` / `InjectSyntheticPointerInput`). `InitializeTouchInjection` / `InjectTouchInput` is used only when the device cannot be created.

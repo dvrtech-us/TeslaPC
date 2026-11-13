@@ -12,7 +12,8 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT, MOUSE_EVENT_FLAGS, VIRTUAL_KEY, VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F10, VK_F11, VK_F12, VK_F2, VK_F3, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_HOME, VK_INSERT, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP,
 };
-use windows::Win32::UI::Input::Pointer::{InitializeTouchInjection, InjectTouchInput, POINTER_INFO, POINTER_TOUCH_INFO, POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT, POINTER_FLAG_INRANGE, POINTER_FLAG_UP, POINTER_FLAG_UPDATE, TOUCH_FEEDBACK_DEFAULT};
+use windows::Win32::UI::Controls::{CreateSyntheticPointerDevice, HSYNTHETICPOINTERDEVICE, POINTER_FEEDBACK_DEFAULT, POINTER_TYPE_INFO, POINTER_TYPE_INFO_0};
+use windows::Win32::UI::Input::Pointer::{InitializeTouchInjection, InjectSyntheticPointerInput, InjectTouchInput, POINTER_INFO, POINTER_TOUCH_INFO, POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT, POINTER_FLAG_INRANGE, POINTER_FLAG_UP, POINTER_FLAG_UPDATE, TOUCH_FEEDBACK_DEFAULT};
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SetCursorPos, SetProcessDPIAware, PT_TOUCH, SM_CXSCREEN, SM_CYSCREEN};
 
@@ -108,6 +109,9 @@ pub fn primary_size() -> (i32, i32) {
 }
 
 static TOUCH_READY: Mutex<bool> = Mutex::new(false);
+/// Raw `HSYNTHETICPOINTERDEVICE` (0 when the legacy injection API is in use). Created once and
+/// kept for the life of the process.
+static TOUCH_DEVICE: Mutex<usize> = Mutex::new(0);
 static TOUCH_XY: Mutex<(i32, i32, bool)> = Mutex::new((0, 0, false));
 
 /// Per-monitor v2 awareness, so `GetSystemMetrics` and `InjectTouchInput` both use physical
@@ -289,6 +293,22 @@ pub fn probe_touch() -> bool {
 
 fn probe_touch_now() -> bool {
     unsafe {
+        // The synthetic pointer device (Windows 10 1809 and later) is tried first.
+        // `InjectTouchInput` returned ERROR_INVALID_PARAMETER for every frame on Windows 11
+        // build 26100, while the same frames through a synthetic device were accepted.
+        match CreateSyntheticPointerDevice(PT_TOUCH, 1, POINTER_FEEDBACK_DEFAULT) {
+            Ok(device) => {
+                if let Ok(mut slot) = TOUCH_DEVICE.lock() {
+                    *slot = device.0 as usize;
+                }
+                if let Ok(mut ready) = TOUCH_READY.lock() {
+                    *ready = true;
+                }
+                println!("[Input] Touch uses a synthetic pointer device.");
+                return true;
+            }
+            Err(err) => println!("[Input] CreateSyntheticPointerDevice failed ({err}); trying InitializeTouchInjection."),
+        }
         match InitializeTouchInjection(1, TOUCH_FEEDBACK_DEFAULT) {
             Ok(()) => {
                 if let Ok(mut ready) = TOUCH_READY.lock() {
@@ -381,9 +401,10 @@ fn inject_touch(kind: &str, x: i32, y: i32) -> Result<(), String> {
     }
     let flags = match kind {
         "down" => POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT | POINTER_FLAG_DOWN,
-        "up" => POINTER_FLAG_INRANGE | POINTER_FLAG_UP,
+        "up" => POINTER_FLAG_UP,
         _ => POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT | POINTER_FLAG_UPDATE,
     };
+    let device = TOUCH_DEVICE.lock().map(|d| *d).unwrap_or(0);
     if let Ok(mut xy) = TOUCH_XY.lock() {
         xy.0 = x;
         xy.1 = y;
@@ -401,8 +422,14 @@ fn inject_touch(kind: &str, x: i32, y: i32) -> Result<(), String> {
             rcContact: RECT { left: x - 2, top: y - 2, right: x + 2, bottom: y + 2 },
             rcContactRaw: RECT { left: x - 2, top: y - 2, right: x + 2, bottom: y + 2 },
             pressure: 512,
+            touchMask: windows::Win32::UI::WindowsAndMessaging::TOUCH_MASK_CONTACTAREA | windows::Win32::UI::WindowsAndMessaging::TOUCH_MASK_PRESSURE,
             ..Default::default()
         };
+        if device != 0 {
+            let info = POINTER_TYPE_INFO { r#type: PT_TOUCH, Anonymous: POINTER_TYPE_INFO_0 { touchInfo: contact } };
+            return InjectSyntheticPointerInput(HSYNTHETICPOINTERDEVICE(device as *mut core::ffi::c_void), &[info])
+                .map_err(|e| format!("InjectSyntheticPointerInput({kind} at {x}, {y}): {e}"));
+        }
         InjectTouchInput(&[contact]).map_err(|e| format!("InjectTouchInput({kind} at {x}, {y}): {e}"))
     }
 }
