@@ -11,3 +11,6 @@
 - WGC turns cursor capture off and does not require the yellow border when those calls succeed.
 - Linux Wayland reads a PipeWire frame after ScreenCast `Start`. Linux X11 copies with XShm, using an XComposite pixmap when the server names one.
 - A cap change or a failed session restarts capture without dropping `/stream` clients.
+- `--session-host` only: before a grab, the capture thread re-attaches to the input desktop when its name changed (checked at most every 200 ms, at once after a failed grab). A switch drops the DXGI/WGC sessions first, restarts at DXGI, and clears the stored JPEG. A DXGI `Err` before the first frame after a switch is retried 5 times, 200 ms apart, before stepping down to GDI. `ERROR_BUSY` from `SetThreadDesktop` replaces the capture thread (one loop at a time; 250 ms doubling to 5 s between consecutive busy restarts).
+- `grab_gdi` takes a new screen DC each grab and therefore captures the desktop its thread is attached to.
+- A normal run never re-attaches the capture thread.

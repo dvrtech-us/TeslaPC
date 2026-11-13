@@ -49,7 +49,9 @@ teslapc\target\debug\teslapc.exe --localhost
 `--service`, a supervisor in session 0 that binds no port and starts the server as
 `teslapc.exe --session-host --supervisor-pid <pid>` (SYSTEM, active console session, capture
 starts at DXGI, logs to `%ProgramData%\TeslaPC\teslapc.log`; supervisor log
-`teslapc-service.log`). The host does not follow the login/lock/UAC desktop yet.
+`teslapc-service.log`). The host's capture thread and its single `Input` thread follow the
+input desktop, so the sign-in, lock, and UAC screens are streamed and take input (mouse path
+off `Default`). Compiled on macOS only; not yet run on Windows.
 
 ## Testing
 

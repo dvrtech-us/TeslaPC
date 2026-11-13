@@ -7,11 +7,14 @@ use std::path::Path;
 use teslapc::assets;
 use teslapc::decisions::audio::{cover_silence, format_message, is_silent, keepalive_bytes, keepalive_noise, loopback_backoff_ms, should_inject_silence, KeepaliveInput, KEEPALIVE_NOISE_AMPLITUDE, KEEPALIVE_POLL_MS, LOOPBACK_BACKOFF_MAX_MS, LOOPBACK_BACKOFF_START_MS, LOOPBACK_HEALTHY_RUN_MS, SILENCE_MAX_MS, SILENCE_START_MS};
 use teslapc::decisions::bypass::linux_bypass_plan;
-use teslapc::decisions::capture::{backend_after_frame, first_capture_backend, no_frame_action, BackendStep, CaptureBackend, NoFrameAction, NO_FRAME_FAIL_MS, REPUBLISH_INTERVAL_MS};
+use teslapc::decisions::capture::{backend_after_frame, first_capture_backend, no_frame_action, retry_after_switch, BackendStep, CaptureBackend, NoFrameAction, DXGI_SWITCH_RETRIES, DXGI_SWITCH_RETRY_MS, NO_FRAME_FAIL_MS, REPUBLISH_INTERVAL_MS};
 use teslapc::decisions::config::{apply_config_body, public_config_json, PublicConfig, KEY_CF_TOKEN};
+use teslapc::decisions::desktop::{
+    capture_restart_delay_ms, desktop_check_due, desktop_error_is_new, desktop_switch_needed, is_default_desktop, CAPTURE_RESTART_MAX_MS, CAPTURE_RESTART_START_MS, DEFAULT_DESKTOP_NAME, DESKTOP_CHECK_INTERVAL_MS, DESKTOP_RETRY_AFTER_FAILURE_MS,
+};
 use teslapc::decisions::display::{best_for_aspect, Mode};
 use teslapc::decisions::history::{watched_now, WATCHED_FRACTION};
-use teslapc::decisions::input::{expand_paste, map_key, pointer_path, scale_pointer, touch_event_applies, PointerPath, wheel_delta, TOUCH_REPEAT_MS};
+use teslapc::decisions::input::{expand_paste, map_key, pointer_path, pointer_path_on_desktop, scale_pointer, touch_event_applies, touch_repeat_applies, PointerPath, wheel_delta, TOUCH_REPEAT_MS};
 use teslapc::decisions::listing::{render_guts, resolve_browse, FileProgress};
 use teslapc::decisions::media::{ffmpeg_video_args, linux_missing_ffmpeg_error, windows_vlc_plan};
 use teslapc::decisions::renewal::{acme_directory_url, needs_renewal, staging_from_env, RENEWAL_CHECK_HOURS, RENEW_WHEN_DAYS_LEFT};
@@ -732,4 +735,97 @@ fn hotspot_adapter_name_is_the_whole_interface_name() {
     assert_eq!(hotspot_adapter_name(only_down).as_deref(), Some("Local Area Connection* 1"));
     assert_eq!(hotspot_adapter_name("Enabled        Connected      Dedicated        Wi-Fi\r\n"), None);
     assert_eq!(hotspot_adapter_name(""), None);
+}
+
+#[test]
+fn desktop_switch_only_when_the_input_desktop_name_differs() {
+    assert!(!desktop_switch_needed(Some("Default"), "Default"));
+    assert!(!desktop_switch_needed(Some("Default"), "default"));
+    assert!(desktop_switch_needed(Some("Default"), "Winlogon"));
+    assert!(desktop_switch_needed(Some("Winlogon"), "Default"));
+    // The attached name could not be read: attach to the input desktop.
+    assert!(desktop_switch_needed(None, "Default"));
+    // No name is not a desktop: stay.
+    assert!(!desktop_switch_needed(Some("Default"), ""));
+    assert!(!desktop_switch_needed(None, ""));
+}
+
+#[test]
+fn desktop_check_runs_every_200_ms_at_once_when_forced_and_backs_off_after_a_failed_switch() {
+    assert_eq!((DESKTOP_CHECK_INTERVAL_MS, DESKTOP_RETRY_AFTER_FAILURE_MS), (200, 2_000));
+    // A fresh thread checks at once.
+    assert!(desktop_check_due(None, false, false));
+    assert!(desktop_check_due(None, false, true));
+    // Rate limit.
+    assert!(!desktop_check_due(Some(0), false, false));
+    assert!(!desktop_check_due(Some(199), false, false));
+    assert!(desktop_check_due(Some(200), false, false));
+    // A failed operation checks immediately.
+    assert!(desktop_check_due(Some(0), true, false));
+    // After a failed SetThreadDesktop, even a forced check waits two seconds.
+    assert!(!desktop_check_due(Some(200), true, true));
+    assert!(!desktop_check_due(Some(1_999), false, true));
+    assert!(desktop_check_due(Some(2_000), true, true));
+}
+
+#[test]
+fn only_the_default_desktop_counts_as_the_user_desktop() {
+    assert_eq!(DEFAULT_DESKTOP_NAME, "Default");
+    assert!(is_default_desktop(Some("Default")));
+    assert!(is_default_desktop(Some("DEFAULT")));
+    assert!(!is_default_desktop(Some("Winlogon")));
+    assert!(!is_default_desktop(Some("Screen-saver")));
+    // Unknown keeps today's behavior.
+    assert!(is_default_desktop(None));
+}
+
+#[test]
+fn desktop_errors_are_logged_once_until_they_change() {
+    assert!(desktop_error_is_new(None, "OpenInputDesktop failed: Access is denied."));
+    assert!(!desktop_error_is_new(Some("OpenInputDesktop failed: Access is denied."), "OpenInputDesktop failed: Access is denied."));
+    assert!(desktop_error_is_new(Some("OpenInputDesktop failed: Access is denied."), "SetThreadDesktop(Winlogon) failed: busy"));
+}
+
+#[test]
+fn busy_capture_restart_waits_double_up_to_five_seconds() {
+    assert_eq!((CAPTURE_RESTART_START_MS, CAPTURE_RESTART_MAX_MS), (250, 5_000));
+    let waits: Vec<u64> = (0..8).map(capture_restart_delay_ms).collect();
+    assert_eq!(waits, vec![0, 250, 500, 1_000, 2_000, 4_000, 5_000, 5_000]);
+    assert_eq!(capture_restart_delay_ms(u32::MAX), 5_000);
+}
+
+#[test]
+fn dxgi_is_retried_a_few_times_only_right_after_a_desktop_switch() {
+    assert_eq!((DXGI_SWITCH_RETRIES, DXGI_SWITCH_RETRY_MS), (5, 200));
+    for used in 0..DXGI_SWITCH_RETRIES {
+        assert!(retry_after_switch(CaptureBackend::Dxgi, true, used));
+    }
+    assert!(!retry_after_switch(CaptureBackend::Dxgi, true, DXGI_SWITCH_RETRIES));
+    // Not after a switch (or a frame was produced since): the normal step down.
+    assert!(!retry_after_switch(CaptureBackend::Dxgi, false, 0));
+    // Only DXGI is retried.
+    assert!(!retry_after_switch(CaptureBackend::Gdi, true, 0));
+    assert!(!retry_after_switch(CaptureBackend::Wgc, true, 0));
+}
+
+#[test]
+fn pointer_takes_the_mouse_path_off_the_default_desktop() {
+    // On the user's desktop: same as pointer_path.
+    assert_eq!(pointer_path_on_desktop("down", true, true, true), PointerPath::Touch);
+    assert_eq!(pointer_path_on_desktop("rightclick", true, true, true), PointerPath::Mouse);
+    assert_eq!(pointer_path_on_desktop("down", true, false, true), PointerPath::Mouse);
+    assert_eq!(pointer_path_on_desktop("down", false, true, true), PointerPath::Mouse);
+    // Lock screen, sign-in screen, UAC: a touch-mode tap (down, move, up) is mouse.
+    for kind in ["down", "move", "up", "rightclick"] {
+        assert_eq!(pointer_path_on_desktop(kind, true, true, false), PointerPath::Mouse);
+        assert_eq!(pointer_path_on_desktop(kind, false, false, false), PointerPath::Mouse);
+    }
+}
+
+#[test]
+fn touch_repeat_only_keeps_a_held_contact_alive_on_the_default_desktop() {
+    assert!(touch_repeat_applies(true, true));
+    assert!(!touch_repeat_applies(false, true));
+    assert!(!touch_repeat_applies(true, false));
+    assert!(!touch_repeat_applies(false, false));
 }

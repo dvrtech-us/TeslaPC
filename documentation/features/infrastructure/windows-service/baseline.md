@@ -12,4 +12,6 @@
 - Each host is in its own kill-on-close job; closing it ends the host and its children. If the job cannot be set up, the host exits when the supervisor pid exits.
 - `--session-host` writes stdout and stderr to `%ProgramData%\TeslaPC\teslapc.log`, starts capture at DXGI, and exits `3` when 8080 cannot be bound.
 - Supervisor lines go to `%ProgramData%\TeslaPC\teslapc-service.log`. Both logs rotate to `.1` at open when over 5 MiB.
-- The host shows the signed-in user's desktop only; login, lock, and UAC screens are not followed.
+- `--session-host` only: the capture thread and the one `Input` thread follow the input desktop (`OpenInputDesktop(MAXIMUM_ALLOWED)` + `SetThreadDesktop` when the `UOI_NAME` differs, case-insensitive). A check runs at most every 200 ms per thread, at once after a failed grab or injection, and not within 2 s of a failed `SetThreadDesktop`. A failed `OpenInputDesktop` keeps the current desktop. Each switch prints `[Desktop] <role> attached to <name>` once.
+- The handle from `GetThreadDesktop` is never closed. Every handle a thread opened is closed when it is not switched to, after the thread leaves it, or (capture restart) by the replacement thread.
+- A normal run (no role flag) never opens or switches desktops.

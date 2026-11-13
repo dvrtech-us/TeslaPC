@@ -71,6 +71,19 @@ pub fn backend_after_frame(current: CaptureBackend, capture_ok: bool, bgra: &[u8
     }
 }
 
+/// Right after the capture thread moves to another desktop, DXGI duplication often cannot be
+/// created for a moment. A DXGI error in that window is retried this many times, this far
+/// apart, before the normal step down to GDI.
+pub const DXGI_SWITCH_RETRIES: u32 = 5;
+pub const DXGI_SWITCH_RETRY_MS: u64 = 200;
+
+/// Retry DXGI (stay on it) after an error, instead of stepping down. Only for DXGI, only while
+/// it has produced no frame since a desktop switch (`after_switch`), and only
+/// [`DXGI_SWITCH_RETRIES`] times. Every other error steps down as [`backend_after_frame`] says.
+pub fn retry_after_switch(backend: CaptureBackend, after_switch: bool, retries_used: u32) -> bool {
+    backend == CaptureBackend::Dxgi && after_switch && retries_used < DXGI_SWITCH_RETRIES
+}
+
 pub fn session_should_restart(epoch_at_start: u64, epoch_now: u64) -> bool {
     epoch_at_start != epoch_now
 }

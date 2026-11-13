@@ -14,7 +14,7 @@
 
 ## Windows order
 
-`first_capture_backend` starts at WGC unless `TESLAPC_NO_WGC=1` or the process is a Windows service session host (`--session-host`, which calls `capture_loop::skip_wgc()` and logs `[Capture] Session host: WGC skipped, starting at DXGI.`), then DXGI, then GDI. `backend_after_frame` switches to the next backend when the grab fails or `frame_is_black` is true. After GDI, a black frame is kept so the chain is not retried forever inside one frame. `grab_gdi` uses `BitBlt` and `GetDIBits`.
+`first_capture_backend` starts at WGC unless `TESLAPC_NO_WGC=1` or the process is a Windows service session host (`--session-host`, which calls `capture_loop::session_host_mode()` and logs `[Capture] Session host: WGC skipped, starting at DXGI.`), then DXGI, then GDI. `backend_after_frame` switches to the next backend when the grab fails or `frame_is_black` is true. After GDI, a black frame is kept so the chain is not retried forever inside one frame. `grab_gdi` uses `BitBlt` and `GetDIBits` on a fresh `GetDC(None)` every grab; nothing desktop-bound is cached, so it captures whichever desktop the thread is attached to.
 
 Every backend's grab returns `Result<GrabOutcome, String>` (`platform.rs`). `GrabOutcome::Frame` is a new frame. `GrabOutcome::NoFrame` means the session is healthy and nothing changed. `Err` is a failed backend. WGC and DXGI only deliver a frame when the screen changes, so a still screen is `NoFrame`, not a failure. Only `Err`, a black frame, or a backend that never produced a frame (below) advances the backend order.
 
@@ -29,6 +29,39 @@ Every backend's grab returns `Result<GrabOutcome, String>` (`platform.rs`). `Gra
 - The selection timer and "produced" flag reset on a backend switch, a `capture_epoch` change, and while the loop is idle (no `/stream` client or `media_mode`). A `capture_epoch` change also clears the stored JPEG.
 
 The per-frame line `[Capture] <backend> frame WxH` is written with `App::log("debug", ...)`, so it only prints when `TESLAPC_LOG_LEVEL=debug`.
+
+## Following the input desktop (`--session-host` only)
+
+The capture thread is created by `capture_loop::spawn_capture` (`ScreenCapture`). In session-host
+mode `loop_forever` creates a `platform::DesktopFollower("ScreenCapture")` (see
+`documentation/features/infrastructure/windows-service/` for the attachment rules). A normal
+run creates none and behaves as before.
+
+- On each streaming tick (not while idle), before the grab, the follower checks the input
+  desktop: the first tick at once, then at most every 200 ms, and at once on the tick after a
+  grab `Err` or a `NoFrameAction::Fail`.
+- On a switch, `platform::drop_capture_sessions()` (`win_capture::drop_sessions`, which clears
+  the thread-local WGC and DXGI sessions) runs before `SetThreadDesktop`. After a successful
+  switch the loop logs `[Capture] Desktop is now <name>; restarting capture at Dxgi.`, resets
+  the backend to `first_capture_backend`, resets the selection timer and "produced" flag, and
+  clears the stored JPEG (the other desktop's picture is not re-published), as a
+  `capture_epoch` change does.
+- DXGI after a switch: while DXGI has produced no frame since the switch,
+  `decisions::capture::retry_after_switch` keeps DXGI on an `Err` up to `DXGI_SWITCH_RETRIES`
+  (`5`) times, `DXGI_SWITCH_RETRY_MS` (`200`) apart, logging `[Capture] Dxgi failed right after
+  a desktop switch (<error>); retry <n> of 5.` Then the normal step down to GDI applies. The
+  first frame ends the retry window.
+- `SetThreadDesktop` returning `ERROR_BUSY` (the thread owns windows or hooks): the loop logs
+  `[Capture] This thread cannot change desktop (busy); restarting the capture thread.`, hands
+  its attached desktop handle to a new `ScreenCapture` thread, and returns. The new thread waits
+  `capture_restart_delay_ms(n)` (250 ms doubling to 5 s for consecutive busy restarts; reset by
+  a successful switch), closes the handed-over handle, and starts at DXGI. Exactly one capture
+  loop runs at a time. Any other `SetThreadDesktop` failure keeps the thread where it is.
+- The black-frame handoff is unchanged on every desktop.
+
+Not yet run on Windows: whether DXGI duplication opens on `Winlogon` as SYSTEM, and whether the
+capture thread ever comes up `Busy`, are the first things to confirm (log lines in the windows
+service feature doc and the step 4 report).
 
 ## Linux
 

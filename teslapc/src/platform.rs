@@ -34,6 +34,99 @@ pub fn grab(backend: CaptureBackend) -> Result<GrabOutcome, String> {
     }
 }
 
+/// Result of one input-desktop check by a [`DesktopFollower`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DesktopCheck {
+    /// Not due, the input desktop could not be opened, or it is the attached one.
+    Stay,
+    /// The thread is now attached to the named desktop.
+    Switched(String),
+    /// `SetThreadDesktop` failed with `ERROR_BUSY` (the thread owns windows or hooks).
+    Busy,
+    /// `SetThreadDesktop` failed for another reason. The thread stays where it was.
+    Failed,
+}
+
+/// Keeps the calling thread attached to the input desktop (`--session-host` on Windows).
+/// Create it on the thread it manages. On other OSes every check is `Stay`.
+pub struct DesktopFollower {
+    #[cfg(windows)]
+    inner: crate::win_desktop::DesktopAttachment,
+}
+
+impl DesktopFollower {
+    pub fn new(role: &'static str) -> Self {
+        #[cfg(windows)]
+        {
+            DesktopFollower { inner: crate::win_desktop::DesktopAttachment::new(role) }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = role;
+            DesktopFollower {}
+        }
+    }
+
+    /// Rate-limited check; `before_switch` runs only right before `SetThreadDesktop`.
+    pub fn check(&mut self, force: bool, before_switch: impl FnOnce()) -> DesktopCheck {
+        #[cfg(windows)]
+        {
+            self.inner.check(force, before_switch)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (force, before_switch);
+            DesktopCheck::Stay
+        }
+    }
+
+    /// Close handles a previous capture thread could not close (see `release_for_restart`).
+    pub fn adopt(&mut self, leftovers: Vec<usize>) {
+        #[cfg(windows)]
+        {
+            self.inner.adopt(leftovers);
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = leftovers;
+        }
+    }
+
+    /// Hand the attached handle to a restarted thread instead of closing it here.
+    pub fn release_for_restart(self) -> Vec<usize> {
+        #[cfg(windows)]
+        {
+            self.inner.release_for_restart()
+        }
+        #[cfg(not(windows))]
+        {
+            Vec::new()
+        }
+    }
+}
+
+/// Drop this thread's WGC and DXGI sessions (they are bound to the desktop they were opened
+/// on). No-op off Windows.
+pub fn drop_capture_sessions() {
+    #[cfg(windows)]
+    {
+        crate::win_capture::drop_sessions();
+    }
+}
+
+/// `--session-host`: start the one Windows `Input` thread; every injection is queued to it.
+/// No-op off Windows.
+pub fn start_input_thread(app: App) {
+    #[cfg(windows)]
+    {
+        crate::win::start_input_thread(app);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+    }
+}
+
 pub fn primary_size() -> (i32, i32) {
     #[cfg(windows)]
     {

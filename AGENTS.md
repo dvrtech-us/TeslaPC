@@ -11,7 +11,7 @@ TeslaPC is a Windows and Linux remote-desktop streaming server written in Rust. 
 input. There is no WinForms panel and no authentication. Logs go to stdout. The process can be
 installed as a Windows service (`teslapc service install`) or a systemd unit of the same
 command. On Windows the service (`--service`) is a supervisor that starts the server as
-`--session-host` in the active console session; see
+`--session-host` in the active console session, and that host follows the input desktop (sign-in, lock, and UAC screens); see
 `documentation/features/infrastructure/windows-service/`.
 
 ## Documentation System (read before and after coding)
@@ -57,7 +57,7 @@ on Linux. There are still **no `sql/` folders** — the schema is created in `te
 | infrastructure | tesla-browser-bypass | `teslapc/src/decisions/bypass.rs`, `teslapc/src/win.rs`, `teslapc/src/linux.rs` |
 | infrastructure | firewall-bootstrap | `teslapc/src/win.rs` |
 | infrastructure | https-bootstrap | `teslapc/src/certs.rs` |
-| infrastructure | windows-service | `teslapc/src/win_service.rs`, `teslapc/src/decisions/service.rs` |
+| infrastructure | windows-service | `teslapc/src/win_service.rs`, `teslapc/src/win_desktop.rs`, `teslapc/src/decisions/service.rs`, `teslapc/src/decisions/desktop.rs` |
 
 ## Source Layout
 
@@ -77,6 +77,7 @@ teslapc/
     ├── certs.rs               # rustls local cert and DNS-01 renewal
     ├── win.rs                 # Windows input, hotspot, firewall, GDI
     ├── win_service.rs         # Windows service supervisor, session host launch, install/uninstall
+    ├── win_desktop.rs         # per-thread input-desktop attachment (session host)
     ├── win_capture.rs         # WGC, DXGI duplication, WASAPI loopback
     └── linux.rs               # Portal/PipeWire, XShm, uinput, nftables, systemd
 ```
@@ -109,7 +110,7 @@ Runtime flags / env:
 - `teslapc service install` — Windows: creates or updates service `TeslaPC` through the SCM API (`"<exe>" --service`, auto start, LocalSystem, restart after 5 s on failure) and warns about scheduled tasks that run `teslapc.exe`. Linux: writes a systemd unit. A denied install is logged, exits non-zero, and the server is not required to be registered.
 - `teslapc service uninstall` — Windows: stop (up to 10 s) and delete the service. Other words after `service` print usage and exit `2`.
 - `--service` — Windows, started by the SCM: supervisor only (no ports, capture, or audio). It keeps one `--session-host` running as SYSTEM in the active console session, restarting it on exit (backoff 1 s doubling to 30 s, reset after 60 s uptime; 30 s when the host exits `3` = port in use), console session change, or logoff. Log: `%ProgramData%\TeslaPC\teslapc-service.log`. Not started by the SCM (or on Linux): runs the normal server.
-- `--session-host [--supervisor-pid <pid>]` — the normal server, plus: stdout/stderr go to `%ProgramData%\TeslaPC\teslapc.log` (rotated to `.1` over 5 MiB), capture starts at DXGI, it exits when the supervisor pid exits, and it exits `3` if port 8080 cannot be bound. Started by the supervisor; not meant to be run by hand.
+- `--session-host [--supervisor-pid <pid>]` — the normal server, plus: stdout/stderr go to `%ProgramData%\TeslaPC\teslapc.log` (rotated to `.1` over 5 MiB), capture starts at DXGI, the capture thread and a dedicated `Input` thread follow the input desktop, it exits when the supervisor pid exits, and it exits `3` if port 8080 cannot be bound. Started by the supervisor; not meant to be run by hand.
 
 HTTPS on `8443` is terminated in-process with rustls. There is no http.sys URL ACL and no certificate-store bind. Without a public hostname, a generated local certificate still makes `8443` listen (unless `--localhost`).
 
@@ -136,4 +137,4 @@ A missing privilege for firewall, hotspot, input, address, or nftables is logged
 - A black or failed capture frame still advances WGC → DXGI → GDI. DRM video can stay black under every backend.
 - Linux PipeWire, uinput, and nftables are not executed on a Windows host. The event records, portal messages, and bypass plan are covered by `cargo test`.
 - The SQLite file is created in code. There is no `sql/` folder.
-- The Windows service host does not follow the input desktop yet. It shows and drives the signed-in user's desktop only; the login screen, lock screen, and UAC prompts are not captured and do not receive input. The supervisor, host launch, and install have only been compiled, not yet run on Windows.
+- The Windows service host follows the input desktop (`win_desktop.rs`): its capture thread and its single `Input` thread re-attach to `Winlogon` for the sign-in screen, lock screen, and UAC prompts, and back to `Default`. Off `Default` pointer events are mouse events. Ctrl+Alt+Del is not sent. Desktop following was written and compiled on macOS only and has not yet run on Windows; still to confirm there: DXGI duplication on `Winlogon` as SYSTEM (else GDI after five retries), whether the capture thread can call `SetThreadDesktop` without `ERROR_BUSY` (restarts are logged), that `SendInput` reaches the sign-in and UAC screens, and touch on `Default` after a trip to `Winlogon`.

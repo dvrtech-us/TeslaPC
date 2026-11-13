@@ -13,9 +13,11 @@ Code: `teslapc/src/win_service.rs` (OS calls), `teslapc/src/decisions/service.rs
 decisions, tested in `teslapc/tests/protocol.rs`), `teslapc/src/serve.rs` (argument handling),
 `teslapc/src/paths.rs` (`host_log_file`, `service_log_file`).
 
-Not implemented yet: the host does not follow the input desktop. It shows and drives the
-signed-in user's desktop (`winsta0\default`) only. The login screen, lock screen, and UAC
-prompts (the `Winlogon` secure desktop) are not captured and do not receive input.
+The session host follows the input desktop: its capture thread and its single `Input` thread
+re-attach to whichever desktop receives input, so the stream shows and controls the sign-in
+screen, the lock screen, and UAC prompts (the `Winlogon` secure desktop) and returns to the
+user's desktop (`Default`) afterwards. See "Desktop following" below. This was written and
+compiled on macOS for `x86_64-pc-windows-msvc`; it has not yet run on Windows.
 
 ## Install and uninstall
 
@@ -149,8 +151,9 @@ In `serve::run`, before `.env` is loaded or anything prints:
    (`library/std/src/sys/stdio/windows.rs`, Rust 1.98), so every `println!` after this lands in
    the file. A header line with the time, version, and pid is written. If the file cannot be
    opened, a line goes to the service log and output is lost.
-2. `capture_loop::skip_wgc()`: capture starts at DXGI (`[Capture] Session host: WGC skipped,
-   starting at DXGI.`). DXGI → GDI is unchanged.
+2. `capture_loop::session_host_mode()`: capture starts at DXGI (`[Capture] Session host: WGC
+   skipped, starting at DXGI.`) and the capture thread follows the input desktop. DXGI → GDI
+   is unchanged.
 3. With `--supervisor-pid <pid>`, `exit_with_supervisor` opens the supervisor with
    `PROCESS_SYNCHRONIZE`; a `SupervisorWatch` thread waits on it and calls
    `std::process::exit(0)` when it exits. If `OpenProcess` reports `ERROR_INVALID_PARAMETER`
@@ -159,8 +162,68 @@ In `serve::run`, before `.env` is loaded or anything prints:
 4. Then the normal `serve`. If binding `8080` fails, the host prints the error and exits with
    `EXIT_PORT_IN_USE` (`3`). A normal run (no role flag) still exits `1` on that failure.
 
-Firewall, hotspot, bypass, ACME, audio, and input run exactly as in a normal run, as SYSTEM in
+In `serve`, before the input probes, `platform::start_input_thread` starts the `Input` thread
+(below). Firewall, hotspot, bypass, ACME, and audio run exactly as in a normal run, as SYSTEM in
 the console session.
+
+## Desktop following (session host only)
+
+A normal `teslapc.exe` run never calls any of this: `capture_loop` only creates a follower
+when `session_host_mode()` was called, and `win::start_input_thread` is only called for
+`--session-host`.
+
+### Attachment helper (`win_desktop.rs` `DesktopAttachment`)
+
+One per thread, created on that thread (`platform::DesktopFollower` wraps it; off Windows every
+check is `Stay`).
+
+- At creation: `GetThreadDesktop(GetCurrentThreadId())` is stored as the original handle (never
+  closed) and its `UOI_NAME` is read (`[Desktop] <role> starts on <name>`).
+- `check(force, before_switch)` runs only when `desktop_check_due(ms_since_last, force,
+  last_switch_failed)` (`decisions/desktop.rs`) says so: always on the first call; otherwise
+  every `DESKTOP_CHECK_INTERVAL_MS` (`200`) ms, or at once when `force` is set (a failed grab
+  or injection); after a failed `SetThreadDesktop` not before `DESKTOP_RETRY_AFTER_FAILURE_MS`
+  (`2000`) ms, even when forced.
+- `OpenInputDesktop(0, FALSE, MAXIMUM_ALLOWED)` (`0x02000000`, passed as
+  `DESKTOP_ACCESS_FLAGS`). A failure means stay (it fails briefly during a switch).
+- The name comes from `GetUserObjectInformationW(UOI_NAME)`. `desktop_switch_needed(attached,
+  input)` compares names without case; an unknown attached name always switches, an empty input
+  name never does. Same name: the new handle is closed, nothing changes.
+- Different name: `before_switch` runs (the caller tears down what is bound to the old
+  desktop), then `SetThreadDesktop(new)`. Success: the new handle becomes the attached one, the
+  previously attached handle is closed if this helper opened it, and
+  `[Desktop] <role> attached to <name>` is printed. Failure: the new handle is closed, the
+  thread stays, and the result is `Busy` for `ERROR_BUSY` (the thread owns windows or hooks),
+  otherwise `Failed`.
+- Errors print `[Desktop] <role>: <error>` once per distinct text (`desktop_error_is_new`);
+  the remembered text is cleared after a successful check, so a recurring failure is printed
+  again.
+- On drop the thread returns to the original desktop and the attached handle is closed.
+
+### Capture thread
+
+See `documentation/features/streaming/screen-capture/`. In short: the check runs on each
+streaming tick before the grab; a switch drops the thread's DXGI/WGC sessions before
+`SetThreadDesktop`, restarts at DXGI, and clears the stored JPEG; DXGI errors right after a
+switch are retried up to 5 times, 200 ms apart; `Busy` replaces the capture thread with a new
+one.
+
+### Input thread
+
+See `documentation/features/server/input-control/`. In short: every injection, including
+`InitializeTouchInjection` and `SetCursorPos`, is queued to one `Input` thread that checks the
+desktop before each event; off `Default` every pointer event is a mouse event.
+
+### Still to confirm on Windows
+
+Nothing in this section has run on Windows yet. In order of how likely it is to be wrong:
+whether DXGI duplication opens on `Winlogon` as SYSTEM (otherwise GDI is used there), whether
+the capture thread can `SetThreadDesktop` at all (a hidden window created by D3D/COM would make
+it `Busy` and trigger restarts), whether the restarted thread's handle hand-off closes cleanly,
+whether `SendInput` clicks and typing reach the sign-in and UAC screens, whether touch
+injection still works on `Default` after a trip to `Winlogon`, and whether
+`InitializeTouchInjection` succeeds when the host starts on the sign-in screen (it is retried
+when the `Input` thread first reaches `Default`).
 
 ## Logs
 

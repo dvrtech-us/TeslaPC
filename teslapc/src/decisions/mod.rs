@@ -5,6 +5,7 @@ pub mod audio;
 pub mod bypass;
 pub mod capture;
 pub mod config;
+pub mod desktop;
 pub mod display;
 pub mod history;
 pub mod input;

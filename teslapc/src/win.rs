@@ -2,7 +2,7 @@
 
 use std::process::Command;
 use std::sync::atomic::Ordering;
-use std::sync::Mutex;
+use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::Duration;
 
 use windows::Win32::Foundation::{POINT, RECT};
@@ -10,7 +10,7 @@ use windows::Win32::Graphics::Gdi::{
     BitBlt, ChangeDisplaySettingsW, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, EnumDisplaySettingsW, GetDC, GetDIBits, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CDS_UPDATEREGISTRY, DEVMODEW, DIB_RGB_COLORS, DISP_CHANGE_SUCCESSFUL, DM_BITSPERPEL, DM_PELSHEIGHT, DM_PELSWIDTH, ENUM_CURRENT_SETTINGS, SRCCOPY,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT, VIRTUAL_KEY, VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F10, VK_F11, VK_F12, VK_F2, VK_F3, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_HOME, VK_INSERT, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP,
+    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT, MOUSE_EVENT_FLAGS, VIRTUAL_KEY, VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F10, VK_F11, VK_F12, VK_F2, VK_F3, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_HOME, VK_INSERT, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::Input::Pointer::{InitializeTouchInjection, InjectTouchInput, POINTER_INFO, POINTER_TOUCH_INFO, POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT, POINTER_FLAG_INRANGE, POINTER_FLAG_UP, POINTER_FLAG_UPDATE, TOUCH_FEEDBACK_DEFAULT};
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
@@ -18,7 +18,8 @@ use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SetCursorPos, Se
 
 use crate::decisions::bypass::{windows_portproxy_args, BYPASS_IP, HOTSPOT_WATCHDOG_MS};
 use crate::decisions::capture::CaptureBackend;
-use crate::platform::{Grab, GrabOutcome};
+use crate::decisions::input::{pointer_path_on_desktop, touch_repeat_applies, PointerPath};
+use crate::platform::{DesktopCheck, Grab, GrabOutcome};
 use crate::state::App;
 
 pub fn grab(backend: CaptureBackend) -> Result<GrabOutcome, String> {
@@ -48,6 +49,8 @@ fn grab_gdi() -> Result<Grab, String> {
         if width <= 0 || height <= 0 {
             return Err("primary screen size is zero".into());
         }
+        // A fresh screen DC on every grab: `GetDC(None)` is the screen of the desktop this
+        // thread is attached to, so it follows `SetThreadDesktop`. Nothing is cached.
         let screen = GetDC(None);
         if screen.is_invalid() {
             return Err("GetDC failed".into());
@@ -117,7 +120,174 @@ pub fn init_dpi_awareness() {
     }
 }
 
+/// One injection queued to the session-host `Input` thread. Queue order is event order.
+enum InputOp {
+    Pointer { kind: String, x: i32, y: i32, touch: bool },
+    Wheel(i32),
+    Key(String),
+    EndContact,
+    RepeatTouch,
+    ProbeTouch(mpsc::Sender<bool>),
+}
+
+/// Set once by `start_input_thread` (`--session-host` only). Unset: every call injects
+/// directly from the caller's thread, as before.
+static INPUT_TX: OnceLock<mpsc::Sender<InputOp>> = OnceLock::new();
+
+/// `--session-host`: start the one `Input` thread. From then on every input operation
+/// (pointer, wheel, key, end of contact, touch repeat, `InitializeTouchInjection`,
+/// `SetCursorPos`) runs there, and that thread follows the input desktop.
+pub fn start_input_thread(app: App) {
+    let (tx, rx) = mpsc::channel::<InputOp>();
+    match std::thread::Builder::new().name("Input".into()).spawn(move || input_thread(app, rx)) {
+        Ok(_) => {
+            // A second call drops its sender here, so its thread sees a closed channel and ends.
+            if INPUT_TX.set(tx).is_ok() {
+                println!("[Input] Session host: input runs on the Input thread and follows the input desktop.");
+            }
+        }
+        Err(err) => println!("[Input] Could not start the Input thread ({err}); input is injected from the caller's thread."),
+    }
+}
+
+/// Queue to the `Input` thread when it runs; otherwise (normal run, or the thread is gone)
+/// inject directly on this thread.
+fn dispatch(op: InputOp) {
+    let op = match INPUT_TX.get() {
+        Some(tx) => match tx.send(op) {
+            Ok(()) => return,
+            Err(mpsc::SendError(op)) => op,
+        },
+        None => op,
+    };
+    run_direct(op);
+}
+
+/// Today's direct behavior: results are not acted on.
+fn run_direct(op: InputOp) {
+    match op {
+        InputOp::Pointer { kind, x, y, touch } => {
+            let _ = pointer_now(&kind, x, y, touch);
+        }
+        InputOp::Wheel(delta) => {
+            let _ = wheel_now(delta);
+        }
+        InputOp::Key(token) => {
+            let _ = key_now(&token);
+        }
+        InputOp::EndContact => {
+            let _ = end_contact_now();
+        }
+        InputOp::RepeatTouch => {
+            let _ = repeat_touch_now();
+        }
+        InputOp::ProbeTouch(reply) => {
+            let _ = reply.send(probe_touch_now());
+        }
+    }
+}
+
+/// The session-host `Input` thread. Before each event it checks the input desktop
+/// (rate-limited, immediately after a failed injection) and re-attaches when it changed.
+fn input_thread(app: App, rx: mpsc::Receiver<InputOp>) {
+    let mut desktop = crate::win_desktop::DesktopAttachment::new("Input");
+    let mut force_check = true;
+    // Left button pressed through the mouse path and not released yet.
+    let mut left_down = false;
+    // `InitializeTouchInjection` failed while attached to a secure desktop (for example at
+    // boot on the sign-in screen): try again once the thread is on `Default`.
+    let mut retry_touch_on_default = false;
+    while let Ok(op) = rx.recv() {
+        let check = desktop.check(force_check, || {
+            // A touch contact belongs to the desktop it started on: end it before leaving
+            // (best effort; injection may already be refused), then forget it.
+            if let Err(err) = end_contact_now() {
+                app.log("debug", &format!("[Input] Ending the touch contact before a desktop switch: {err}"));
+            }
+            if let Ok(mut xy) = TOUCH_XY.lock() {
+                xy.2 = false;
+            }
+        });
+        force_check = false;
+        if let DesktopCheck::Switched(_) = check {
+            // Moves and the up of a contact that started on the old desktop are then ignored
+            // by the route's touch filter, and the repeat tick stops.
+            if let Ok(mut down) = app.inner.touch_down.lock() {
+                *down = false;
+            }
+            if left_down {
+                left_down = false;
+                if let Err(err) = unsafe { mouse_button(true, false) } {
+                    app.log("debug", &format!("[Input] Releasing the left button after a desktop switch: {err}"));
+                }
+            }
+            if retry_touch_on_default && desktop.on_default() {
+                retry_touch_on_default = false;
+                if probe_touch_now() {
+                    app.inner.touch_enabled.store(true, Ordering::Relaxed);
+                    println!("[Input] Touch injection initialized on the Default desktop.");
+                }
+            }
+        }
+        let on_default = desktop.on_default();
+        let result = match op {
+            InputOp::Pointer { kind, x, y, touch } => match pointer_path_on_desktop(&kind, touch, touch_ready(), on_default) {
+                PointerPath::Touch => inject_touch(&kind, x, y),
+                PointerPath::Mouse => {
+                    match kind.as_str() {
+                        "down" => left_down = true,
+                        "up" => left_down = false,
+                        _ => {}
+                    }
+                    mouse_pointer(&kind, x, y)
+                }
+            },
+            InputOp::Wheel(delta) => wheel_now(delta),
+            InputOp::Key(token) => key_now(&token),
+            InputOp::EndContact => {
+                let touch = end_contact_now();
+                let mouse = if left_down {
+                    left_down = false;
+                    unsafe { mouse_button(true, false) }
+                } else {
+                    Ok(())
+                };
+                touch.and(mouse)
+            }
+            InputOp::RepeatTouch => {
+                let contact_down = TOUCH_XY.lock().map(|xy| xy.2).unwrap_or(false);
+                if touch_repeat_applies(contact_down, on_default) {
+                    repeat_touch_now()
+                } else {
+                    Ok(())
+                }
+            }
+            InputOp::ProbeTouch(reply) => {
+                let ready = probe_touch_now();
+                retry_touch_on_default = !ready && !on_default;
+                let _ = reply.send(ready);
+                Ok(())
+            }
+        };
+        if let Err(err) = result {
+            // A refused injection is what a desktop switch looks like: re-check at once.
+            app.log("debug", &format!("[Input] {err} (desktop {})", desktop.name().unwrap_or("unknown")));
+            force_check = true;
+        }
+    }
+}
+
+fn touch_ready() -> bool {
+    TOUCH_READY.lock().map(|r| *r).unwrap_or(false)
+}
+
 pub fn probe_touch() -> bool {
+    let (tx, rx) = mpsc::channel();
+    dispatch(InputOp::ProbeTouch(tx));
+    rx.recv_timeout(Duration::from_secs(5)).unwrap_or(false)
+}
+
+fn probe_touch_now() -> bool {
     unsafe {
         match InitializeTouchInjection(1, TOUCH_FEEDBACK_DEFAULT) {
             Ok(()) => {
@@ -135,50 +305,78 @@ pub fn probe_touch() -> bool {
 }
 
 pub fn inject_pointer(kind: &str, x: i32, y: i32, touch: bool) {
-    if touch && kind != "rightclick" {
-        let _ = inject_touch(kind, x, y);
-        return;
-    }
-    unsafe {
-        let _ = SetCursorPos(x, y);
-        match kind {
-            "down" => mouse_button(true, true),
-            "up" => mouse_button(true, false),
-            "rightclick" => {
-                mouse_button(false, true);
-                mouse_button(false, false);
-            }
-            _ => {}
-        }
-    }
+    dispatch(InputOp::Pointer { kind: kind.to_string(), x, y, touch });
 }
 
 pub fn inject_wheel(delta: i32) {
-    unsafe { send_mouse(MOUSEEVENTF_WHEEL, delta as i32); }
+    dispatch(InputOp::Wheel(delta));
+}
+
+pub fn inject_key(token: &str) {
+    dispatch(InputOp::Key(token.to_string()));
 }
 
 pub fn end_contact() {
-    // Copy the state out and drop the guard: `inject_touch` locks `TOUCH_XY` itself.
-    let (x, y, down) = TOUCH_XY.lock().map(|xy| *xy).unwrap_or((0, 0, false));
-    if down {
-        // `inject_touch("up")` stores the contact as up. Mark it up even if injection fails.
-        let _ = inject_touch("up", x, y);
-        if let Ok(mut xy) = TOUCH_XY.lock() {
-            xy.2 = false;
-        }
-    }
+    dispatch(InputOp::EndContact);
 }
 
 pub fn repeat_touch() {
-    let (x, y, down) = TOUCH_XY.lock().map(|xy| *xy).unwrap_or((0, 0, false));
-    if down {
-        let _ = inject_touch("move", x, y);
+    dispatch(InputOp::RepeatTouch);
+}
+
+fn pointer_now(kind: &str, x: i32, y: i32, touch: bool) -> Result<(), String> {
+    if touch && kind != "rightclick" {
+        return inject_touch(kind, x, y);
+    }
+    mouse_pointer(kind, x, y)
+}
+
+/// `SetCursorPos`, then the button for `kind`. Buttons are sent even if the move failed.
+fn mouse_pointer(kind: &str, x: i32, y: i32) -> Result<(), String> {
+    unsafe {
+        let moved = SetCursorPos(x, y).map_err(|e| format!("SetCursorPos({x}, {y}): {e}"));
+        let buttons = match kind {
+            "down" => mouse_button(true, true),
+            "up" => mouse_button(true, false),
+            "rightclick" => {
+                let down = mouse_button(false, true);
+                let up = mouse_button(false, false);
+                down.and(up)
+            }
+            _ => Ok(()),
+        };
+        moved.and(buttons)
     }
 }
 
+fn wheel_now(delta: i32) -> Result<(), String> {
+    unsafe { send_mouse(MOUSEEVENTF_WHEEL, delta) }
+}
+
+fn end_contact_now() -> Result<(), String> {
+    // Copy the state out and drop the guard: `inject_touch` locks `TOUCH_XY` itself.
+    let (x, y, down) = TOUCH_XY.lock().map(|xy| *xy).unwrap_or((0, 0, false));
+    if !down {
+        return Ok(());
+    }
+    // `inject_touch("up")` stores the contact as up. Mark it up even if injection fails.
+    let result = inject_touch("up", x, y);
+    if let Ok(mut xy) = TOUCH_XY.lock() {
+        xy.2 = false;
+    }
+    result
+}
+
+fn repeat_touch_now() -> Result<(), String> {
+    let (x, y, down) = TOUCH_XY.lock().map(|xy| *xy).unwrap_or((0, 0, false));
+    if down {
+        return inject_touch("move", x, y);
+    }
+    Ok(())
+}
+
 fn inject_touch(kind: &str, x: i32, y: i32) -> Result<(), String> {
-    let ready = TOUCH_READY.lock().map(|r| *r).unwrap_or(false);
-    if !ready {
+    if !touch_ready() {
         return Err("touch injection is not initialized".into());
     }
     let flags = match kind {
@@ -205,21 +403,21 @@ fn inject_touch(kind: &str, x: i32, y: i32) -> Result<(), String> {
             pressure: 512,
             ..Default::default()
         };
-        InjectTouchInput(&[contact]).map_err(|e| e.to_string())
+        InjectTouchInput(&[contact]).map_err(|e| format!("InjectTouchInput({kind} at {x}, {y}): {e}"))
     }
 }
 
-unsafe fn mouse_button(left: bool, down: bool) {
+unsafe fn mouse_button(left: bool, down: bool) -> Result<(), String> {
     let flags = match (left, down) {
         (true, true) => MOUSEEVENTF_LEFTDOWN,
         (true, false) => MOUSEEVENTF_LEFTUP,
         (false, true) => MOUSEEVENTF_RIGHTDOWN,
         (false, false) => MOUSEEVENTF_RIGHTUP,
     };
-    send_mouse(flags, 0);
+    send_mouse(flags, 0)
 }
 
-unsafe fn send_mouse(flags: windows::Win32::UI::Input::KeyboardAndMouse::MOUSE_EVENT_FLAGS, data: i32) {
+unsafe fn send_mouse(flags: MOUSE_EVENT_FLAGS, data: i32) -> Result<(), String> {
     let input = INPUT {
         r#type: INPUT_MOUSE,
         Anonymous: INPUT_0 {
@@ -233,21 +431,31 @@ unsafe fn send_mouse(flags: windows::Win32::UI::Input::KeyboardAndMouse::MOUSE_E
             },
         },
     };
-    let _ = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+    send_one(input, "mouse")
 }
 
-pub fn inject_key(token: &str) {
+/// One `SendInput` call with one event. `SendInput` returns how many events it inserted; zero
+/// means the input was blocked (for example by another desktop or UIPI).
+unsafe fn send_one(input: INPUT, what: &str) -> Result<(), String> {
+    let sent = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+    if sent == 1 {
+        Ok(())
+    } else {
+        Err(format!("SendInput({what}) inserted {sent} of 1 events: {}", windows::core::Error::from_win32()))
+    }
+}
+
+fn key_now(token: &str) -> Result<(), String> {
     if let Some(ch) = brace_char(token) {
-        send_unicode(ch);
-        return;
+        return send_unicode(ch);
     }
     if let Some(vk) = named_vk(token) {
-        send_vk(vk);
-        return;
+        return send_vk(vk);
     }
     if token.chars().count() == 1 {
-        send_unicode(token.chars().next().unwrap());
+        return send_unicode(token.chars().next().unwrap());
     }
+    Ok(())
 }
 
 fn brace_char(token: &str) -> Option<char> {
@@ -290,16 +498,21 @@ fn named_vk(token: &str) -> Option<VIRTUAL_KEY> {
     })
 }
 
-fn send_unicode(ch: char) {
+fn send_unicode(ch: char) -> Result<(), String> {
     let mut buf = [0u16; 2];
     let encoded = ch.encode_utf16(&mut buf);
+    let mut result = Ok(());
     for unit in encoded {
-        unsafe { key_scan(*unit, true); }
-        unsafe { key_scan(*unit, false); }
+        let down = unsafe { key_scan(*unit, true) };
+        let up = unsafe { key_scan(*unit, false) };
+        if result.is_ok() {
+            result = down.and(up);
+        }
     }
+    result
 }
 
-fn send_vk(vk: VIRTUAL_KEY) {
+fn send_vk(vk: VIRTUAL_KEY) -> Result<(), String> {
     unsafe {
         let down = INPUT {
             r#type: INPUT_KEYBOARD,
@@ -313,12 +526,13 @@ fn send_vk(vk: VIRTUAL_KEY) {
                 ki: KEYBDINPUT { wVk: vk, wScan: 0, dwFlags: KEYEVENTF_KEYUP, time: 0, dwExtraInfo: 0 },
             },
         };
-        let _ = SendInput(&[down], std::mem::size_of::<INPUT>() as i32);
-        let _ = SendInput(&[up], std::mem::size_of::<INPUT>() as i32);
+        let pressed = send_one(down, "key down");
+        let released = send_one(up, "key up");
+        pressed.and(released)
     }
 }
 
-unsafe fn key_scan(scan: u16, down: bool) {
+unsafe fn key_scan(scan: u16, down: bool) -> Result<(), String> {
     let flags = if down { KEYEVENTF_UNICODE } else { KEYEVENTF_UNICODE | KEYEVENTF_KEYUP };
     let input = INPUT {
         r#type: INPUT_KEYBOARD,
@@ -326,7 +540,7 @@ unsafe fn key_scan(scan: u16, down: bool) {
             ki: KEYBDINPUT { wVk: VIRTUAL_KEY(0), wScan: scan, dwFlags: flags, time: 0, dwExtraInfo: 0 },
         },
     };
-    let _ = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+    send_one(input, "unicode key")
 }
 
 pub fn display_snapshot() -> (bool, i32, i32, Vec<(i32, i32)>) {

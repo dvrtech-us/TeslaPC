@@ -57,7 +57,7 @@ pub fn run() -> i32 {
     }
     if opts.session_host {
         println!("[Service] Session host started (supervisor pid {}).", opts.supervisor_pid.map(|p| p.to_string()).unwrap_or_else(|| "none".into()));
-        crate::capture_loop::skip_wgc();
+        crate::capture_loop::session_host_mode();
         if let Some(pid) = opts.supervisor_pid {
             platform::exit_with_supervisor(pid);
         }
@@ -147,6 +147,11 @@ async fn serve(opts: Opts) -> Result<(), HttpBindError> {
                 *host = value.clone();
             }
         }
+    }
+    if opts.session_host {
+        // Before the probes: in session-host mode `InitializeTouchInjection` and every
+        // injection run on the one `Input` thread, which follows the input desktop.
+        platform::start_input_thread(app.clone());
     }
     let input_ok = platform::probe_input();
     app.inner.input_enabled.store(input_ok, std::sync::atomic::Ordering::Relaxed);

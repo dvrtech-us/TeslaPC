@@ -134,6 +134,23 @@ pub fn pointer_path(kind: &str, touch_mode: bool, touch_available: bool) -> Poin
     }
 }
 
+/// [`pointer_path`] with the desktop the input thread is attached to. Touch injection is not
+/// relied on outside the user's desktop (lock screen, sign-in screen, UAC prompt): there every
+/// pointer event takes the mouse path, so a touch-mode tap (down, up) is a left click at the
+/// same position. `on_default_desktop` is always `true` outside `--session-host`.
+pub fn pointer_path_on_desktop(kind: &str, touch_mode: bool, touch_available: bool, on_default_desktop: bool) -> PointerPath {
+    if !on_default_desktop {
+        return PointerPath::Mouse;
+    }
+    pointer_path(kind, touch_mode, touch_available)
+}
+
+/// The touch-repeat tick re-sends the held contact only on the user's desktop. On a secure
+/// desktop pointer events are mouse events, so there is no contact to keep alive.
+pub fn touch_repeat_applies(contact_down: bool, on_default_desktop: bool) -> bool {
+    contact_down && on_default_desktop
+}
+
 /// Hover (move or up with no contact) is ignored. A down is accepted. One contact only.
 pub fn touch_event_applies(kind: &str, contact_down: bool) -> bool {
     match kind {

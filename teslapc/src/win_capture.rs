@@ -47,6 +47,13 @@ thread_local! {
     static DXGI: RefCell<Option<DxgiLive>> = const { RefCell::new(None) };
 }
 
+/// Drop this thread's WGC and DXGI sessions. Called before the capture thread moves to another
+/// desktop: both are bound to the desktop they were opened on. The next grab reopens them.
+pub fn drop_sessions() {
+    WGC.with(|slot| *slot.borrow_mut() = None);
+    DXGI.with(|slot| *slot.borrow_mut() = None);
+}
+
 pub fn grab_wgc() -> Result<GrabOutcome, String> {
     unsafe {
         if let Err(err) = RoInitialize(RO_INIT_MULTITHREADED) {

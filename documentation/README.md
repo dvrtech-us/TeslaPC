@@ -29,7 +29,7 @@ Each feature has its own directory under `features/<module>/<feature-name>/` con
 | media | [media-library](features/media/media-library/media-library.md) | SQLite resume and sticky watched flag at 95% | `teslapc/src/store.rs` |
 | infrastructure | [tesla-browser-bypass](features/infrastructure/tesla-browser-bypass/tesla-browser-bypass.md) | Windows hotspot + portproxy, or Linux nftables when `TESLAPC_BYPASS_IFACE` is set | `teslapc/src/decisions/bypass.rs` |
 | infrastructure | [firewall-bootstrap](features/infrastructure/firewall-bootstrap/firewall-bootstrap.md) | Windows inbound rule for TCP 8080 and 8443 | `teslapc/src/win.rs` `open_firewall` |
-| infrastructure | [windows-service](features/infrastructure/windows-service/windows-service.md) | `service install`/`uninstall`; `--service` supervisor in session 0 starts `--session-host` in the console session; two log files | `teslapc/src/win_service.rs`, `teslapc/src/decisions/service.rs` |
+| infrastructure | [windows-service](features/infrastructure/windows-service/windows-service.md) | `service install`/`uninstall`; `--service` supervisor in session 0 starts `--session-host` in the console session, which follows the input desktop (sign-in, lock, UAC); two log files | `teslapc/src/win_service.rs`, `teslapc/src/win_desktop.rs`, `teslapc/src/decisions/service.rs`, `teslapc/src/decisions/desktop.rs` |
 | infrastructure | [https-bootstrap](features/infrastructure/https-bootstrap/https-bootstrap.md) | In-process rustls, local certificate, DNS-01 renewal | `teslapc/src/certs.rs` |
 
 ## Conventions
