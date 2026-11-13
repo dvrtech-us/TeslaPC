@@ -7,6 +7,7 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
+use crate::decisions::audio::audio_chunk_bytes;
 use crate::decisions::history::WATCHED_FRACTION;
 use crate::decisions::listing::resolve_browse;
 use crate::decisions::media::{
@@ -343,7 +344,7 @@ fn spawn_pair(app: &App, ffmpeg: &Path, file: &str, start: f64) {
                 let app_a = app.clone();
                 std::thread::Builder::new()
                     .name("MediaAudio".into())
-                    .spawn(move || audio_reader(app_a, out, gen, frame_bytes.max(1)))
+                    .spawn(move || audio_reader(app_a, out, gen, frame_bytes.max(1), rate))
                     .ok();
             }
             drain_stderr(child.stderr.take());
@@ -392,7 +393,8 @@ fn video_reader(app: App, mut stdout: std::process::ChildStdout, gen: u64) {
     finish_if_current(&app, gen);
 }
 
-fn audio_reader(app: App, mut stdout: std::process::ChildStdout, gen: u64, frame_bytes: usize) {
+fn audio_reader(app: App, mut stdout: std::process::ChildStdout, gen: u64, frame_bytes: usize, sample_rate: u32) {
+    let chunk_bytes = audio_chunk_bytes(sample_rate, frame_bytes);
     let mut buf = Vec::new();
     let mut chunk = [0u8; 16 * 1024];
     loop {
@@ -403,9 +405,9 @@ fn audio_reader(app: App, mut stdout: std::process::ChildStdout, gen: u64, frame
             Ok(0) => break,
             Ok(n) => {
                 buf.extend_from_slice(&chunk[..n]);
-                while buf.len() >= frame_bytes {
-                    let pcm = bytes::Bytes::copy_from_slice(&buf[..frame_bytes]);
-                    buf.drain(..frame_bytes);
+                while buf.len() >= chunk_bytes {
+                    let pcm = bytes::Bytes::copy_from_slice(&buf[..chunk_bytes]);
+                    buf.drain(..chunk_bytes);
                     if app.inner.pcm.media_mode.load(Ordering::Relaxed) {
                         app.inner.pcm.push(pcm, true);
                     }
@@ -413,6 +415,12 @@ fn audio_reader(app: App, mut stdout: std::process::ChildStdout, gen: u64, frame
             }
             Err(_) => break,
         }
+    }
+    // Flush the tail as whole frames once ffmpeg's output ends.
+    let whole = buf.len() / frame_bytes.max(1) * frame_bytes.max(1);
+    let current = app.inner.playback.lock().map(|p| p.generation == gen).unwrap_or(false);
+    if whole > 0 && current && app.inner.pcm.media_mode.load(Ordering::Relaxed) {
+        app.inner.pcm.push(bytes::Bytes::copy_from_slice(&buf[..whole]), true);
     }
 }
 

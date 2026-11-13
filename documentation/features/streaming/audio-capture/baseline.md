@@ -12,3 +12,7 @@
 - A failed loopback device does not stop HTTP.
 - Windows loopback retries forever. Waits are `1`, `2`, `4`, `8`, then `10` s (`loopback_backoff_ms`), reset after a run over `30` s. `capturing` is false between attempts. Each attempt re-reads the default render endpoint. A repeated error text is logged once, not per attempt.
 - Windows loopback is the default render endpoint. After `IAudioClient::Start`, `capturing` is true and `typical_bytes` comes from the mix format so silence keepalive can run.
+- `/ws/audio` clients read from one `tokio::sync::broadcast` channel of 10 ms chunks (`PCM_BROADCAST_CAPACITY` = `64`, about `640` ms). A lagging client skips the oldest chunks, logs `[Audio] client lagged; skipped <n> chunks`, and keeps playing; it never delays other clients and its backlog never exceeds `64` chunks.
+- Media audio is pushed in frame-aligned 10 ms chunks (`rate / 100 * frame_bytes`), plus a final whole-frame tail when ffmpeg ends. It is never pushed one sample frame at a time.
+- A client text frame `{"type":"stats",...}` up to `512` bytes is logged as `[Audio] client buffered=...`; other client frames are ignored.
+- Keepalive injection requires that no captured packet arrived since the previous `20` ms tick.

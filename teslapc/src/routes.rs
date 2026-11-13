@@ -233,20 +233,27 @@ async fn display_action(State(app): State<App>, axum::extract::Path(action): axu
     let action = action.trim_end_matches('/').to_ascii_lowercase();
     let (_snap_changed, width, height, modes) = platform::display_snapshot();
     let mut changed = false;
+    let mut fitted_stream: Option<i32> = None;
     if action == "match" {
         if let (Some(vw), Some(vh)) = (query.get("w").and_then(|v| v.parse::<i32>().ok()), query.get("h").and_then(|v| v.parse::<i32>().ok())) {
-            if vw > 0 && vh > 0 {
-                let max_h = crate::decisions::display::match_max_height(app.inner.stream_height.load(Ordering::Relaxed));
-                let mode_list: Vec<_> = modes.iter().copied().map(|(w, h)| crate::decisions::display::Mode { w, h }).collect();
-                if let Some(best) = crate::decisions::display::best_for_aspect(&mode_list, vw as f64 / vh as f64, max_h) {
-                    if best.w != width || best.h != height {
-                        changed = platform::try_set_mode(best.w, best.h);
-                        if changed {
-                            app.bump_capture();
-                            println!("[Display] Matched viewport {vw}x{vh} -> {}x{}", best.w, best.h);
-                        }
+            let mode_list: Vec<_> = modes.iter().copied().map(|(w, h)| crate::decisions::display::Mode { w, h }).collect();
+            if let Some(fit) = crate::decisions::display::fit_viewport(&mode_list, vw, vh) {
+                if fit.mode.w != width || fit.mode.h != height {
+                    changed = platform::try_set_mode(fit.mode.w, fit.mode.h);
+                    if changed {
+                        app.bump_capture();
                     }
                 }
+                // The stream height follows the mode that is actually active.
+                if changed || (fit.mode.w == width && fit.mode.h == height) {
+                    if app.inner.stream_height.load(Ordering::Relaxed) != fit.stream_height {
+                        save_stream_height(&app, fit.stream_height);
+                    }
+                    fitted_stream = Some(fit.stream_height);
+                }
+                println!("[Display] Fit viewport {vw}x{vh} -> mode {}x{} (changed: {changed}), stream height {}", fit.mode.w, fit.mode.h, fit.stream_height);
+            } else {
+                println!("[Display] Fit viewport {vw}x{vh}: no usable display mode.");
             }
         }
     } else if action == "set" {
@@ -267,7 +274,20 @@ async fn display_action(State(app): State<App>, axum::extract::Path(action): axu
     };
     let _ = changed_now;
     let modes_json: Vec<_> = modes.into_iter().map(|(w, h)| serde_json::json!({ "w": w, "h": h })).collect();
-    json_body(&serde_json::json!({ "changed": changed, "width": width, "height": height, "modes": modes_json }).to_string())
+    let stream_height = fitted_stream.unwrap_or_else(|| app.inner.stream_height.load(Ordering::Relaxed));
+    json_body(&serde_json::json!({ "changed": changed, "width": width, "height": height, "streamHeight": stream_height, "modes": modes_json }).to_string())
+}
+
+/// Persist and apply a stream height chosen by Fit screen, the same way `POST /config` does.
+fn save_stream_height(app: &App, height: i32) {
+    let existing = std::fs::read_to_string(paths::env_file()).unwrap_or_default();
+    let saved = apply_config_body(&existing, &format!("streamHeight={height}"));
+    if let Err(err) = write_env(&saved.text) {
+        println!("[Display] Stream height {height} was applied but not saved: {err}");
+    }
+    std::env::set_var(KEY_STREAM_HEIGHT, height.to_string());
+    app.inner.stream_height.store(clamp_stream_height(height), Ordering::Relaxed);
+    app.bump_capture();
 }
 
 async fn hotspot(State(app): State<App>, body: Bytes) -> impl IntoResponse {
@@ -331,33 +351,38 @@ async fn audio_ws(State(app): State<App>, ws: WebSocketUpgrade) -> impl IntoResp
 }
 
 async fn audio_socket(app: App, mut socket: WebSocket) {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    if let Ok(mut clients) = app.inner.pcm.clients.lock() {
-        clients.push(tx);
-    }
     app.inner.pcm.client_count.fetch_add(1, Ordering::Relaxed);
     let announce = app.inner.audio_format.lock().map(|f| f.announce()).unwrap_or_else(|_| crate::decisions::audio::format_message(48000, 32, 2, "float"));
     if socket.send(Message::Text(announce.into())).await.is_err() {
         drop_audio_client(&app);
         return;
     }
+    let mut rx = app.inner.pcm.tx.subscribe();
     loop {
         tokio::select! {
             incoming = socket.recv() => {
                 match incoming {
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Err(_)) => break,
+                    Some(Ok(Message::Text(text))) => {
+                        if let Some(line) = crate::decisions::audio::client_stats_line(text.as_str()) {
+                            app.log("info", &line);
+                        }
+                    }
                     _ => {}
                 }
             }
             buf = rx.recv() => {
                 match buf {
-                    Some(bytes) => {
+                    Ok(bytes) => {
                         if socket.send(Message::Binary(bytes)).await.is_err() {
                             break;
                         }
                     }
-                    None => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        app.log("info", &format!("[Audio] client lagged; skipped {n} chunks"));
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
         }
@@ -471,7 +496,7 @@ pub async fn silence_keepalive(app: App) {
         let input = crate::decisions::audio::KeepaliveInput {
             idle_ms: app.inner.pcm.idle_ms(),
             silent_ms: app.inner.pcm.silent_ms(),
-            queue_empty: app.inner.pcm.queue_empty(),
+            no_packet_since_tick: app.inner.pcm.take_idle_tick(),
             capturing: app.inner.pcm.capturing.load(Ordering::Relaxed),
             media_mode: app.inner.pcm.media_mode.load(Ordering::Relaxed),
             has_clients: app.inner.pcm.client_count.load(Ordering::Relaxed) > 0,
@@ -485,19 +510,6 @@ pub async fn silence_keepalive(app: App) {
                 .map(|f| crate::decisions::audio::keepalive_bytes(elapsed_ms, f.sample_rate, f.bits_per_sample, f.channels))
                 .unwrap_or(0);
             app.inner.pcm.push(app.inner.pcm.noise(n), false);
-        }
-    }
-}
-
-pub async fn pcm_dispatch(app: App) {
-    loop {
-        app.inner.pcm.notify.notified().await;
-        let batch: Vec<Bytes> = app.inner.pcm.queue.lock().map(|mut q| q.drain(..).collect()).unwrap_or_default();
-        let clients: Vec<_> = app.inner.pcm.clients.lock().map(|c| c.clone()).unwrap_or_default();
-        for buf in batch {
-            for tx in &clients {
-                let _ = tx.send(buf.clone());
-            }
         }
     }
 }

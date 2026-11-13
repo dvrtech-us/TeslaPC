@@ -170,8 +170,6 @@ async fn serve(opts: Opts) -> Result<(), HttpBindError> {
     crate::capture_loop::ensure_started(&app);
     let app_k = app.clone();
     tokio::spawn(async move { routes::silence_keepalive(app_k).await });
-    let app_d = app.clone();
-    tokio::spawn(async move { routes::pcm_dispatch(app_d).await });
     let app_t = app.clone();
     tokio::spawn(async move { routes::touch_repeat(app_t).await });
 

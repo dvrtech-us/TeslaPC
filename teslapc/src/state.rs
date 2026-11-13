@@ -1,6 +1,5 @@
 //! Process-wide server state. Routes and OS threads share this.
 
-use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering};
@@ -8,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use bytes::Bytes;
-use tokio::sync::{mpsc, Notify, watch};
+use tokio::sync::{broadcast, watch};
 
 use crate::decisions::audio::{cover_silence, format_message, is_silent, keepalive_noise, sample_format_name};
 use crate::decisions::config::{input_mode_from, parse_log_level, KEY_INPUT_MODE, KEY_LOG_LEVEL, KEY_STREAM_HEIGHT, KEY_VIDEO_ROOT};
@@ -56,10 +55,16 @@ impl AudioFormat {
     }
 }
 
+/// Chunks the audio broadcast channel holds for a slow client: 64 chunks of 10 ms, about
+/// 640 ms of audio. A client further behind skips to the oldest chunk still held.
+pub const PCM_BROADCAST_CAPACITY: usize = 64;
+
 pub struct PcmHub {
-    pub queue: Mutex<VecDeque<Bytes>>,
-    pub notify: Notify,
-    pub clients: Mutex<Vec<mpsc::UnboundedSender<Bytes>>>,
+    /// Fan-out to every `/ws/audio` client. A receiver that falls behind skips the oldest
+    /// chunks instead of queueing without limit.
+    pub tx: broadcast::Sender<Bytes>,
+    /// Set by each captured packet, cleared by every keepalive tick.
+    pub pushed_since_tick: AtomicBool,
     pub client_count: AtomicUsize,
     pub media_mode: AtomicBool,
     pub capturing: AtomicBool,
@@ -76,9 +81,8 @@ pub struct PcmHub {
 impl PcmHub {
     pub fn new() -> Self {
         Self {
-            queue: Mutex::new(VecDeque::new()),
-            notify: Notify::new(),
-            clients: Mutex::new(Vec::new()),
+            tx: broadcast::channel(PCM_BROADCAST_CAPACITY).0,
+            pushed_since_tick: AtomicBool::new(false),
             client_count: AtomicUsize::new(0),
             media_mode: AtomicBool::new(false),
             capturing: AtomicBool::new(false),
@@ -90,8 +94,10 @@ impl PcmHub {
         }
     }
 
-    pub fn queue_empty(&self) -> bool {
-        self.queue.lock().map(|q| q.is_empty()).unwrap_or(true)
+    /// True when no captured packet arrived since the previous call. The keepalive task calls
+    /// this once per tick.
+    pub fn take_idle_tick(&self) -> bool {
+        !self.pushed_since_tick.swap(false, Ordering::Relaxed)
     }
 
     pub fn set_sample_kind(&self, bits_per_sample: u16, is_float: bool) {
@@ -118,6 +124,7 @@ impl PcmHub {
         let mut bytes = bytes;
         if real {
             let now = Instant::now();
+            self.pushed_since_tick.store(true, Ordering::Relaxed);
             if let Ok(mut last) = self.last_real.lock() {
                 *last = now;
             }
@@ -133,13 +140,8 @@ impl PcmHub {
         if self.client_count.load(Ordering::Relaxed) == 0 {
             return;
         }
-        if let Ok(mut q) = self.queue.lock() {
-            q.push_back(bytes);
-            while q.len() > 32 {
-                q.pop_front();
-            }
-        }
-        self.notify.notify_one();
+        // No receiver is not an error: the client left between the count check and here.
+        let _ = self.tx.send(bytes);
     }
 
     pub fn silent_ms(&self) -> u64 {

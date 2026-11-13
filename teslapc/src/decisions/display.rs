@@ -37,9 +37,54 @@ pub fn best_for_aspect(modes: &[Mode], target_aspect: f64, max_height: i32) -> O
     best
 }
 
-/// Cap used by `/display/match`: at least 480, otherwise the stream height.
-pub fn match_max_height(stream_height: i32) -> i32 {
-    stream_height.max(480)
+/// What Fit screen sets: the desktop mode and the stream height that goes with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FitChoice {
+    pub mode: Mode,
+    pub stream_height: i32,
+}
+
+/// Fit the desktop and the stream to a browser stream area of `vw` x `vh` device pixels.
+///
+/// Mode: among modes at least 480 lines tall that are at least as large as the area in both
+/// directions, the closest aspect ratio wins, and on a near-tie (within 0.01) the smallest
+/// area wins, so the picture is never enlarged and no more is sent than needed. When no mode
+/// is that large, the closest aspect wins and a near-tie goes to the largest area.
+///
+/// Stream height: the height the picture occupies in the area once it is fitted by aspect,
+/// never more than the mode height, clamped to the allowed stream range.
+pub fn fit_viewport(modes: &[Mode], vw: i32, vh: i32) -> Option<FitChoice> {
+    if vw <= 0 || vh <= 0 {
+        return None;
+    }
+    let target = vw as f64 / vh as f64;
+    let usable: Vec<Mode> = modes.iter().copied().filter(|m| m.h >= 480 && m.w > 0).collect();
+    let covering: Vec<Mode> = usable.iter().copied().filter(|m| m.w >= vw && m.h >= vh).collect();
+    let (pool, prefer_small) = if covering.is_empty() { (usable, false) } else { (covering, true) };
+    let area = |m: &Mode| m.w as i64 * m.h as i64;
+    let err = |m: &Mode| (m.w as f64 / m.h as f64 - target).abs();
+    let mut best: Option<Mode> = None;
+    for mode in pool {
+        let replace = match best {
+            None => true,
+            Some(current) => {
+                let (e, be) = (err(&mode), err(&current));
+                if (e - be).abs() <= 0.01 {
+                    if prefer_small { area(&mode) < area(&current) } else { area(&mode) > area(&current) }
+                } else {
+                    e < be
+                }
+            }
+        };
+        if replace {
+            best = Some(mode);
+        }
+    }
+    let mode = best?;
+    let shown = (vw as f64 * mode.h as f64 / mode.w as f64).round() as i32;
+    // `clamp_stream_height` falls back to the default for an out-of-range value, so bound it first.
+    let stream_height = crate::decisions::stream::clamp_stream_height(shown.min(vh).min(mode.h).max(240));
+    Some(FitChoice { mode, stream_height })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

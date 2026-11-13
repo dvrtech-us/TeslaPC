@@ -62,6 +62,15 @@
         let audioFormat = null;
         let useWorklet = true; // will be set to false if AudioWorklet fails
         let scheduledTime = 0; // for fallback buffer scheduling
+        let audioPlayerReady = false; // binary packets are dropped until the player in use is ready
+        let fallbackSources = []; // fallback AudioBufferSourceNodes not yet ended
+        let fallbackTrims = 0;
+        let fallbackUnderruns = 0;
+        let audioStats = null; // latest { bufferedMs, minMs, underruns, trims } from the worklet
+        let audioStatsTimer = null;
+        var AUDIO_STATS_INTERVAL_MS = 10000;
+        var FALLBACK_MAX_LEAD_S = 0.25;
+        var FALLBACK_RESET_LEAD_S = 0.1;
         let audioConnecting = false;
         let intentionalAudioClose = false;
         let sessionStarted = false;
@@ -130,6 +139,7 @@
                 useWorklet = true;
                 scheduledTime = 0;
             }
+            resetAudioPlayerState();
 
             audioConnecting = true;
             hideScreenOverlay();
@@ -181,6 +191,9 @@
                                 sourceSampleRate: audioFormat.sampleRate
                             }
                         });
+                        pcmPlayerNode.port.onmessage = function (ev) {
+                            if (ev.data && ev.data.type === 'stats') audioStats = ev.data;
+                        };
                         pcmPlayerNode.connect(audioContext.destination);
                         useWorklet = true;
                         console.log('Audio: using AudioWorklet');
@@ -192,28 +205,81 @@
 
                     await audioContext.resume();
 
+                    audioPlayerReady = true;
+                    startAudioStatsTimer(audioSocket);
                     audioConnecting = false;
                     sessionStarted = true;
                     console.log('Audio playback started');
                     return;
                 }
 
-                // Subsequent messages are binary audio data
-                if (!audioFormat || !audioContext) return;
+                // Subsequent messages are binary audio data. Until the player that will be
+                // used is ready (addModule pending), drop them so nothing plays underneath it.
+                if (!audioFormat || !audioContext || !audioPlayerReady) return;
 
                 if (audioContext.state === 'suspended') {
                     audioContext.resume();
                 }
 
                 if (useWorklet && pcmPlayerNode) {
-                    // Primary path: AudioWorklet
-                    pcmPlayerNode.port.postMessage(event.data);
+                    // Primary path: AudioWorklet (transfer the buffer instead of copying it)
+                    if (event.data instanceof ArrayBuffer) {
+                        pcmPlayerNode.port.postMessage(event.data, [event.data]);
+                    } else {
+                        pcmPlayerNode.port.postMessage(event.data);
+                    }
                 } else {
                     // Fallback path: decode PCM and schedule AudioBufferSourceNodes
                     playPcmChunkFallback(event.data);
                 }
             };
 
+        }
+
+        function resetAudioPlayerState() {
+            audioPlayerReady = false;
+            stopFallbackSources();
+            fallbackTrims = 0;
+            fallbackUnderruns = 0;
+            audioStats = null;
+            if (audioStatsTimer) {
+                clearInterval(audioStatsTimer);
+                audioStatsTimer = null;
+            }
+        }
+
+        function stopFallbackSources() {
+            var list = fallbackSources;
+            fallbackSources = [];
+            for (var i = 0; i < list.length; i++) {
+                try { list[i].onended = null; list[i].stop(); } catch (e) {}
+            }
+        }
+
+        // Every 10 s send the player's buffer stats on the audio socket; the server logs them.
+        function startAudioStatsTimer(socket) {
+            if (audioStatsTimer) clearInterval(audioStatsTimer);
+            audioStatsTimer = setInterval(function () {
+                if (socket !== audioSocket || !audioContext || socket.readyState !== WebSocket.OPEN) return;
+                var s;
+                if (useWorklet && pcmPlayerNode) {
+                    if (!audioStats) return;
+                    s = audioStats;
+                } else {
+                    var lead = Math.max(0, Math.round((scheduledTime - audioContext.currentTime) * 1000));
+                    s = { bufferedMs: lead, minMs: lead, underruns: fallbackUnderruns, trims: fallbackTrims };
+                }
+                try {
+                    socket.send(JSON.stringify({
+                        type: 'stats',
+                        bufferedMs: s.bufferedMs,
+                        minMs: s.minMs,
+                        underruns: s.underruns,
+                        trims: s.trims,
+                        contextRate: audioContext.sampleRate
+                    }));
+                } catch (e) {}
+            }, AUDIO_STATS_INTERVAL_MS);
         }
 
         function decodePcmToFloat32(arrayBuffer, format) {
@@ -319,10 +385,21 @@
             source.connect(audioContext.destination);
 
             var currentTime = audioContext.currentTime;
-            if (scheduledTime < currentTime) {
+            if (scheduledTime - currentTime > FALLBACK_MAX_LEAD_S) {
+                // Too far ahead: drop what is queued and restart close to now.
+                stopFallbackSources();
+                scheduledTime = currentTime + FALLBACK_RESET_LEAD_S;
+                fallbackTrims++;
+            } else if (scheduledTime < currentTime) {
                 // We've fallen behind — schedule slightly in the future to avoid glitches
+                if (scheduledTime > 0) fallbackUnderruns++;
                 scheduledTime = currentTime + 0.02;
             }
+            source.onended = function () {
+                var i = fallbackSources.indexOf(source);
+                if (i >= 0) fallbackSources.splice(i, 1);
+            };
+            fallbackSources.push(source);
             source.start(scheduledTime);
             scheduledTime += audioBuffer.duration;
         }
@@ -650,8 +727,10 @@
             fitBusy = true;
             if (fitLabel === null) fitLabel = btn.innerHTML;
             var s = document.querySelector('.screen');
-            var w = s ? s.clientWidth : window.innerWidth;
-            var h = s ? s.clientHeight : window.innerHeight;
+            // Real pixels of the stream area, so the PC mode and the stream match what is shown.
+            var dpr = window.devicePixelRatio || 1;
+            var w = Math.round((s ? s.clientWidth : window.innerWidth) * dpr);
+            var h = Math.round((s ? s.clientHeight : window.innerHeight) * dpr);
             btn.disabled = true;
             var settled = false;
             fitGuard = setTimeout(function () {

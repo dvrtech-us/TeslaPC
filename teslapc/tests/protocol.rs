@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use teslapc::assets;
-use teslapc::decisions::audio::{cover_silence, format_message, is_silent, keepalive_bytes, keepalive_noise, loopback_backoff_ms, should_inject_silence, KeepaliveInput, KEEPALIVE_NOISE_AMPLITUDE, KEEPALIVE_POLL_MS, LOOPBACK_BACKOFF_MAX_MS, LOOPBACK_BACKOFF_START_MS, LOOPBACK_HEALTHY_RUN_MS, SILENCE_MAX_MS, SILENCE_START_MS};
+use teslapc::decisions::audio::{audio_chunk_bytes, client_stats_line, cover_silence, format_message, is_silent, keepalive_bytes, keepalive_noise, loopback_backoff_ms, should_inject_silence, KeepaliveInput, KEEPALIVE_NOISE_AMPLITUDE, KEEPALIVE_POLL_MS, LOOPBACK_BACKOFF_MAX_MS, LOOPBACK_BACKOFF_START_MS, LOOPBACK_HEALTHY_RUN_MS, SILENCE_MAX_MS, SILENCE_START_MS};
 use teslapc::decisions::bypass::linux_bypass_plan;
 use teslapc::decisions::capture::{backend_after_frame, first_capture_backend, no_frame_action, retry_after_switch, BackendStep, CaptureBackend, NoFrameAction, DXGI_SWITCH_RETRIES, DXGI_SWITCH_RETRY_MS, NO_FRAME_FAIL_MS, REPUBLISH_INTERVAL_MS};
 use teslapc::decisions::config::{apply_config_body, public_config_json, PublicConfig, KEY_CF_TOKEN};
@@ -132,7 +132,7 @@ fn audio_format_and_silence_keepalive() {
     let base = KeepaliveInput {
         idle_ms: 250,
         silent_ms: 250,
-        queue_empty: true,
+        no_packet_since_tick: true,
         capturing: true,
         media_mode: false,
         has_clients: true,
@@ -145,7 +145,7 @@ fn audio_format_and_silence_keepalive() {
     // Silent packets kept arriving until now, so the packet gap is short but the silence is long.
     assert!(!should_inject_silence(KeepaliveInput { idle_ms: 300, silent_ms: 10_000, ..base }));
     assert!(!should_inject_silence(KeepaliveInput { media_mode: true, ..base }));
-    assert!(!should_inject_silence(KeepaliveInput { queue_empty: false, ..base }));
+    assert!(!should_inject_silence(KeepaliveInput { no_packet_since_tick: false, ..base }));
     assert!(!should_inject_silence(KeepaliveInput { has_clients: false, ..base }));
     assert!(!should_inject_silence(KeepaliveInput { typical_buffer_bytes: 0, ..base }));
     assert!(!should_inject_silence(KeepaliveInput { capturing: false, ..base }));
@@ -436,7 +436,7 @@ fn main_page_has_no_resolution_picker_and_settings_applies_it_on_tap() {
     let config = text("/config.html");
     assert!(config.contains("Largest picture height sent to the car"));
     assert!(config.contains("A video that is already playing keeps its size"));
-    assert!(config.contains("changes the PC's real display resolution"));
+    assert!(config.contains("sets both the PC's real display resolution and the stream resolution"));
     assert!(config.contains("does not restore the previous resolution"));
     assert!(config.contains("Nothing to save."));
     assert!(!config.contains("body.set('streamHeight', form"));
@@ -857,4 +857,57 @@ fn dxgi_frame_without_a_present_time_is_not_a_picture() {
     assert!(!dxgi_frame_has_image(0));
     assert!(dxgi_frame_has_image(1));
     assert!(dxgi_frame_has_image(133_000_000_000));
+}
+
+#[test]
+fn audio_chunks_are_ten_ms_and_frame_aligned() {
+    assert_eq!(audio_chunk_bytes(48_000, 8), 3840);
+    assert_eq!(audio_chunk_bytes(44_100, 4), 1764);
+    assert_eq!(audio_chunk_bytes(44_100, 6) % 6, 0);
+    assert_eq!(audio_chunk_bytes(22_050, 6), 220 * 6);
+    assert_eq!(audio_chunk_bytes(0, 8), 8);
+    assert_eq!(audio_chunk_bytes(50, 0), 1);
+    assert!(audio_chunk_bytes(1, 1) > 0);
+}
+
+#[test]
+fn client_stats_frame_becomes_one_log_line() {
+    let full = r#"{"type":"stats","bufferedMs":103.5,"minMs":88,"underruns":2,"trims":1,"contextRate":48000}"#;
+    assert_eq!(
+        client_stats_line(full).unwrap(),
+        "[Audio] client buffered=103.5ms min=88ms underruns=2 trims=1 rate=48000"
+    );
+    assert_eq!(
+        client_stats_line(r#"{"type":"stats","minMs":5,"trims":"x"}"#).unwrap(),
+        "[Audio] client buffered=?ms min=5ms underruns=? trims=? rate=?"
+    );
+    assert!(client_stats_line(r#"{"type":"hello"}"#).is_none());
+    assert!(client_stats_line(r#"{"bufferedMs":1}"#).is_none());
+    assert!(client_stats_line("not json").is_none());
+    assert!(client_stats_line("[1,2]").is_none());
+    let big = format!(r#"{{"type":"stats","pad":"{}"}}"#, "a".repeat(600));
+    assert!(client_stats_line(&big).is_none());
+}
+
+#[test]
+fn fit_screen_picks_a_mode_that_covers_the_viewport_and_a_matching_stream_height() {
+    use teslapc::decisions::display::{fit_viewport, FitChoice};
+    let modes: Vec<Mode> = [(640, 480), (720, 480), (720, 576), (800, 600), (1024, 768), (1280, 720), (1280, 800), (1280, 1024), (1366, 768), (1600, 900), (1600, 1200), (1680, 1050), (1920, 1080)]
+        .iter()
+        .map(|&(w, h)| Mode { w, h })
+        .collect();
+    // 1.55:1 area. 1280x800 and 1680x1050 are equally close in shape; the smaller one wins.
+    // The picture is 1200 wide in the area, so it is 750 tall.
+    assert_eq!(fit_viewport(&modes, 1200, 774), Some(FitChoice { mode: Mode { w: 1280, h: 800 }, stream_height: 750 }));
+    // A 16:9 area gets the smallest 16:9 mode that covers it, at the area's height.
+    assert_eq!(fit_viewport(&modes, 1280, 720), Some(FitChoice { mode: Mode { w: 1280, h: 720 }, stream_height: 720 }));
+    assert_eq!(fit_viewport(&modes, 1300, 731), Some(FitChoice { mode: Mode { w: 1366, h: 768 }, stream_height: 731 }));
+    assert_eq!(fit_viewport(&modes, 1400, 788), Some(FitChoice { mode: Mode { w: 1600, h: 900 }, stream_height: 788 }));
+    // Nothing covers a 4K area: closest shape, largest mode, stream at the mode height.
+    assert_eq!(fit_viewport(&modes, 3840, 2160), Some(FitChoice { mode: Mode { w: 1920, h: 1080 }, stream_height: 1080 }));
+    // Modes under 480 lines are never used, and the stream height never drops below 240.
+    assert_eq!(fit_viewport(&[Mode { w: 640, h: 360 }], 600, 300), None);
+    assert_eq!(fit_viewport(&modes, 300, 200), Some(FitChoice { mode: Mode { w: 720, h: 480 }, stream_height: 240 }));
+    assert_eq!(fit_viewport(&modes, 0, 600), None);
+    assert_eq!(fit_viewport(&[], 1200, 774), None);
 }

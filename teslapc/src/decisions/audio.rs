@@ -18,7 +18,8 @@ pub struct KeepaliveInput {
     pub idle_ms: u64,
     /// Time since the last captured packet that held sound.
     pub silent_ms: u64,
-    pub queue_empty: bool,
+    /// No captured packet arrived since the previous keepalive tick.
+    pub no_packet_since_tick: bool,
     pub capturing: bool,
     pub media_mode: bool,
     pub has_clients: bool,
@@ -30,7 +31,7 @@ pub fn should_inject_silence(input: KeepaliveInput) -> bool {
         && !input.media_mode
         && input.has_clients
         && input.typical_buffer_bytes > 0
-        && input.queue_empty
+        && input.no_packet_since_tick
         && input.idle_ms >= SILENCE_START_MS
         && cover_silence(input.silent_ms)
 }
@@ -130,4 +131,43 @@ pub fn format_message(sample_rate: u32, bits_per_sample: u16, channels: u16, sam
         "sampleFormat": sample_format,
     })
     .to_string()
+}
+
+/// Length of one audio chunk pushed to clients.
+pub const AUDIO_CHUNK_MS: u32 = 10;
+
+/// Bytes in one `AUDIO_CHUNK_MS` chunk at `sample_rate`, in whole frames and never zero.
+/// `frame_bytes` is bytes per sample times channels.
+pub fn audio_chunk_bytes(sample_rate: u32, frame_bytes: usize) -> usize {
+    let frame_bytes = frame_bytes.max(1);
+    let frames = (sample_rate / (1000 / AUDIO_CHUNK_MS)) as usize;
+    frames.max(1) * frame_bytes
+}
+
+/// Largest stats text frame the server reads from a client.
+pub const CLIENT_STATS_MAX_BYTES: usize = 512;
+
+/// Log line for a client `{"type":"stats",...}` text frame, or `None` for anything else
+/// (wrong type, not JSON, or longer than `CLIENT_STATS_MAX_BYTES`). Missing or non-numeric
+/// fields print as `?`.
+pub fn client_stats_line(text: &str) -> Option<String> {
+    if text.len() > CLIENT_STATS_MAX_BYTES {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    if value.get("type")?.as_str()? != "stats" {
+        return None;
+    }
+    let field = |name: &str| match value.get(name) {
+        Some(v) if v.is_number() => v.to_string(),
+        _ => "?".to_string(),
+    };
+    Some(format!(
+        "[Audio] client buffered={}ms min={}ms underruns={} trims={} rate={}",
+        field("bufferedMs"),
+        field("minMs"),
+        field("underruns"),
+        field("trims"),
+        field("contextRate"),
+    ))
 }

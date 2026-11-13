@@ -2,8 +2,10 @@
  * Self-contained audio client for the /ws/audio PCM stream.
  *
  * Connects to the audio WebSocket, reads the format metadata, and plays the PCM via an
- * AudioWorklet (PCMPlayerProcessor.js) with a manual-scheduling fallback. Used by the media
- * player page (play.html). index.html has its own inline copy wired to its playback button.
+ * AudioWorklet (PCMPlayerProcessor.js, which bounds the buffer) with a manual-scheduling
+ * fallback. Used by the media player page (play.html). index.html has its own inline copy
+ * wired to its playback button; keep the two behaviorally identical. Packets are dropped until
+ * the player is ready, and buffer stats go back on the socket every 10 s.
  *
  * Browsers require a user gesture before audio can start, so call startTeslaAudio() from a tap.
  */
@@ -15,13 +17,69 @@
     var useWorklet = true;
     var scheduledTime = 0;
     var connecting = false;
+    var playerReady = false;      // binary packets are dropped until the player in use is ready
+    var fallbackSources = [];     // fallback AudioBufferSourceNodes not yet ended
+    var fallbackTrims = 0;
+    var fallbackUnderruns = 0;
+    var workletStats = null;      // latest { bufferedMs, minMs, underruns, trims } from the worklet
+    var statsTimer = null;
+    var STATS_INTERVAL_MS = 10000;
+    var FALLBACK_MAX_LEAD_S = 0.25;
+    var FALLBACK_RESET_LEAD_S = 0.1;
 
     function getWsUrl(path) {
         var protocol = (location.protocol === 'https:') ? 'wss://' : 'ws://';
         return protocol + location.host + path;
     }
 
+    function resetPlayerState() {
+        playerReady = false;
+        stopFallbackSources();
+        fallbackTrims = 0;
+        fallbackUnderruns = 0;
+        workletStats = null;
+        if (statsTimer) {
+            clearInterval(statsTimer);
+            statsTimer = null;
+        }
+    }
+
+    function stopFallbackSources() {
+        var list = fallbackSources;
+        fallbackSources = [];
+        for (var i = 0; i < list.length; i++) {
+            try { list[i].onended = null; list[i].stop(); } catch (e) {}
+        }
+    }
+
+    // Every 10 s send the player's buffer stats on the audio socket; the server logs them.
+    function startStatsTimer(socket) {
+        if (statsTimer) clearInterval(statsTimer);
+        statsTimer = setInterval(function () {
+            if (socket !== audioSocket || !audioContext || socket.readyState !== WebSocket.OPEN) return;
+            var s;
+            if (useWorklet && pcmPlayerNode) {
+                if (!workletStats) return;
+                s = workletStats;
+            } else {
+                var lead = Math.max(0, Math.round((scheduledTime - audioContext.currentTime) * 1000));
+                s = { bufferedMs: lead, minMs: lead, underruns: fallbackUnderruns, trims: fallbackTrims };
+            }
+            try {
+                socket.send(JSON.stringify({
+                    type: 'stats',
+                    bufferedMs: s.bufferedMs,
+                    minMs: s.minMs,
+                    underruns: s.underruns,
+                    trims: s.trims,
+                    contextRate: audioContext.sampleRate
+                }));
+            } catch (e) {}
+        }, STATS_INTERVAL_MS);
+    }
+
     function teardown() {
+        resetPlayerState();
         try { if (audioSocket) audioSocket.close(); } catch (e) {}
         try { if (audioContext) audioContext.close(); } catch (e) {}
         audioContext = null;
@@ -35,6 +93,7 @@
     function startTeslaAudio() {
         if (connecting) return;
         if (audioContext != null) teardown();
+        resetPlayerState();
         connecting = true;
 
         audioSocket = new WebSocket(getWsUrl('/ws/audio'));
@@ -63,6 +122,9 @@
                             sourceSampleRate: audioFormat.sampleRate
                         }
                     });
+                    pcmPlayerNode.port.onmessage = function (ev) {
+                        if (ev.data && ev.data.type === 'stats') workletStats = ev.data;
+                    };
                     pcmPlayerNode.connect(audioContext.destination);
                     useWorklet = true;
                 } catch (e) {
@@ -72,17 +134,25 @@
                 }
 
                 await audioContext.resume();
+                playerReady = true;
+                startStatsTimer(audioSocket);
                 connecting = false;
                 console.log('Audio playback started');
                 return;
             }
 
-            if (!audioFormat || !audioContext) return;
+            // Until the player that will be used is ready (addModule pending), drop packets
+            // so nothing plays underneath it.
+            if (!audioFormat || !audioContext || !playerReady) return;
             if (audioContext.state === 'suspended') {
                 audioContext.resume();
             }
             if (useWorklet && pcmPlayerNode) {
-                pcmPlayerNode.port.postMessage(event.data);
+                if (event.data instanceof ArrayBuffer) {
+                    pcmPlayerNode.port.postMessage(event.data, [event.data]);
+                } else {
+                    pcmPlayerNode.port.postMessage(event.data);
+                }
             } else {
                 playPcmChunkFallback(event.data);
             }
@@ -156,7 +226,20 @@
         src.buffer = audioBuffer;
         src.connect(audioContext.destination);
         var now = audioContext.currentTime;
-        if (scheduledTime < now) scheduledTime = now + 0.02;
+        if (scheduledTime - now > FALLBACK_MAX_LEAD_S) {
+            // Too far ahead: drop what is queued and restart close to now.
+            stopFallbackSources();
+            scheduledTime = now + FALLBACK_RESET_LEAD_S;
+            fallbackTrims++;
+        } else if (scheduledTime < now) {
+            if (scheduledTime > 0) fallbackUnderruns++;
+            scheduledTime = now + 0.02;
+        }
+        src.onended = function () {
+            var i = fallbackSources.indexOf(src);
+            if (i >= 0) fallbackSources.splice(i, 1);
+        };
+        fallbackSources.push(src);
         src.start(scheduledTime);
         scheduledTime += audioBuffer.duration;
     }
