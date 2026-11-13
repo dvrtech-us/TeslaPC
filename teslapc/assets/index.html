@@ -40,7 +40,7 @@
             autocorrect="off" autocapitalize="off" spellcheck="false" />
         <button class="btn" onclick="window.location.assign('/list.html')">&#128193; Files</button>
         <button class="btn" onclick="window.location.assign('/config.html')">&#9881; Settings</button>
-        <button type="button" id="fitBtn" class="btn" onclick="fitScreen(this)" title="Set the PC resolution to match this screen">&#9974; Fit screen</button>
+        <button type="button" id="fitBtn" class="btn" onclick="fitScreen(this)" title="Set the PC resolution to match this screen"><svg class="btn-icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg> Fit screen</button>
         <span id="streamInfo" class="stream-info" aria-hidden="true" tabindex="-1">&mdash;</span>
     </div>
     <!-- Include the WebSocket JavaScript library -->
@@ -634,7 +634,7 @@
             if (fitTimer) clearTimeout(fitTimer);
             btn.textContent = text;
             fitTimer = setTimeout(function () {
-                btn.textContent = fitLabel;
+                btn.innerHTML = fitLabel;
                 fitTimer = null;
             }, 4000);
         }
@@ -648,7 +648,7 @@
         function fitScreen(btn) {
             if (fitBusy) return;
             fitBusy = true;
-            if (fitLabel === null) fitLabel = btn.textContent;
+            if (fitLabel === null) fitLabel = btn.innerHTML;
             var s = document.querySelector('.screen');
             var w = s ? s.clientWidth : window.innerWidth;
             var h = s ? s.clientHeight : window.innerHeight;
