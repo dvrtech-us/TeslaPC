@@ -721,3 +721,15 @@ fn scheduled_tasks_that_run_teslapc_are_named_once() {
     assert_eq!(tasks_running_teslapc(csv), vec![r"\TeslaPC Logon".to_string(), r#"\Quoted "name""#.to_string()]);
     assert!(tasks_running_teslapc("").is_empty());
 }
+
+#[test]
+fn hotspot_adapter_name_is_the_whole_interface_name() {
+    use teslapc::decisions::bypass::hotspot_adapter_name;
+    let listing = "\r\nAdmin State    State          Type             Interface Name\r\n-------------------------------------------------------------------------\r\nEnabled        Connected      Dedicated        Wi-Fi\r\nEnabled        Disconnected   Dedicated        Local Area Connection* 1\r\nEnabled        Connected      Dedicated        Local Area Connection* 2\r\n";
+    // Never a bare index: `name=2` would address interface index 2, which can be Wi-Fi.
+    assert_eq!(hotspot_adapter_name(listing).as_deref(), Some("Local Area Connection* 2"));
+    let only_down = "Enabled        Disconnected   Dedicated        Local Area Connection* 1\r\n";
+    assert_eq!(hotspot_adapter_name(only_down).as_deref(), Some("Local Area Connection* 1"));
+    assert_eq!(hotspot_adapter_name("Enabled        Connected      Dedicated        Wi-Fi\r\n"), None);
+    assert_eq!(hotspot_adapter_name(""), None);
+}

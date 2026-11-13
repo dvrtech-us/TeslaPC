@@ -509,7 +509,7 @@ fn setup_bypass() {
         return;
     };
     let add = Command::new("netsh")
-        .args(["interface", "ipv4", "add", "address", &format!("name={adapter}"), BYPASS_IP, "255.255.255.0"])
+        .args(["interface", "ipv4", "add", "address", &format!("name={adapter}"), &format!("address={BYPASS_IP}"), "mask=255.255.255.0"])
         .output();
     match add {
         Ok(out) if out.status.success() || String::from_utf8_lossy(&out.stdout).to_ascii_lowercase().contains("already") => {
@@ -532,17 +532,7 @@ fn setup_bypass() {
 
 fn hotspot_adapter() -> Option<String> {
     let output = Command::new("netsh").args(["interface", "show", "interface"]).output().ok()?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    for line in text.lines() {
-        let lower = line.to_ascii_lowercase();
-        if lower.contains("wi-fi direct") || lower.contains("local area connection") {
-            let name = line.split_whitespace().last()?.to_string();
-            if !name.is_empty() {
-                return Some(name);
-            }
-        }
-    }
-    None
+    crate::decisions::bypass::hotspot_adapter_name(&String::from_utf8_lossy(&output.stdout))
 }
 
 fn run_hotspot(on: bool) -> Result<String, String> {

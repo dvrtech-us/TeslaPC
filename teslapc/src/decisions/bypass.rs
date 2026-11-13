@@ -111,6 +111,29 @@ pub fn parse_hotspot_report(text: &str) -> HotspotReport {
     }
 }
 
+/// Full name of the Mobile Hotspot adapter from `netsh interface show interface`.
+/// Rows are `Admin State`, `State`, `Type`, then the interface name, which contains spaces
+/// (`Local Area Connection* 2`). A connected row wins over a disconnected one.
+/// The name must be whole: netsh reads a bare number such as `2` as an interface index,
+/// and index 2 can be the Wi-Fi uplink.
+pub fn hotspot_adapter_name(text: &str) -> Option<String> {
+    let mut fallback = None;
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(_admin), Some(state), Some(_kind)) = (parts.next(), parts.next(), parts.next()) else { continue };
+        let name = parts.collect::<Vec<_>>().join(" ");
+        let lower = name.to_ascii_lowercase();
+        if !(lower.contains("wi-fi direct") || lower.contains("local area connection")) {
+            continue;
+        }
+        if state.eq_ignore_ascii_case("connected") {
+            return Some(name);
+        }
+        fallback.get_or_insert(name);
+    }
+    fallback
+}
+
 pub fn bypass_address_present(text: &str) -> bool {
     text.contains(BYPASS_IP)
 }

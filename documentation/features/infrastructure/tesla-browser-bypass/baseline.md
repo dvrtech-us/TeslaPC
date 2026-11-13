@@ -7,3 +7,4 @@
 - Windows `TURNEDON` waits `2000` ms, then setup runs. Settings `ALREADYON` with `100.64.0.1` missing waits `1500` ms, then setup runs. The watchdog does that setup immediately. An address that is already present skips setup. Watchdog period is `60` s.
 - Manual off from `POST /hotspot` is not turned back on by the watchdog.
 - `--localhost` does not start the bypass.
+- The hotspot adapter is always addressed by its full interface name (`Local Area Connection* 2`), never a bare number or index. `netsh` gets `name=`, `address=`, and `mask=` explicitly, so setup cannot change another adapter such as Wi-Fi.
