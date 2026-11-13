@@ -44,6 +44,16 @@ pub fn acme_account() -> PathBuf {
     config_dir().join("acme-account.json")
 }
 
+/// `--session-host` stdout and stderr (`%ProgramData%\TeslaPC\teslapc.log` on Windows).
+pub fn host_log_file() -> PathBuf {
+    data_dir().join("teslapc.log")
+}
+
+/// Windows service supervisor log (`%ProgramData%\TeslaPC\teslapc-service.log`).
+pub fn service_log_file() -> PathBuf {
+    data_dir().join("teslapc-service.log")
+}
+
 #[cfg(windows)]
 fn program_data() -> PathBuf {
     std::env::var_os("ProgramData")
@@ -107,17 +117,4 @@ RestartSec=2
 WantedBy=multi-user.target
 "
     )
-}
-
-/// `sc.exe create` arguments. The binary is started with `--service` and no window.
-pub fn windows_service_create_args(bin: &str) -> Vec<String> {
-    vec![
-        "create".into(),
-        "TeslaPC".into(),
-        format!("binPath= \"{bin}\" --service"),
-        "start=".into(),
-        "auto".into(),
-        "DisplayName=".into(),
-        "TeslaPC".into(),
-    ]
 }

@@ -14,7 +14,7 @@
 
 ## Windows order
 
-`first_capture_backend` starts at WGC unless `TESLAPC_NO_WGC=1`, then DXGI, then GDI. `backend_after_frame` switches to the next backend when the grab fails or `frame_is_black` is true. After GDI, a black frame is kept so the chain is not retried forever inside one frame. `grab_gdi` uses `BitBlt` and `GetDIBits`.
+`first_capture_backend` starts at WGC unless `TESLAPC_NO_WGC=1` or the process is a Windows service session host (`--session-host`, which calls `capture_loop::skip_wgc()` and logs `[Capture] Session host: WGC skipped, starting at DXGI.`), then DXGI, then GDI. `backend_after_frame` switches to the next backend when the grab fails or `frame_is_black` is true. After GDI, a black frame is kept so the chain is not retried forever inside one frame. `grab_gdi` uses `BitBlt` and `GetDIBits`.
 
 Every backend's grab returns `Result<GrabOutcome, String>` (`platform.rs`). `GrabOutcome::Frame` is a new frame. `GrabOutcome::NoFrame` means the session is healthy and nothing changed. `Err` is a failed backend. WGC and DXGI only deliver a frame when the screen changes, so a still screen is `NoFrame`, not a failure. Only `Err`, a black frame, or a backend that never produced a frame (below) advances the backend order.
 

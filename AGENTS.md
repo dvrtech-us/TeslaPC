@@ -9,8 +9,10 @@ before making changes. For a feature-by-feature reference, start at
 TeslaPC is a Windows and Linux remote-desktop streaming server written in Rust. One binary,
 `teslapc`, serves the browser UI, an MJPEG screen stream, system audio, and pointer/keyboard
 input. There is no WinForms panel and no authentication. Logs go to stdout. The process can be
-installed as a Windows service (`teslapc service install`, started with `--service`) or a
-systemd unit of the same command.
+installed as a Windows service (`teslapc service install`) or a systemd unit of the same
+command. On Windows the service (`--service`) is a supervisor that starts the server as
+`--session-host` in the active console session; see
+`documentation/features/infrastructure/windows-service/`.
 
 ## Documentation System (read before and after coding)
 
@@ -55,6 +57,7 @@ on Linux. There are still **no `sql/` folders** — the schema is created in `te
 | infrastructure | tesla-browser-bypass | `teslapc/src/decisions/bypass.rs`, `teslapc/src/win.rs`, `teslapc/src/linux.rs` |
 | infrastructure | firewall-bootstrap | `teslapc/src/win.rs` |
 | infrastructure | https-bootstrap | `teslapc/src/certs.rs` |
+| infrastructure | windows-service | `teslapc/src/win_service.rs`, `teslapc/src/decisions/service.rs` |
 
 ## Source Layout
 
@@ -72,7 +75,8 @@ teslapc/
     ├── playback.rs            # ffmpeg, Windows VLC fallback
     ├── store.rs               # SQLite playback history
     ├── certs.rs               # rustls local cert and DNS-01 renewal
-    ├── win.rs                 # Windows input, hotspot, firewall, service, GDI
+    ├── win.rs                 # Windows input, hotspot, firewall, GDI
+    ├── win_service.rs         # Windows service supervisor, session host launch, install/uninstall
     ├── win_capture.rs         # WGC, DXGI duplication, WASAPI loopback
     └── linux.rs               # Portal/PipeWire, XShm, uinput, nftables, systemd
 ```
@@ -102,7 +106,10 @@ Runtime flags / env:
 - `TESLAPC_NO_WGC=1` — skip Windows Graphics Capture and start at DXGI.
 - `TESLAPC_FFMPEG` — ffmpeg executable or directory.
 - `TESLAPC_BYPASS_IFACE` — Linux only. Empty leaves the bypass off. A set iface adds `100.64.0.1/10` and nftables forward plus NAT.
-- `teslapc service install` — Windows `sc.exe create`, or a systemd unit on Linux. A denied install is logged and the server is not required to be registered.
+- `teslapc service install` — Windows: creates or updates service `TeslaPC` through the SCM API (`"<exe>" --service`, auto start, LocalSystem, restart after 5 s on failure) and warns about scheduled tasks that run `teslapc.exe`. Linux: writes a systemd unit. A denied install is logged, exits non-zero, and the server is not required to be registered.
+- `teslapc service uninstall` — Windows: stop (up to 10 s) and delete the service. Other words after `service` print usage and exit `2`.
+- `--service` — Windows, started by the SCM: supervisor only (no ports, capture, or audio). It keeps one `--session-host` running as SYSTEM in the active console session, restarting it on exit (backoff 1 s doubling to 30 s, reset after 60 s uptime; 30 s when the host exits `3` = port in use), console session change, or logoff. Log: `%ProgramData%\TeslaPC\teslapc-service.log`. Not started by the SCM (or on Linux): runs the normal server.
+- `--session-host [--supervisor-pid <pid>]` — the normal server, plus: stdout/stderr go to `%ProgramData%\TeslaPC\teslapc.log` (rotated to `.1` over 5 MiB), capture starts at DXGI, it exits when the supervisor pid exits, and it exits `3` if port 8080 cannot be bound. Started by the supervisor; not meant to be run by hand.
 
 HTTPS on `8443` is terminated in-process with rustls. There is no http.sys URL ACL and no certificate-store bind. Without a public hostname, a generated local certificate still makes `8443` listen (unless `--localhost`).
 
@@ -129,3 +136,4 @@ A missing privilege for firewall, hotspot, input, address, or nftables is logged
 - A black or failed capture frame still advances WGC → DXGI → GDI. DRM video can stay black under every backend.
 - Linux PipeWire, uinput, and nftables are not executed on a Windows host. The event records, portal messages, and bypass plan are covered by `cargo test`.
 - The SQLite file is created in code. There is no `sql/` folder.
+- The Windows service host does not follow the input desktop yet. It shows and drives the signed-in user's desktop only; the login screen, lock screen, and UAC prompts are not captured and do not receive input. The supervisor, host launch, and install have only been compiled, not yet run on Windows.

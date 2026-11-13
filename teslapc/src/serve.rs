@@ -1,5 +1,6 @@
 //! Process entry. One binary, no window. `--localhost` serves HTTP on 127.0.0.1:8080
-//! and skips the firewall, ACME, and HTTPS.
+//! and skips the firewall, ACME, and HTTPS. On Windows `--service` is the supervisor only
+//! (`win_service.rs`); `--session-host` is this server started by it in the console session.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -10,6 +11,7 @@ use tokio_rustls::TlsAcceptor;
 use crate::certs::{self, CertSlot};
 use crate::decisions::bypass::bypass_wanted;
 use crate::decisions::config::{merge_dotenv, KEY_HTTPS_HOST};
+use crate::decisions::service::{parse_service_command, parse_supervisor_pid, ServiceCommand, EXIT_PORT_IN_USE, SERVICE_USAGE};
 use crate::paths;
 use crate::platform;
 use crate::playback;
@@ -22,22 +24,43 @@ struct Opts {
     no_bypass: bool,
     https_host: Option<String>,
     service: bool,
+    /// `--session-host`: started by the Windows service supervisor in the console session.
+    session_host: bool,
+    supervisor_pid: Option<u32>,
 }
+
+/// `serve` fails only when port 8080 cannot be bound. A session host then exits with
+/// `EXIT_PORT_IN_USE` so the supervisor can tell it apart from a crash.
+struct HttpBindError(String);
 
 pub fn run() -> i32 {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("service") {
-        return platform::service_install();
+        return match parse_service_command(&args) {
+            ServiceCommand::Install => platform::service_install(),
+            ServiceCommand::Uninstall => platform::service_uninstall(),
+            ServiceCommand::Usage => {
+                println!("{SERVICE_USAGE}");
+                2
+            }
+        };
+    }
+    let session_host = args.iter().any(|a| a == "--session-host");
+    if session_host {
+        // Before anything prints: this process has no console the operator can see.
+        platform::redirect_host_log();
     }
     load_dotenv();
     let opts = parse_args(&args);
-    if opts.service && platform::run_as_service({
-        let opts = opts.clone();
-        move || {
-            let _ = block_on(opts);
-        }
-    }) {
+    if opts.service && !opts.session_host && platform::run_as_service() {
         return 0;
+    }
+    if opts.session_host {
+        println!("[Service] Session host started (supervisor pid {}).", opts.supervisor_pid.map(|p| p.to_string()).unwrap_or_else(|| "none".into()));
+        crate::capture_loop::skip_wgc();
+        if let Some(pid) = opts.supervisor_pid {
+            platform::exit_with_supervisor(pid);
+        }
     }
     block_on(opts)
 }
@@ -50,9 +73,15 @@ fn block_on(opts: Opts) -> i32 {
             return 1;
         }
     };
+    let session_host = opts.session_host;
     match runtime.block_on(serve(opts)) {
         Ok(()) => 0,
-        Err(err) => {
+        Err(HttpBindError(err)) if session_host => {
+            println!("Server failed: {err}");
+            println!("[Service] Port 8080 is in use. Exiting with code {EXIT_PORT_IN_USE}.");
+            EXIT_PORT_IN_USE
+        }
+        Err(HttpBindError(err)) => {
             println!("Server failed: {err}");
             1
         }
@@ -78,6 +107,8 @@ fn parse_args(args: &[String]) -> Opts {
         no_bypass: args.iter().any(|a| a == "--no-tesla-bypass"),
         https_host,
         service: args.iter().any(|a| a == "--service"),
+        session_host: args.iter().any(|a| a == "--session-host"),
+        supervisor_pid: parse_supervisor_pid(args),
     }
 }
 
@@ -103,7 +134,7 @@ fn load_dotenv() {
     }
 }
 
-async fn serve(opts: Opts) -> Result<(), String> {
+async fn serve(opts: Opts) -> Result<(), HttpBindError> {
     platform::init_dpi_awareness();
     if let Some(host) = &opts.https_host {
         std::env::set_var(KEY_HTTPS_HOST, host);
@@ -144,7 +175,7 @@ async fn serve(opts: Opts) -> Result<(), String> {
     } else {
         "0.0.0.0:8080".parse().unwrap()
     };
-    let listener = TcpListener::bind(http_addr).await.map_err(|e| format!("bind {http_addr}: {e}"))?;
+    let listener = TcpListener::bind(http_addr).await.map_err(|e| HttpBindError(format!("bind {http_addr}: {e}")))?;
     println!("Unified server listening on:");
     println!("\thttp://{http_addr}/");
     println!();

@@ -216,7 +216,7 @@ pub fn open_firewall(http_port: u16, https_port: u16) {
 pub fn service_install() -> i32 {
     #[cfg(windows)]
     {
-        return crate::win::service_install();
+        return crate::win_service::service_install();
     }
     #[cfg(target_os = "linux")]
     {
@@ -229,15 +229,50 @@ pub fn service_install() -> i32 {
     }
 }
 
-pub fn run_as_service(server: impl FnOnce() + Send + 'static) -> bool {
+pub fn service_uninstall() -> i32 {
     #[cfg(windows)]
     {
-        return crate::win::run_as_service(server);
+        return crate::win_service::service_uninstall();
     }
     #[cfg(not(windows))]
     {
-        let _ = server;
+        println!("[Service] service uninstall is a Windows command. On Linux run: systemctl disable --now teslapc.service && rm /etc/systemd/system/teslapc.service");
+        1
+    }
+}
+
+/// Windows: hand the process to the Service Control Manager as the supervisor. Returns `true`
+/// when the service ran and has stopped; `false` when the SCM did not start this process.
+/// Other OSes: always `false`.
+pub fn run_as_service() -> bool {
+    #[cfg(windows)]
+    {
+        return crate::win_service::run_as_service();
+    }
+    #[cfg(not(windows))]
+    {
         false
+    }
+}
+
+/// `--session-host`: send stdout and stderr to the host log file. No-op off Windows.
+pub fn redirect_host_log() {
+    #[cfg(windows)]
+    {
+        crate::win_service::redirect_host_log();
+    }
+}
+
+/// `--session-host --supervisor-pid <pid>`: exit this process when the supervisor exits.
+/// No-op off Windows.
+pub fn exit_with_supervisor(pid: u32) {
+    #[cfg(windows)]
+    {
+        crate::win_service::exit_with_supervisor(pid);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
     }
 }
 

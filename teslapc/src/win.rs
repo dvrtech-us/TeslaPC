@@ -1,4 +1,4 @@
-//! Windows capture, input, display, firewall, hotspot, and the service entry.
+//! Windows capture, input, display, firewall, and hotspot. The service lives in `win_service.rs`.
 
 use std::process::Command;
 use std::sync::atomic::Ordering;
@@ -433,62 +433,6 @@ pub fn open_firewall(http_port: u16, https_port: u16) {
         Ok(out) if out.status.success() => println!("[Firewall] Opened inbound TCP ports {http_port} and {https_port}."),
         Ok(out) => println!("[Firewall] Opening ports requires administrator privileges. {}", String::from_utf8_lossy(&out.stdout)),
         Err(err) => println!("[Firewall] {err}"),
-    }
-}
-
-pub fn service_install() -> i32 {
-    let Ok(exe) = std::env::current_exe() else {
-        println!("[Service] Could not locate the TeslaPC executable.");
-        return 1;
-    };
-    let bin = format!("binPath= \"{}\" --service", exe.display());
-    let output = Command::new("sc.exe").args(["create", "TeslaPC", &bin, "start=", "auto", "DisplayName=", "TeslaPC"]).output();
-    match output {
-        Ok(out) => {
-            let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-            println!("[Service] sc.exe create exit {}: {text}", out.status.code().unwrap_or(-1));
-            out.status.code().unwrap_or(1)
-        }
-        Err(err) => {
-            println!("[Service] {err}");
-            1
-        }
-    }
-}
-
-static SERVICE_BODY: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
-
-windows_service::define_windows_service!(ffi_service_main, service_main);
-
-fn service_main(_arguments: Vec<std::ffi::OsString>) {
-    use windows_service::service::{ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType};
-    use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
-    if let Ok(status_handle) = service_control_handler::register("TeslaPC", |_| ServiceControlHandlerResult::NoError) {
-        let _ = status_handle.set_service_status(ServiceStatus {
-            service_type: ServiceType::OWN_PROCESS,
-            current_state: ServiceState::Running,
-            controls_accepted: ServiceControlAccept::STOP,
-            exit_code: ServiceExitCode::Win32(0),
-            checkpoint: 0,
-            wait_hint: Duration::default(),
-            process_id: None,
-        });
-    }
-    if let Some(body) = SERVICE_BODY.lock().ok().and_then(|mut g| g.take()) {
-        body();
-    }
-}
-
-pub fn run_as_service(body: impl FnOnce() + Send + 'static) -> bool {
-    if let Ok(mut slot) = SERVICE_BODY.lock() {
-        *slot = Some(Box::new(body));
-    }
-    match windows_service::service_dispatcher::start("TeslaPC", ffi_service_main) {
-        Ok(()) => true,
-        Err(err) => {
-            println!("[Service] Not started by the Service Control Manager ({err}).");
-            false
-        }
     }
 }
 

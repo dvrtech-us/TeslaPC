@@ -15,6 +15,10 @@ use teslapc::decisions::input::{expand_paste, map_key, pointer_path, scale_point
 use teslapc::decisions::listing::{render_guts, resolve_browse, FileProgress};
 use teslapc::decisions::media::{ffmpeg_video_args, linux_missing_ffmpeg_error, windows_vlc_plan};
 use teslapc::decisions::renewal::{acme_directory_url, needs_renewal, staging_from_env, RENEWAL_CHECK_HOURS, RENEW_WHEN_DAYS_LEFT};
+use teslapc::decisions::service::{
+    host_backoff_ms, host_command_line, log_should_rotate, next_failure_count, parse_service_command, parse_supervisor_pid, restart_delay_ms, service_launch_arguments, supervisor_step, tasks_running_teslapc, ServiceCommand, SupervisorInput, SupervisorStep, EXIT_LAUNCH_FAILED, EXIT_PORT_IN_USE, HOST_BACKOFF_MAX_MS, HOST_BACKOFF_START_MS, HOST_HEALTHY_UPTIME_MS, LOG_ROTATE_BYTES, NO_CONSOLE_SESSION,
+    PORT_IN_USE_WAIT_MS, SUPERVISOR_POLL_MS,
+};
 use teslapc::decisions::socket::{classify_socket, SocketRole};
 use teslapc::decisions::stream::{clamp_stream_height, fit_frame, mjpeg_content_type, mjpeg_part, JPEG_QUALITY, SLOW_CLIENT_WAIT_MS};
 
@@ -593,4 +597,127 @@ fn loopback_backoff_doubles_to_ten_seconds_and_resets_after_a_healthy_run() {
     assert_eq!(loopback_backoff_ms(10_000, 30_001), 1_000);
     assert_eq!(loopback_backoff_ms(4_000, 30_000), 8_000);
     assert_eq!((LOOPBACK_BACKOFF_START_MS, LOOPBACK_BACKOFF_MAX_MS, LOOPBACK_HEALTHY_RUN_MS), (1_000, 10_000, 30_000));
+}
+
+fn supervisor(host_session: Option<u32>, console: u32) -> SupervisorInput {
+    SupervisorInput {
+        stopping: false,
+        host_alive: host_session.is_some(),
+        host_session,
+        console_session: console,
+        logoff_for_host_session: false,
+        last_exit_code: None,
+        uptime_ms: 0,
+        since_exit_ms: 0,
+        failures: 0,
+    }
+}
+
+#[test]
+fn supervisor_starts_keeps_and_follows_the_console_session() {
+    // First launch: no host, nothing has exited yet.
+    assert_eq!(supervisor_step(&supervisor(None, 1)), SupervisorStep::Start { session: 1 });
+    // Host in the console session: keep.
+    assert_eq!(supervisor_step(&supervisor(Some(1), 1)), SupervisorStep::Keep);
+    // Console moved to another session: restart there.
+    assert_eq!(supervisor_step(&supervisor(Some(1), 2)), SupervisorStep::Restart { session: 2 });
+    // Logoff for the host's session with an unchanged id still restarts.
+    let logoff = SupervisorInput { logoff_for_host_session: true, ..supervisor(Some(1), 1) };
+    assert_eq!(supervisor_step(&logoff), SupervisorStep::Restart { session: 1 });
+}
+
+#[test]
+fn supervisor_keeps_the_host_and_polls_when_no_console_session() {
+    assert_eq!(NO_CONSOLE_SESSION, 0xFFFF_FFFF);
+    assert_eq!(supervisor_step(&supervisor(Some(1), NO_CONSOLE_SESSION)), SupervisorStep::Keep);
+    let logoff = SupervisorInput { logoff_for_host_session: true, ..supervisor(Some(1), NO_CONSOLE_SESSION) };
+    assert_eq!(supervisor_step(&logoff), SupervisorStep::Keep);
+    assert_eq!(supervisor_step(&supervisor(None, NO_CONSOLE_SESSION)), SupervisorStep::Wait { ms: SUPERVISOR_POLL_MS });
+    assert_eq!(SUPERVISOR_POLL_MS, 2_000);
+}
+
+#[test]
+fn supervisor_stop_wins_over_everything_including_backoff() {
+    let alive = SupervisorInput { stopping: true, ..supervisor(Some(1), 2) };
+    assert_eq!(supervisor_step(&alive), SupervisorStep::Stop);
+    let backoff = SupervisorInput { stopping: true, last_exit_code: Some(1), failures: 3, since_exit_ms: 10, ..supervisor(None, 1) };
+    assert_eq!(supervisor_step(&backoff), SupervisorStep::Stop);
+    let first = SupervisorInput { stopping: true, ..supervisor(None, 1) };
+    assert_eq!(supervisor_step(&first), SupervisorStep::Stop);
+}
+
+#[test]
+fn supervisor_waits_out_the_backoff_then_restarts() {
+    let exited = SupervisorInput { last_exit_code: Some(1), uptime_ms: 500, failures: 3, since_exit_ms: 1_500, ..supervisor(None, 1) };
+    assert_eq!(supervisor_step(&exited), SupervisorStep::Wait { ms: 2_500 });
+    let due = SupervisorInput { since_exit_ms: 4_000, ..exited };
+    assert_eq!(supervisor_step(&due), SupervisorStep::Start { session: 1 });
+    // Launch failures back off the same way.
+    let failed = SupervisorInput { last_exit_code: Some(EXIT_LAUNCH_FAILED), failures: 1, since_exit_ms: 0, ..supervisor(None, 1) };
+    assert_eq!(supervisor_step(&failed), SupervisorStep::Wait { ms: 1_000 });
+    // Port in use waits 30 s regardless of the failure count.
+    let port = SupervisorInput { last_exit_code: Some(EXIT_PORT_IN_USE as u32), failures: 1, since_exit_ms: 10_000, ..supervisor(None, 1) };
+    assert_eq!(supervisor_step(&port), SupervisorStep::Wait { ms: 20_000 });
+    let port_due = SupervisorInput { since_exit_ms: 30_000, ..port };
+    assert_eq!(supervisor_step(&port_due), SupervisorStep::Start { session: 1 });
+}
+
+#[test]
+fn host_backoff_doubles_to_thirty_seconds_and_resets_after_a_minute() {
+    assert_eq!((HOST_BACKOFF_START_MS, HOST_BACKOFF_MAX_MS, HOST_HEALTHY_UPTIME_MS), (1_000, 30_000, 60_000));
+    assert_eq!(host_backoff_ms(0), 0);
+    let schedule: Vec<u64> = (1..=7).map(host_backoff_ms).collect();
+    assert_eq!(schedule, vec![1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000]);
+    assert_eq!(host_backoff_ms(u32::MAX), 30_000);
+
+    assert_eq!(next_failure_count(0, 10), 1);
+    assert_eq!(next_failure_count(4, 59_999), 5);
+    assert_eq!(next_failure_count(4, 60_000), 1);
+    assert_eq!(next_failure_count(u32::MAX, 0), u32::MAX);
+
+    assert_eq!(EXIT_PORT_IN_USE, 3);
+    assert_eq!(PORT_IN_USE_WAIT_MS, 30_000);
+    assert_eq!(restart_delay_ms(3, 1), 30_000);
+    assert_eq!(restart_delay_ms(1, 2), 2_000);
+    assert_eq!(restart_delay_ms(EXIT_LAUNCH_FAILED, 6), 30_000);
+}
+
+#[test]
+fn service_logs_rotate_over_five_megabytes() {
+    assert_eq!(LOG_ROTATE_BYTES, 5 * 1024 * 1024);
+    assert!(!log_should_rotate(0));
+    assert!(!log_should_rotate(5 * 1024 * 1024));
+    assert!(log_should_rotate(5 * 1024 * 1024 + 1));
+}
+
+#[test]
+fn service_command_lines_and_argument_parsing() {
+    assert_eq!(host_command_line(r"C:\Program Files\TeslaPC\teslapc.exe", 4242), r#""C:\Program Files\TeslaPC\teslapc.exe" --session-host --supervisor-pid 4242"#);
+    assert_eq!(service_launch_arguments(), vec!["--service".to_string()]);
+
+    let words = |s: &str| s.split_whitespace().map(String::from).collect::<Vec<_>>();
+    assert_eq!(parse_service_command(&words("service install")), ServiceCommand::Install);
+    assert_eq!(parse_service_command(&words("service uninstall")), ServiceCommand::Uninstall);
+    assert_eq!(parse_service_command(&words("service")), ServiceCommand::Usage);
+    assert_eq!(parse_service_command(&words("service remove")), ServiceCommand::Usage);
+    assert_eq!(parse_service_command(&words("service install now")), ServiceCommand::Usage);
+
+    assert_eq!(parse_supervisor_pid(&words("--session-host --supervisor-pid 812")), Some(812));
+    assert_eq!(parse_supervisor_pid(&words("--session-host")), None);
+    assert_eq!(parse_supervisor_pid(&words("--session-host --supervisor-pid")), None);
+    assert_eq!(parse_supervisor_pid(&words("--supervisor-pid abc")), None);
+    assert_eq!(parse_supervisor_pid(&words("--supervisor-pid 0")), None);
+}
+
+#[test]
+fn scheduled_tasks_that_run_teslapc_are_named_once() {
+    let csv = r#""HostName","TaskName","Next Run Time","Status","Logon Mode","Last Run Time","Last Result","Author","Task To Run"
+"LAB","\TeslaPC Logon","N/A","Running","Interactive only","11/13/2026","0","lab","C:\Tools\TeslaPC.EXE --no-tesla-bypass"
+"LAB","\Other","N/A","Ready","Interactive only","N/A","0","lab","notepad.exe"
+"HostName","TaskName","Next Run Time","Status","Logon Mode","Last Run Time","Last Result","Author","Task To Run"
+"LAB","\TeslaPC Logon","N/A","Running","Interactive only","11/13/2026","0","lab","C:\Tools\teslapc.exe"
+"LAB","\Quoted ""name""","N/A","Ready","x","N/A","0","lab","""C:\a,b\teslapc.exe"""
+"#;
+    assert_eq!(tasks_running_teslapc(csv), vec![r"\TeslaPC Logon".to_string(), r#"\Quoted "name""#.to_string()]);
+    assert!(tasks_running_teslapc("").is_empty());
 }

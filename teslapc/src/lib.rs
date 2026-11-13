@@ -18,6 +18,8 @@ pub mod store;
 pub mod win;
 #[cfg(windows)]
 mod win_capture;
+#[cfg(windows)]
+mod win_service;
 #[cfg(target_os = "linux")]
 pub mod linux;
 

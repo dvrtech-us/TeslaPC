@@ -33,7 +33,7 @@ HTTP is on port `8080`. HTTPS is on port `8443`, terminated with rustls inside t
 ## Source
 
 The crate is `teslapc/`. `teslapc/src/decisions/` holds the tested protocol functions.
-`teslapc/src/win.rs`, `teslapc/src/win_capture.rs`, and `teslapc/src/linux.rs` perform the OS calls. `teslapc/assets/` is the browser UI.
+`teslapc/src/win.rs`, `teslapc/src/win_capture.rs`, `teslapc/src/win_service.rs`, and `teslapc/src/linux.rs` perform the OS calls. `teslapc/assets/` is the browser UI.
 
 ## Build & Run
 
@@ -44,12 +44,17 @@ cargo test --manifest-path teslapc/Cargo.toml
 teslapc\target\debug\teslapc.exe --localhost
 ```
 
-`teslapc service install` registers a Windows service or writes a systemd unit. The service
-runs the same binary with `--service` and no window.
+`teslapc service install` registers a Windows service or writes a systemd unit;
+`teslapc service uninstall` removes the Windows service. On Windows the service runs
+`--service`, a supervisor in session 0 that binds no port and starts the server as
+`teslapc.exe --session-host --supervisor-pid <pid>` (SYSTEM, active console session, capture
+starts at DXGI, logs to `%ProgramData%\TeslaPC\teslapc.log`; supervisor log
+`teslapc-service.log`). The host does not follow the login/lock/UAC desktop yet.
 
 ## Testing
 
 `cargo test` calls the shipped decision functions (scaling, wheel sign, SendKeys mapping,
 stream fit, MJPEG headers, audio keepalive, config save, watched threshold, display choice,
 WebSocket classification, renewal, Linux bypass rules, Linux evdev records, hotspot wait,
-display-mode parsers, and portal ScreenCast messages). There is no separate GUI test.
+display-mode parsers, portal ScreenCast messages, and the Windows service supervisor step,
+backoff, log rotation, and argument parsing). There is no separate GUI test.

@@ -1,7 +1,7 @@
 //! Shared capture loop. A black or failed frame tries the next backend.
 //! Clients stay connected across a cap change (the epoch restarts the session only).
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -10,6 +10,14 @@ use crate::decisions::stream::{fit_frame, FRAME_INTERVAL_MS};
 use crate::encode::encode_bgra_jpeg;
 use crate::platform::{self, GrabOutcome};
 use crate::state::App;
+
+/// Set by `--session-host`: start at DXGI, as if `TESLAPC_NO_WGC=1`.
+static SKIP_WGC: AtomicBool = AtomicBool::new(false);
+
+/// Skip Windows Graphics Capture for this process. Called before `ensure_started`.
+pub fn skip_wgc() {
+    SKIP_WGC.store(true, Ordering::Relaxed);
+}
 
 pub fn ensure_started(app: &App) {
     static STARTED: std::sync::Once = std::sync::Once::new();
@@ -23,8 +31,12 @@ pub fn ensure_started(app: &App) {
 }
 
 fn loop_forever(app: App) {
-    let no_wgc = std::env::var("TESLAPC_NO_WGC").ok().as_deref() == Some("1");
-    if no_wgc {
+    let env_no_wgc = std::env::var("TESLAPC_NO_WGC").ok().as_deref() == Some("1");
+    let session_host = SKIP_WGC.load(Ordering::Relaxed);
+    let no_wgc = env_no_wgc || session_host;
+    if session_host {
+        println!("[Capture] Session host: WGC skipped, starting at DXGI.");
+    } else if env_no_wgc {
         println!("[Capture] WGC disabled via TESLAPC_NO_WGC=1.");
     }
     let mut backend = first_capture_backend(no_wgc);

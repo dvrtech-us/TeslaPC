@@ -13,6 +13,7 @@ pub mod portal;
 pub mod listing;
 pub mod media;
 pub mod renewal;
+pub mod service;
 pub mod socket;
 pub mod stream;
 
@@ -25,5 +26,6 @@ pub use history::{watched_now, WATCHED_FRACTION};
 pub use input::{expand_paste, map_key, scale_pointer, wheel_delta, TOUCH_REPEAT_MS};
 pub use media::{ffmpeg_video_args, linux_missing_ffmpeg_error, windows_vlc_plan};
 pub use renewal::{acme_directory_url, needs_renewal, RENEWAL_CHECK_HOURS, RENEW_WHEN_DAYS_LEFT};
+pub use service::{supervisor_step, SupervisorInput, SupervisorStep, EXIT_PORT_IN_USE};
 pub use socket::{classify_socket, SocketRole};
 pub use stream::{clamp_stream_height, fit_frame, mjpeg_content_type, mjpeg_part, JPEG_QUALITY};
