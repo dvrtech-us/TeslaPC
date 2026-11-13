@@ -115,7 +115,7 @@ html, body {
 /* Compact controls so all of them fit one row on the Tesla viewport (~1180px wide). */
 .controlbar .btn { flex: 0 0 auto; min-height: 54px; padding: 0 14px; font-size: 1rem; }
 .controlbar .btn.input { flex: 1 1 150px; min-width: 150px; }   /* keyboard takes the slack, stays reachable */
-.btn-icon { vertical-align: -4px; margin-right: 4px; }
+.btn-icon { vertical-align: -0.18em; margin-right: 4px; width: 1.15em; height: 1.15em; }
 #fitBtn { width: 190px; padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: .95rem; }
 /* Read-only stream size/format label: quieter than the buttons, never takes touches or focus. */
 .controlbar .stream-info {

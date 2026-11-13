@@ -24,7 +24,7 @@ pub fn render_guts(
     let mut sb = String::new();
     let at_root = trim_sep(path_display).eq_ignore_ascii_case(trim_sep(root_display));
     sb.push_str("<div class=\"topbar\">");
-    sb.push_str("<a class=\"navbtn\" href=\"/\">&#8962; Screen</a>");
+    sb.push_str("<a class=\"navbtn\" href=\"/\"><svg class=\"btn-icon\" viewBox=\"0 0 24 24\" width=\"1em\" height=\"1em\" aria-hidden=\"true\" focusable=\"false\"><path d=\"M3 11l9-8 9 8M5 10v10h5v-6h4v6h5V10\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg> Screen</a>");
     sb.push_str("<a class=\"navbtn\" href=\"/config.html\">&#9881; Settings</a>");
     if !at_root {
         let parent = parent_display(path_display).unwrap_or_else(|| root_display.to_string());
@@ -71,7 +71,7 @@ pub fn render_guts(
         sb.push_str("\" href=\"/play.html?FILENAME=");
         sb.push_str(&url_encode(full));
         sb.push_str("\"><span class=\"ic\">");
-        sb.push_str(if watched { "&#10003;" } else { "&#127916;" });
+        sb.push_str(if watched { "<svg class=\"btn-icon\" viewBox=\"0 0 24 24\" width=\"1em\" height=\"1em\" aria-hidden=\"true\" focusable=\"false\"><path d=\"M4 12l5 5L20 6\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>" } else { "&#127916;" });
         sb.push_str("</span><span class=\"nm\">");
         sb.push_str(&html_escape(name));
         sb.push_str("</span>");
