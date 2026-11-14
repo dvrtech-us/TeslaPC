@@ -2,6 +2,7 @@
 
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
+use std::os::linux::net::SocketAddrExt;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::process::{Command, Stdio};
@@ -221,18 +222,21 @@ fn portal_node() -> Result<u32, String> {
     let mut bus = Bus::connect()?;
     let pid = std::process::id();
     let session_token = format!("teslapc{pid}");
-    let request = bus.call(&create_session_message(bus.bump(), &session_token, &format!("h{pid}a")))?;
+    let serial = bus.bump();
+    let request = bus.call(&create_session_message(serial, &session_token, &format!("h{pid}a")))?;
     let session = match bus.wait_response(&request)? {
         PortalResponse::Session(path) => path,
         PortalResponse::Failed(code) => return Err(format!("ScreenCast CreateSession response {code}")),
         other => return Err(format!("ScreenCast CreateSession response was {other:?}")),
     };
-    let request = bus.call(&select_sources_message(bus.bump(), &session, &format!("h{pid}b")))?;
+    let serial = bus.bump();
+    let request = bus.call(&select_sources_message(serial, &session, &format!("h{pid}b")))?;
     match bus.wait_response(&request)? {
         PortalResponse::Failed(code) => return Err(format!("ScreenCast SelectSources response {code}")),
         PortalResponse::Empty | PortalResponse::Session(_) | PortalResponse::Node(_) => {}
     }
-    let request = bus.call(&start_message(bus.bump(), &session, &format!("h{pid}c")))?;
+    let serial = bus.bump();
+    let request = bus.call(&start_message(serial, &session, &format!("h{pid}c")))?;
     match bus.wait_response(&request)? {
         PortalResponse::Node(id) => Ok(id),
         PortalResponse::Failed(code) => Err(format!("ScreenCast Start response {code}")),
@@ -452,7 +456,7 @@ fn open_x11() -> Result<X11Live, String> {
     }
     unsafe { libc::shmctl(id, libc::IPC_RMID, std::ptr::null_mut()) };
     let shmseg = conn.generate_id().map_err(|err| format!("shm seg id: {err}"))?;
-    if let Err(err) = conn.shm_attach(shmseg, id as u32, false).and_then(|cookie| cookie.check()) {
+    if let Err(err) = conn.shm_attach(shmseg, id as u32, false).map_err(|err| err.to_string()).and_then(|cookie| cookie.check().map_err(|err| err.to_string())) {
         unsafe { libc::shmdt(map) };
         release_composite(&conn, drawable, composite);
         return Err(format!("shm_attach: {err}"));
