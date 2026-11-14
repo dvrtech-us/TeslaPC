@@ -386,10 +386,15 @@ fn backend_that_never_produced_a_frame_fails_after_two_seconds() {
 
 #[test]
 fn browse_paths_stay_under_the_root_and_folders_render_first() {
-    let root = Path::new(r"C:\video");
+    // Path rules follow the host OS, so the traversal check uses that OS's path syntax.
+    #[cfg(windows)]
+    let (root, inside, outside) = (Path::new(r"C:\video"), r"C:\video\movies", r"C:\video\..\Windows");
+    #[cfg(not(windows))]
+    let (root, inside, outside) = (Path::new("/video"), "/video/movies", "/video/../etc");
     assert!(resolve_browse(root, None).is_ok());
-    assert!(resolve_browse(root, Some(r"C:\video\movies")).is_ok());
-    assert!(resolve_browse(root, Some(r"C:\video\..\Windows")).is_err());
+    assert!(resolve_browse(root, Some(inside)).is_ok());
+    assert!(resolve_browse(root, Some(outside)).is_err());
+    assert!(resolve_browse(root, Some("movies")).is_ok());
 
     let mut progress = HashMap::new();
     progress.insert(

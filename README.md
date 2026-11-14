@@ -59,8 +59,8 @@ There is nothing to install in the car and no app to pair. It is a web page.
 
 ## What you need
 
-- A laptop with Windows 10 or 11 and Wi-Fi that supports Mobile Hotspot. Linux also works;
-  see [Linux](#linux).
+- A laptop with Windows 10 or 11 and Wi-Fi that supports Mobile Hotspot. Linux is supported in
+  code but untested; see [Linux](#linux).
 - An internet connection for the laptop (a phone hotspot or Starlink works). Windows will not
   start Mobile Hotspot without one.
 - For a warning-free connection: a hostname you control on Cloudflare DNS, with an `A`
@@ -144,7 +144,10 @@ Flags: `--localhost` (local testing, no hotspot or HTTPS), `--no-tesla-bypass` (
 The same binary runs on Linux (X11 or Wayland through the desktop portal). `teslapc service
 install` writes a systemd unit. Bringing up the Wi-Fi access point is left to you; set
 `TESLAPC_BYPASS_IFACE` to the access point's interface and TeslaPC adds the address and the
-forwarding rules. Linux has had less testing than Windows.
+forwarding rules.
+
+The Linux build compiles and passes the test suite in CI. This version has not been run on
+a real Linux machine, so treat it as experimental.
 
 ## Limits to know about
 
