@@ -911,3 +911,19 @@ fn fit_screen_picks_a_mode_that_covers_the_viewport_and_a_matching_stream_height
     assert_eq!(fit_viewport(&modes, 0, 600), None);
     assert_eq!(fit_viewport(&[], 1200, 774), None);
 }
+
+#[test]
+fn capture_retries_the_first_backend_after_a_fallback() {
+    use teslapc::decisions::capture::{fallback_retry_due, next_fallback_wait_ms, FALLBACK_RETRY_MAX_MS, FALLBACK_RETRY_MS};
+    assert_eq!(FALLBACK_RETRY_MS, 30_000);
+    assert_eq!(FALLBACK_RETRY_MAX_MS, 300_000);
+    assert!(!fallback_retry_due(true, 1_000_000, 30_000));
+    assert!(!fallback_retry_due(false, 29_999, 30_000));
+    assert!(fallback_retry_due(false, 30_000, 30_000));
+    // A retry that fell back again doubles the wait up to five minutes; a kept frame resets it.
+    assert_eq!(next_fallback_wait_ms(30_000, false), 60_000);
+    assert_eq!(next_fallback_wait_ms(60_000, false), 120_000);
+    assert_eq!(next_fallback_wait_ms(240_000, false), 300_000);
+    assert_eq!(next_fallback_wait_ms(300_000, false), 300_000);
+    assert_eq!(next_fallback_wait_ms(300_000, true), 30_000);
+}

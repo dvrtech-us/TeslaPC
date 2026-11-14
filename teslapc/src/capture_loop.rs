@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::decisions::capture::{backend_after_frame, first_capture_backend, no_frame_action, retry_after_switch, BackendStep, NoFrameAction, DXGI_SWITCH_RETRIES, DXGI_SWITCH_RETRY_MS};
+use crate::decisions::capture::{backend_after_frame, first_capture_backend, no_frame_action, retry_after_switch, BackendStep, NoFrameAction, DXGI_SWITCH_RETRIES, DXGI_SWITCH_RETRY_MS, fallback_retry_due, next_fallback_wait_ms, FALLBACK_RETRY_MS};
 use crate::decisions::desktop::capture_restart_delay_ms;
 use crate::decisions::stream::{fit_frame, FRAME_INTERVAL_MS};
 use crate::encode::encode_bgra_jpeg;
@@ -85,6 +85,11 @@ fn loop_forever(app: App, restart: Restart) -> Option<Restart> {
     // Last encoded JPEG, re-published while the screen is still.
     let mut last_jpeg: Option<Vec<u8>> = None;
     let mut last_publish = Instant::now();
+    // Fallback retry: when the loop left the first backend, and how long to wait before
+    // trying it again. `retrying` is true from a retry until its first kept frame or fallback.
+    let mut fell_back_at: Option<Instant> = None;
+    let mut retry_wait_ms = FALLBACK_RETRY_MS;
+    let mut retrying = false;
     loop {
         if app.inner.stream_clients.load(Ordering::Relaxed) == 0 || app.inner.media_mode.load(Ordering::Relaxed) {
             // Idle time does not count against a backend that has not produced a frame yet.
@@ -107,6 +112,8 @@ fn loop_forever(app: App, restart: Restart) -> Option<Restart> {
                     last_jpeg = None;
                     after_switch = true;
                     switch_retries = 0;
+                    retrying = false;
+                    retry_wait_ms = FALLBACK_RETRY_MS;
                     busy_restarts = 0;
                 }
                 DesktopCheck::Busy => {
@@ -115,6 +122,26 @@ fn loop_forever(app: App, restart: Restart) -> Option<Restart> {
                     let leftovers = desktop.take().map(DesktopFollower::release_for_restart).unwrap_or_default();
                     return Some(Restart { busy_restarts: busy_restarts.saturating_add(1), leftovers });
                 }
+            }
+        }
+        let first = first_capture_backend(no_wgc);
+        if backend == first {
+            fell_back_at = None;
+        } else {
+            let since = *fell_back_at.get_or_insert_with(Instant::now);
+            if retrying {
+                // The retry fell back again: wait longer before the next one.
+                retrying = false;
+                retry_wait_ms = next_fallback_wait_ms(retry_wait_ms, false);
+                fell_back_at = Some(Instant::now());
+            } else if fallback_retry_due(false, since.elapsed().as_millis() as u64, retry_wait_ms) {
+                app.log("info", &format!("[Capture] Trying {first:?} again after {} s on {backend:?}.", retry_wait_ms / 1000));
+                backend = first;
+                selected_at = Instant::now();
+                produced = false;
+                retrying = true;
+                fell_back_at = None;
+                continue;
             }
         }
         let epoch = app.inner.capture_epoch.load(Ordering::Relaxed);
@@ -130,6 +157,11 @@ fn loop_forever(app: App, restart: Restart) -> Option<Restart> {
                     continue;
                 }
                 BackendStep::Keep(_) => {
+                    if retrying && backend == first {
+                        retrying = false;
+                        retry_wait_ms = next_fallback_wait_ms(retry_wait_ms, true);
+                        app.log("info", &format!("[Capture] Back on {backend:?}."));
+                    }
                     produced = true;
                     after_switch = false;
                     app.log("debug", &format!("[Capture] {backend:?} frame {}x{}", frame.width, frame.height));
@@ -202,6 +234,8 @@ fn loop_forever(app: App, restart: Restart) -> Option<Restart> {
             produced = false;
             last_jpeg = None;
             after_switch = false;
+            retrying = false;
+            retry_wait_ms = FALLBACK_RETRY_MS;
             continue;
         }
         thread::sleep(Duration::from_millis(FRAME_INTERVAL_MS));

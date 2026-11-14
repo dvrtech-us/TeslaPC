@@ -70,3 +70,7 @@ On Wayland, `grab_portal` opens an xdg-desktop-portal ScreenCast session (`Creat
 ## Media
 
 While `media_mode` is set, the capture thread does not publish. `playback` publishes ffmpeg JPEGs into the same slot.
+
+## Returning from a fallback
+
+When the loop is on a later backend than `first_capture_backend`, it switches back to the first backend after `FALLBACK_RETRY_MS` (`30000`) and logs `[Capture] Trying <first> again after <n> s on <backend>.`. If the first backend then keeps a frame, the loop logs `[Capture] Back on <first>.` and the wait resets. If it falls back again (black frame, error, or no frame for `NO_FRAME_FAIL_MS`), the wait doubles up to `FALLBACK_RETRY_MAX_MS` (`300000`). The decisions are `fallback_retry_due` and `next_fallback_wait_ms` in `decisions/capture.rs`. A `capture_epoch` change or a desktop switch still restarts at the first backend and resets the wait. The stored JPEG is kept across a retry, so a still screen keeps its picture.

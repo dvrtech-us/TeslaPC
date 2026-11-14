@@ -134,7 +134,7 @@ A missing privilege for firewall, hotspot, input, address, or nftables is logged
 ## Current Known Gaps
 
 - No authentication on any route.
-- A black or failed capture frame still advances WGC → DXGI → GDI. DRM video can stay black under every backend.
+- A black or failed capture frame still advances WGC → DXGI → GDI. The first backend is tried again after 30 s (doubling to 5 min while it keeps falling back). DRM video can stay black under every backend.
 - Linux PipeWire, uinput, and nftables are not executed on a Windows host. The event records, portal messages, and bypass plan are covered by `cargo test`.
 - The SQLite file is created in code. There is no `sql/` folder.
 - The Windows service host follows the input desktop (`win_desktop.rs`): its capture thread and its single `Input` thread re-attach to `Winlogon` for the sign-in screen, lock screen, and UAC prompts, and back to `Default`. Off `Default` pointer events are mouse events. Ctrl+Alt+Del is not sent. Desktop following was written and compiled on macOS only and has not yet run on Windows; still to confirm there: DXGI duplication on `Winlogon` as SYSTEM (else GDI after five retries), whether the capture thread can call `SetThreadDesktop` without `ERROR_BUSY` (restarts are logged), that `SendInput` reaches the sign-in and UAC screens, and touch on `Default` after a trip to `Winlogon`.

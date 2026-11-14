@@ -130,3 +130,23 @@ pub fn no_frame_action(produced_since_selected: bool, have_last_jpeg: bool, ms_s
 pub fn dxgi_frame_has_image(last_present_time: i64) -> bool {
     last_present_time != 0
 }
+
+/// After a fallback to a later backend, the first backend is tried again after this long.
+pub const FALLBACK_RETRY_MS: u64 = 30_000;
+/// Each retry that falls back again doubles the wait, up to this.
+pub const FALLBACK_RETRY_MAX_MS: u64 = 300_000;
+
+/// The loop is on a fallback backend and has waited long enough to try the first one again.
+pub fn fallback_retry_due(on_first_backend: bool, ms_since_fallback: u64, wait_ms: u64) -> bool {
+    !on_first_backend && ms_since_fallback >= wait_ms
+}
+
+/// Wait before the next retry: back to `FALLBACK_RETRY_MS` after the first backend kept a
+/// frame, doubled (capped) after a retry that fell back again.
+pub fn next_fallback_wait_ms(previous_ms: u64, retry_succeeded: bool) -> u64 {
+    if retry_succeeded {
+        FALLBACK_RETRY_MS
+    } else {
+        previous_ms.max(FALLBACK_RETRY_MS).saturating_mul(2).min(FALLBACK_RETRY_MAX_MS)
+    }
+}
