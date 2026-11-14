@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Build and test (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: cargo build --locked --manifest-path teslapc/Cargo.toml
+      - name: Test
+        run: cargo test --locked --no-fail-fast --manifest-path teslapc/Cargo.toml
+      - name: Audio player test
+        run: node teslapc/tests/js/pcm_player.test.js
+
+  linux:
+    name: Build and test (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: cargo build --locked --manifest-path teslapc/Cargo.toml
+      - name: Test
+        run: cargo test --locked --no-fail-fast --manifest-path teslapc/Cargo.toml
