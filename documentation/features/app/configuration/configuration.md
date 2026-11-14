@@ -1,0 +1,11 @@
+# Configuration
+
+Settings live in `.env`. Windows path: `%ProgramData%\TeslaPC\.env`. Linux path: `$XDG_CONFIG_HOME/teslapc/.env` (default `~/.config/teslapc/.env`). An `.env` next to the executable is loaded first. The config-dir file is loaded second and overrides it. Variables already set in the process environment are left alone.
+
+`GET /config` returns `httpsHost`, `acmeEmail`, `videoRoot`, `logLevel`, `streamHeight`, `inputMode`, `version`, and `cfTokenSet`. It never returns the token. `public_config_json` has no token field.
+
+`POST /config` is `application/x-www-form-urlencoded`. `apply_config_body` updates named keys and leaves every other line, including comments, in place. A blank `cfToken` does not replace the stored token. The response is `{ "saved": true, "restartNeeded": true }` when host, token, or email was written.
+
+Live keys, applied without a restart: `TESLAPC_VIDEO_ROOT`, `TESLAPC_LOG_LEVEL`, `TESLAPC_STREAM_HEIGHT`, `TESLAPC_INPUT_MODE`. A valid stream height also bumps the capture epoch. The height must be `240`–`2160`. Log level accepts `error`, `warn`/`warning`, `info`, `debug`/`verbose`, or `0`–`3`.
+
+The Settings page is `teslapc/assets/config.html`. The 480/720/1080 buttons apply on tap with a `POST /config` of only `streamHeight` and show the result in `#msg`. A saved height that is not 480/720/1080 shows `Current: <h>p` with no button active. `streamHeight` is not part of Save settings. Save sends only fields (`httpsHost`, `acmeEmail`, `videoRoot`, `logLevel`, `inputMode`) that differ from the last successful `GET /config`, plus `cfToken` when typed. It is disabled until the first load succeeds, and with nothing changed it shows `Nothing to save.` and sends nothing. A new read-only Fit screen field under Stream resolution says: "The Fit screen button on the main screen sets both the PC's real display resolution and the stream resolution to suit the screen you tap it on. It picks the supported PC mode closest in shape that is at least as large as that screen, so the picture is sharp and black bars are small. TeslaPC does not restore the previous resolution afterwards." Fit screen can also write `TESLAPC_STREAM_HEIGHT`. Hotspot buttons `POST /hotspot` with `on=1` or `on=0`.

@@ -1,0 +1,125 @@
+<html>
+
+<head>
+    <title>Now Playing</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+</head>
+
+<body>
+    <!-- The decoded video arrives as the MJPEG /stream (driven by MediaStreamer, not screen capture). -->
+    <div class="screen">
+        <img title="Now playing" src="/stream" />
+    </div>
+
+    <!-- Audio needs a user gesture to start, so cover the screen until the first tap. -->
+    <div id="tapstart" class="tap-overlay">
+        <div class="tap-inner">
+            <div class="big-ic play-icon" aria-hidden="true">
+                <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" focusable="false">
+                    <polygon points="22,14 22,50 50,32" fill="currentColor" />
+                </svg>
+            </div>
+            <div class="tap-title">{{TITLE}}</div>
+            <div class="tap-sub">Tap to start sound</div>
+        </div>
+    </div>
+
+    <!-- Shown when playback finishes/stops, so the live desktop is never left on screen. -->
+    <div id="endedOverlay" class="tap-overlay" style="display:none">
+        <div class="tap-inner">
+            <div class="big-ic"><svg class="" viewBox="0 0 24 24" width="1em" height="1em" aria-hidden="true" focusable="false"><path d="M4 12l5 5L20 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+            <div class="tap-title">Finished</div>
+            <div class="ended-actions">
+                <button class="btn primary" onclick="replay()"><svg class="btn-icon" viewBox="0 0 24 24" width="1em" height="1em" aria-hidden="true" focusable="false"><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg> Replay</button>
+                <button class="btn" onclick="window.location.assign('/list.html')">&#128193; Files</button>
+                <button class="btn" onclick="window.location.assign('/')"><svg class="btn-icon" viewBox="0 0 24 24" width="1em" height="1em" aria-hidden="true" focusable="false"><path d="M3 11l9-8 9 8M5 10v10h5v-6h4v6h5V10" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg> Screen</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="controlbar mediabar">
+        <button id="playpause" class="btn primary" onclick="togglePlay()"><svg class="btn-icon" viewBox="0 0 24 24" width="1em" height="1em" aria-hidden="true" focusable="false"><path d="M8 5v14M16 5v14" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/></svg> Pause</button>
+        <span id="cur" class="time">0:00</span>
+        <input id="seek" class="seek" type="range" min="0" max="0" value="0" step="1" />
+        <span id="dur" class="time">0:00</span>
+        <button class="btn" onclick="stopPlayback()"><svg class="btn-icon" viewBox="0 0 24 24" width="1em" height="1em" aria-hidden="true" focusable="false"><rect x="5" y="5" width="14" height="14" rx="1.5" fill="currentColor"/></svg> Stop</button>
+        <button class="btn" onclick="window.location.assign('/list.html')">&#128193; Files</button>
+    </div>
+
+    <script src="/audio-client.js"></script>
+    <script>
+        var MEDIA_FILE = "{{FILEPATH}}";   // full host path of the playing file (for Replay)
+        var paused = false;
+        var ended = false;
+        var dragging = false;
+        var seek = document.getElementById('seek');
+        var curEl = document.getElementById('cur');
+        var durEl = document.getElementById('dur');
+        var ppEl = document.getElementById('playpause');
+        var endedOverlay = document.getElementById('endedOverlay');
+
+        function fmt(sec) {
+            sec = Math.max(0, Math.floor(sec || 0));
+            var m = Math.floor(sec / 60), s = sec % 60;
+            return m + ':' + (s < 10 ? '0' : '') + s;
+        }
+
+        function startSound() {
+            var o = document.getElementById('tapstart');
+            if (o) o.style.display = 'none';
+            startTeslaAudio();
+        }
+        document.getElementById('tapstart').addEventListener('click', startSound);
+
+        function togglePlay() {
+            fetch(paused ? '/media/resume' : '/media/pause').then(refreshSoon);
+            paused = !paused;
+            ppEl.innerHTML = paused ? '<svg class="btn-icon" viewBox="0 0 24 24" width="1em" height="1em" aria-hidden="true" focusable="false"><path d="M7 4l13 8-13 8z" fill="currentColor"/></svg> Play' : '<svg class="btn-icon" viewBox="0 0 24 24" width="1em" height="1em" aria-hidden="true" focusable="false"><path d="M8 5v14M16 5v14" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/></svg> Pause';
+        }
+
+        function stopPlayback() {
+            fetch('/media/stop').then(function () { window.location.assign('/'); });
+        }
+
+        function replay() {
+            if (!MEDIA_FILE) { window.location.assign('/list.html'); return; }
+            endedOverlay.style.display = 'none';
+            ended = false;
+            fetch('/media/play?path=' + encodeURIComponent(MEDIA_FILE)).then(refreshSoon);
+        }
+
+        seek.addEventListener('input', function () { dragging = true; curEl.textContent = fmt(seek.value); });
+        seek.addEventListener('change', function () {
+            dragging = false;
+            fetch('/media/seek?t=' + encodeURIComponent(seek.value)).then(refreshSoon);
+        });
+
+        function applyStatus(st) {
+            if (!st) return;
+            paused = !!st.paused;
+            ended = !st.playing && !st.paused;
+            if (st.duration > 0) {
+                seek.max = Math.floor(st.duration);
+                durEl.textContent = fmt(st.duration);
+            }
+            if (!dragging) {
+                seek.value = Math.floor(st.position);
+                curEl.textContent = fmt(st.position);
+            }
+            ppEl.innerHTML = paused ? '<svg class="btn-icon" viewBox="0 0 24 24" width="1em" height="1em" aria-hidden="true" focusable="false"><path d="M7 4l13 8-13 8z" fill="currentColor"/></svg> Play' : '<svg class="btn-icon" viewBox="0 0 24 24" width="1em" height="1em" aria-hidden="true" focusable="false"><path d="M8 5v14M16 5v14" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/></svg> Pause';
+            // When playback has ended/stopped, cover the screen so the live desktop is never shown.
+            endedOverlay.style.display = ended ? 'flex' : 'none';
+        }
+
+        function refresh() {
+            fetch('/media/status').then(function (r) { return r.json(); }).then(applyStatus).catch(function () {});
+        }
+        function refreshSoon() { setTimeout(refresh, 250); }
+
+        refresh();
+        setInterval(refresh, 500);
+    </script>
+</body>
+
+</html>

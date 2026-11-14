@@ -1,0 +1,782 @@
+<html>
+
+<head>
+    <title>Remote Desktop</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+</head>
+
+<body>
+
+    <!-- MJPEG starts only after tap-to-connect (phase 1 A/V session align; no <video> tag). -->
+    <div class="screen">
+        <img id="streamImg" title="playback" alt="" />
+        <div id="screenOverlay" class="screen-tap">
+            <div id="connectPanel" class="tap-inner" role="button" tabindex="0" aria-label="Tap to connect">
+                <div class="big-ic play-icon" aria-hidden="true">
+                    <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" focusable="false">
+                        <polygon points="22,14 22,50 50,32" fill="currentColor" />
+                    </svg>
+                </div>
+                <div class="tap-title">Remote Desktop</div>
+                <div class="tap-sub">Tap to connect</div>
+            </div>
+            <div id="disconnectPanel" class="tap-inner disconnect-panel" hidden>
+                <div class="big-ic warn-icon" aria-hidden="true">
+                    <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" focusable="false">
+                        <path d="M32 6 L58 54 H6 Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round" />
+                        <line x1="32" y1="24" x2="32" y2="38" stroke="currentColor" stroke-width="4" stroke-linecap="round" />
+                        <circle cx="32" cy="46" r="2.5" fill="currentColor" />
+                    </svg>
+                </div>
+                <div class="tap-title">Connection lost</div>
+                <div class="tap-sub">The link to the PC dropped. Refresh the page to reconnect.</div>
+                <button type="button" class="btn primary" onclick="location.reload()">Refresh page</button>
+            </div>
+        </div>
+    </div>
+    <div class="controlbar">
+        <input type="text" id="fakeKeyboard" class="btn input" placeholder="&#9000; Keyboard" autocomplete="off"
+            autocorrect="off" autocapitalize="off" spellcheck="false" />
+        <button class="btn" onclick="window.location.assign('/list.html')">&#128193; Files</button>
+        <button class="btn" onclick="window.location.assign('/config.html')">&#9881; Settings</button>
+        <button type="button" id="fitBtn" class="btn" onclick="fitScreen(this)" title="Set the PC resolution to match this screen"><svg class="btn-icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg> Fit screen</button>
+        <span id="streamInfo" class="stream-info" aria-hidden="true" tabindex="-1">&mdash;</span>
+    </div>
+    <!-- Include the WebSocket JavaScript library -->
+
+
+
+
+    <script>
+
+        // Build same-origin WebSocket URL
+        function getWsUrl(path) {
+            var protocol = (location.protocol === 'https:') ? 'wss://' : 'ws://';
+            return protocol + location.host + path;
+        }
+
+        let audioContext = null;
+        let audioSocket = null;
+        let pcmPlayerNode = null;
+        let audioFormat = null;
+        let useWorklet = true; // will be set to false if AudioWorklet fails
+        let scheduledTime = 0; // for fallback buffer scheduling
+        let audioPlayerReady = false; // binary packets are dropped until the player in use is ready
+        let fallbackSources = []; // fallback AudioBufferSourceNodes not yet ended
+        let fallbackTrims = 0;
+        let fallbackUnderruns = 0;
+        let audioStats = null; // latest { bufferedMs, minMs, underruns, trims } from the worklet
+        let audioStatsTimer = null;
+        var AUDIO_STATS_INTERVAL_MS = 10000;
+        var FALLBACK_MAX_LEAD_S = 0.25;
+        var FALLBACK_RESET_LEAD_S = 0.1;
+        let audioConnecting = false;
+        let intentionalAudioClose = false;
+        let sessionStarted = false;
+        // "touch" (default) keeps a finger down so Windows press-and-hold is the right-click.
+        // "mouse" is the cursor path, with the page's own 500 ms long-press.
+        var inputMode = 'touch';
+        function touchMode() { return inputMode !== 'mouse'; }
+
+        function showConnectOverlay() {
+            var root = document.getElementById('screenOverlay');
+            var connect = document.getElementById('connectPanel');
+            var lost = document.getElementById('disconnectPanel');
+            if (!root || !connect || !lost) return;
+            root.style.display = '';
+            connect.hidden = false;
+            lost.hidden = true;
+        }
+
+        function showDisconnectOverlay() {
+            var root = document.getElementById('screenOverlay');
+            var connect = document.getElementById('connectPanel');
+            var lost = document.getElementById('disconnectPanel');
+            if (!root || !connect || !lost) return;
+            root.style.display = '';
+            connect.hidden = true;
+            lost.hidden = false;
+        }
+
+        function hideScreenOverlay() {
+            var root = document.getElementById('screenOverlay');
+            if (root) root.style.display = 'none';
+        }
+
+        function onSessionLost() {
+            if (!sessionStarted) return;
+            audioConnecting = false;
+            showDisconnectOverlay();
+        }
+
+        // Video transport used by this page. The indicator text is derived from this.
+        var VIDEO_STREAM = { path: '/stream', format: 'MJPEG' };
+
+        // Connect MJPEG /stream in the same user gesture as audio (avoids seconds of video-ahead-of-audio).
+        function startVideoStream() {
+            var el = document.getElementById('streamImg');
+            if (!el) return;
+            el.removeAttribute('src');
+            el.src = VIDEO_STREAM.path + '?_=' + Date.now();
+        }
+
+        async function startAudioPlayback() {
+            if (audioConnecting) {
+                return;
+            }
+
+            if (audioContext != null) {
+                if (audioSocket) {
+                    intentionalAudioClose = true;
+                    audioSocket.close();
+                }
+                if (audioContext) audioContext.close();
+                audioContext = null;
+                audioSocket = null;
+                pcmPlayerNode = null;
+                audioFormat = null;
+                useWorklet = true;
+                scheduledTime = 0;
+            }
+            resetAudioPlayerState();
+
+            audioConnecting = true;
+            hideScreenOverlay();
+
+            startVideoStream();
+
+            audioSocket = new WebSocket(getWsUrl('/ws/audio'));
+            audioSocket.binaryType = 'arraybuffer';
+
+            audioSocket.onclose = function () {
+                if (intentionalAudioClose) {
+                    intentionalAudioClose = false;
+                    return;
+                }
+                onSessionLost();
+            };
+
+            audioSocket.onerror = function (event) {
+                console.error('Audio WebSocket error:', event);
+                onSessionLost();
+            };
+
+            audioSocket.onmessage = async function (event) {
+                // First message is text with format metadata
+                if (typeof event.data === 'string') {
+                    audioFormat = JSON.parse(event.data);
+                    console.log('Audio format:', audioFormat);
+
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                        sampleRate: audioFormat.sampleRate,
+                        latencyHint: 'interactive'
+                    });
+
+                    if (audioContext.sampleRate !== audioFormat.sampleRate) {
+                        console.warn(
+                            'Browser audio rate is ' + audioContext.sampleRate +
+                            'Hz, server rate is ' + audioFormat.sampleRate + 'Hz; resampling enabled'
+                        );
+                    }
+
+                    try {
+                        await audioContext.audioWorklet.addModule('PCMPlayerProcessor.js');
+                        pcmPlayerNode = new AudioWorkletNode(audioContext, 'pcm-player-processor', {
+                            outputChannelCount: [audioFormat.channels],
+                            processorOptions: {
+                                channels: audioFormat.channels,
+                                bitsPerSample: audioFormat.bitsPerSample,
+                                sampleFormat: audioFormat.sampleFormat || (audioFormat.bitsPerSample === 16 ? 'pcm16' : 'float'),
+                                sourceSampleRate: audioFormat.sampleRate
+                            }
+                        });
+                        pcmPlayerNode.port.onmessage = function (ev) {
+                            if (ev.data && ev.data.type === 'stats') audioStats = ev.data;
+                        };
+                        pcmPlayerNode.connect(audioContext.destination);
+                        useWorklet = true;
+                        console.log('Audio: using AudioWorklet');
+                    } catch (e) {
+                        console.warn('AudioWorklet not available, using fallback:', e);
+                        useWorklet = false;
+                        scheduledTime = 0;
+                    }
+
+                    await audioContext.resume();
+
+                    audioPlayerReady = true;
+                    startAudioStatsTimer(audioSocket);
+                    audioConnecting = false;
+                    sessionStarted = true;
+                    console.log('Audio playback started');
+                    return;
+                }
+
+                // Subsequent messages are binary audio data. Until the player that will be
+                // used is ready (addModule pending), drop them so nothing plays underneath it.
+                if (!audioFormat || !audioContext || !audioPlayerReady) return;
+
+                if (audioContext.state === 'suspended') {
+                    audioContext.resume();
+                }
+
+                if (useWorklet && pcmPlayerNode) {
+                    // Primary path: AudioWorklet (transfer the buffer instead of copying it)
+                    if (event.data instanceof ArrayBuffer) {
+                        pcmPlayerNode.port.postMessage(event.data, [event.data]);
+                    } else {
+                        pcmPlayerNode.port.postMessage(event.data);
+                    }
+                } else {
+                    // Fallback path: decode PCM and schedule AudioBufferSourceNodes
+                    playPcmChunkFallback(event.data);
+                }
+            };
+
+        }
+
+        function resetAudioPlayerState() {
+            audioPlayerReady = false;
+            stopFallbackSources();
+            fallbackTrims = 0;
+            fallbackUnderruns = 0;
+            audioStats = null;
+            if (audioStatsTimer) {
+                clearInterval(audioStatsTimer);
+                audioStatsTimer = null;
+            }
+        }
+
+        function stopFallbackSources() {
+            var list = fallbackSources;
+            fallbackSources = [];
+            for (var i = 0; i < list.length; i++) {
+                try { list[i].onended = null; list[i].stop(); } catch (e) {}
+            }
+        }
+
+        // Every 10 s send the player's buffer stats on the audio socket; the server logs them.
+        function startAudioStatsTimer(socket) {
+            if (audioStatsTimer) clearInterval(audioStatsTimer);
+            audioStatsTimer = setInterval(function () {
+                if (socket !== audioSocket || !audioContext || socket.readyState !== WebSocket.OPEN) return;
+                var s;
+                if (useWorklet && pcmPlayerNode) {
+                    if (!audioStats) return;
+                    s = audioStats;
+                } else {
+                    var lead = Math.max(0, Math.round((scheduledTime - audioContext.currentTime) * 1000));
+                    s = { bufferedMs: lead, minMs: lead, underruns: fallbackUnderruns, trims: fallbackTrims };
+                }
+                try {
+                    socket.send(JSON.stringify({
+                        type: 'stats',
+                        bufferedMs: s.bufferedMs,
+                        minMs: s.minMs,
+                        underruns: s.underruns,
+                        trims: s.trims,
+                        contextRate: audioContext.sampleRate
+                    }));
+                } catch (e) {}
+            }, AUDIO_STATS_INTERVAL_MS);
+        }
+
+        function decodePcmToFloat32(arrayBuffer, format) {
+            var sampleFormat = format.sampleFormat || (format.bitsPerSample === 16 ? 'pcm16' : 'float');
+
+            if (sampleFormat === 'float') {
+                return new Float32Array(arrayBuffer);
+            }
+
+            if (sampleFormat === 'pcm16') {
+                var int16 = new Int16Array(arrayBuffer);
+                var pcm16 = new Float32Array(int16.length);
+                for (var i = 0; i < int16.length; i++) {
+                    pcm16[i] = int16[i] / 32768.0;
+                }
+                return pcm16;
+            }
+
+            if (sampleFormat === 'pcm24') {
+                var bytes = new Uint8Array(arrayBuffer);
+                var sampleCount = Math.floor(bytes.length / 3);
+                var pcm24 = new Float32Array(sampleCount);
+                for (var j = 0; j < sampleCount; j++) {
+                    var val = bytes[j * 3] | (bytes[j * 3 + 1] << 8) | (bytes[j * 3 + 2] << 16);
+                    if (val & 0x800000) {
+                        val |= 0xFF000000;
+                    }
+                    pcm24[j] = val / 8388608.0;
+                }
+                return pcm24;
+            }
+
+            if (sampleFormat === 'pcm32') {
+                var int32 = new Int32Array(arrayBuffer);
+                var pcm32 = new Float32Array(int32.length);
+                for (var k = 0; k < int32.length; k++) {
+                    pcm32[k] = int32[k] / 2147483648.0;
+                }
+                return pcm32;
+            }
+
+            return new Float32Array(arrayBuffer);
+        }
+
+        function resampleFloat32(floatSamples, channels, sourceRate, targetRate) {
+            if (sourceRate === targetRate) {
+                return floatSamples;
+            }
+
+            var sourceFrames = Math.floor(floatSamples.length / channels);
+            if (sourceFrames === 0) {
+                return floatSamples;
+            }
+
+            var targetFrames = Math.max(1, Math.floor(sourceFrames * targetRate / sourceRate));
+            var result = new Float32Array(targetFrames * channels);
+            var ratio = sourceRate / targetRate;
+
+            for (var outFrame = 0; outFrame < targetFrames; outFrame++) {
+                var srcPos = outFrame * ratio;
+                var srcFrame = Math.floor(srcPos);
+                var frac = srcPos - srcFrame;
+                var nextFrame = Math.min(srcFrame + 1, sourceFrames - 1);
+
+                for (var ch = 0; ch < channels; ch++) {
+                    var s0 = floatSamples[srcFrame * channels + ch];
+                    var s1 = floatSamples[nextFrame * channels + ch];
+                    result[outFrame * channels + ch] = s0 + (s1 - s0) * frac;
+                }
+            }
+
+            return result;
+        }
+
+        /**
+         * Fallback audio playback: manually decode PCM data into AudioBuffers
+         * and schedule them for gapless playback. Works on any browser with
+         * Web Audio API (no AudioWorklet needed).
+         */
+        function playPcmChunkFallback(rawData) {
+            var arrayBuffer = rawData instanceof ArrayBuffer ? rawData : rawData.buffer;
+            var channels = audioFormat.channels;
+            var sourceRate = audioFormat.sampleRate;
+            var playbackRate = audioContext.sampleRate;
+
+            var floatSamples = decodePcmToFloat32(arrayBuffer, audioFormat);
+            floatSamples = resampleFloat32(floatSamples, channels, sourceRate, playbackRate);
+
+            var framesCount = Math.floor(floatSamples.length / channels);
+            if (framesCount === 0) return;
+
+            var audioBuffer = audioContext.createBuffer(channels, framesCount, playbackRate);
+            for (var ch = 0; ch < channels; ch++) {
+                var channelData = audioBuffer.getChannelData(ch);
+                for (var frame = 0; frame < framesCount; frame++) {
+                    channelData[frame] = floatSamples[frame * channels + ch];
+                }
+            }
+
+            // Schedule for gapless playback
+            var source = audioContext.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(audioContext.destination);
+
+            var currentTime = audioContext.currentTime;
+            if (scheduledTime - currentTime > FALLBACK_MAX_LEAD_S) {
+                // Too far ahead: drop what is queued and restart close to now.
+                stopFallbackSources();
+                scheduledTime = currentTime + FALLBACK_RESET_LEAD_S;
+                fallbackTrims++;
+            } else if (scheduledTime < currentTime) {
+                // We've fallen behind — schedule slightly in the future to avoid glitches
+                if (scheduledTime > 0) fallbackUnderruns++;
+                scheduledTime = currentTime + 0.02;
+            }
+            source.onended = function () {
+                var i = fallbackSources.indexOf(source);
+                if (i >= 0) fallbackSources.splice(i, 1);
+            };
+            fallbackSources.push(source);
+            source.start(scheduledTime);
+            scheduledTime += audioBuffer.duration;
+        }
+
+
+        (function () {
+            var panel = document.getElementById('connectPanel');
+            if (!panel) return;
+            function onTapConnect(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                startAudioPlayback();
+            }
+            panel.addEventListener('click', onTapConnect);
+            panel.addEventListener('touchstart', onTapConnect, { passive: false });
+        })();
+
+        // Input WebSocket — same origin
+        var mouseSocket = new WebSocket(getWsUrl('/ws/input'));
+        mouseSocket.onclose = function () {
+            console.warn('Input WebSocket closed');
+            onSessionLost();
+        };
+        mouseSocket.onerror = function () {
+            console.warn('Input WebSocket error');
+            onSessionLost();
+        };
+
+        var img = document.getElementById('streamImg');
+
+        // Map a viewport point to host-screen coords. The stream is letterboxed inside the element
+        // (object-fit: contain), so use the frame's natural aspect ratio to find the real video
+        // rectangle; returns null for points in the black bars.
+        function mapPoint(clientX, clientY) {
+            var rect = img.getBoundingClientRect();
+            var natW = img.naturalWidth || rect.width;
+            var natH = img.naturalHeight || rect.height;
+            var scale = Math.min(rect.width / natW, rect.height / natH);
+            var dispW = natW * scale, dispH = natH * scale;
+            var offX = (rect.width - dispW) / 2, offY = (rect.height - dispH) / 2;
+            var x = clientX - rect.left - offX;
+            var y = clientY - rect.top - offY;
+            if (x < 0 || y < 0 || x > dispW || y > dispH) return null;
+            return { x: parseInt(x), y: parseInt(y), w: parseInt(dispW), h: parseInt(dispH) };
+        }
+
+        function sendInput(type, clientX, clientY) {
+            if (mouseSocket.readyState !== WebSocket.OPEN) return;
+            var p = mapPoint(clientX, clientY);
+            if (!p) return;
+            mouseSocket.send(JSON.stringify({
+                Type: type, X: p.x, Y: p.y, DisplaySize: { width: p.w, height: p.h }
+            }));
+        }
+
+        // Send a wheel (scroll) event. Delta is typically e.deltaY from wheel events.
+        // For two-finger touch we compute a scaled pixel delta.
+        // X/Y are optional but recommended so the server can position the cursor first.
+        function sendWheel(delta, clientX, clientY) {
+            if (mouseSocket.readyState !== WebSocket.OPEN) return;
+            var payload = { Type: 'wheel', Delta: delta };
+            if (clientX != null && clientY != null) {
+                var p = mapPoint(clientX, clientY);
+                if (p) {
+                    payload.X = p.x;
+                    payload.Y = p.y;
+                    payload.DisplaySize = { width: p.w, height: p.h };
+                }
+            }
+            mouseSocket.send(JSON.stringify(payload));
+        }
+
+        // Mouse (desktop). In touch mode a move with no button is hover and is dropped.
+        img.addEventListener('click', function (e) { sendInput('click', e.clientX, e.clientY); });
+        img.addEventListener('mousemove', function (e) {
+            if (touchMode() && !e.buttons) return;
+            sendInput('move', e.clientX, e.clientY);
+        });
+        img.addEventListener('mousedown', function (e) { sendInput('down', e.clientX, e.clientY); });
+        img.addEventListener('mouseup', function (e) { sendInput('up', e.clientX, e.clientY); });
+        // Desktop right mouse button. Touch mode lets Windows press-and-hold do this instead.
+        img.addEventListener('contextmenu', function (e) {
+            e.preventDefault();
+            if (!touchMode()) sendInput('rightclick', e.clientX, e.clientY);
+        });
+
+        // Mouse wheel / trackpad scroll (desktop + some touchpads).
+        // We always preventDefault so it doesn't scroll the page itself.
+        img.addEventListener('wheel', function (e) {
+            sendWheel(e.deltaY, e.clientX, e.clientY);
+            e.preventDefault();
+        }, { passive: false });
+
+        // Touch (Tesla / tablets):
+        //   quick tap            -> left click
+        //   press + drag         -> left-button drag
+        //   press & hold ~0.5s   -> right-click (long-press)
+        //   two-finger vertical drag -> scroll wheel (remote content scroll)
+        // Single-touch drag / tap logic is skipped when >= 2 touches are present.
+        // All handlers use passive:false + preventDefault to keep control and stop page scroll.
+        var LONG_PRESS_MS = 500, MOVE_TOL = 12;
+        var tStartX = 0, tStartY = 0, tMoved = false, tDownSent = false, tLongPressed = false, tTimer = null;
+
+        // Two-finger scroll gesture state
+        var t2Active = false;
+        var t2PrevAvgY = 0;
+        // Pixels of finger movement to wheel units. Tune for feel (higher = more sensitive).
+        var T2_SCROLL_FACTOR = 1.6;
+        img.addEventListener('touchstart', function (e) {
+            if (e.touches && e.touches.length >= 2) {
+                // Two-finger scroll gesture
+                t2Active = true;
+                t2PrevAvgY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+                clearTimeout(tTimer);
+                tMoved = false; tDownSent = false; tLongPressed = false;
+                e.preventDefault();
+                return;
+            }
+
+            // Single-touch path
+            var t = e.changedTouches[0];
+            tStartX = t.clientX; tStartY = t.clientY;
+            tMoved = false; tDownSent = false; tLongPressed = false;
+            if (touchMode()) {
+                // Contact stays down. Windows press-and-hold turns a still finger into a right-click.
+                sendInput('down', tStartX, tStartY);
+                tDownSent = true;
+            } else {
+                tTimer = setTimeout(function () {
+                    tLongPressed = true;
+                    sendInput('rightclick', tStartX, tStartY);
+                }, LONG_PRESS_MS);
+            }
+            e.preventDefault();
+        }, { passive: false });
+        img.addEventListener('touchmove', function (e) {
+            // Two-finger vertical scroll (highest priority when active or detected)
+            if (t2Active || (e.touches && e.touches.length >= 2)) {
+                if (!t2Active) {
+                    t2Active = true;
+                    t2PrevAvgY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+                    clearTimeout(tTimer);
+                    tMoved = false; tDownSent = false; tLongPressed = false;
+                }
+                var avgY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+                var dy = avgY - t2PrevAvgY;
+                if (Math.abs(dy) > 2) {
+                    // Convert finger movement to wheel delta (natural touch convention:
+                    // content follows the fingers, so dragging down scrolls content up).
+                    var wheelDelta = Math.round(-dy * T2_SCROLL_FACTOR);
+                    var cx = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+                    sendWheel(wheelDelta, cx, avgY);
+                    t2PrevAvgY = avgY;
+                }
+                e.preventDefault();
+                return;
+            }
+
+            if (tLongPressed) { e.preventDefault(); return; }
+            var t = e.changedTouches[0];
+            if (touchMode()) {
+                sendInput('move', t.clientX, t.clientY);
+                e.preventDefault();
+                return;
+            }
+            if (!tMoved && Math.abs(t.clientX - tStartX) + Math.abs(t.clientY - tStartY) > MOVE_TOL) {
+                tMoved = true;
+                clearTimeout(tTimer);          // it's a drag, not a long-press
+                sendInput('down', tStartX, tStartY);
+                tDownSent = true;
+            }
+            if (tDownSent) sendInput('move', t.clientX, t.clientY);
+            e.preventDefault();
+        }, { passive: false });
+        img.addEventListener('touchend', function (e) {
+            if (t2Active) {
+                t2Active = false;
+                clearTimeout(tTimer);
+                e.preventDefault();
+                return;
+            }
+            clearTimeout(tTimer);
+            var t = e.changedTouches[0];
+            if (touchMode()) { sendInput('up', t.clientX, t.clientY); }
+            else if (tLongPressed) { /* right-click already sent */ }
+            else if (tDownSent) { sendInput('up', t.clientX, t.clientY); }   // end of drag
+            else { sendInput('down', tStartX, tStartY); sendInput('up', tStartX, tStartY); } // tap = left click
+            e.preventDefault();
+        }, { passive: false });
+
+        // Safety net for cancelled touches (e.g. system gesture)
+        img.addEventListener('touchcancel', function (e) {
+            if (t2Active) t2Active = false;
+            clearTimeout(tTimer);
+            tDownSent = false;
+            tLongPressed = false;
+            tMoved = false;
+            e.preventDefault();
+        }, { passive: false });
+
+        // Keyboard input -> /ws/input (backend handleKey replays via SendKeys).
+        // "Type" contains "key" so the server routes these as KeyData, not mouse.
+        //
+        // Three ways to type, all funnelling through sendKey/sendText:
+        //   1. The visible #fakeKeyboard box (touch devices summon the on-screen keyboard).
+        //   2. A physical keyboard with the box NOT focused (page-wide keydown capture).
+        //   3. Paste (Ctrl+V or long-press paste), anywhere or into the box.
+        var fakeKeyboard = document.getElementById('fakeKeyboard');
+
+        function sendKey(key, code) {
+            if (mouseSocket.readyState === WebSocket.OPEN) {
+                mouseSocket.send(JSON.stringify({ Type: 'key', Key: key, KeyCode: code || '' }));
+            }
+        }
+
+        // Send a run of text one character at a time (typing or pasting). Newlines and tabs are
+        // translated to the Enter/Tab keys the backend understands.
+        function sendText(text) {
+            for (var i = 0; i < text.length; i++) {
+                var ch = text[i];
+                if (ch === '\r' || ch === '\n') {
+                    if (ch === '\r' && text[i + 1] === '\n') i++;   // CRLF -> one Enter
+                    sendKey('Enter');
+                } else if (ch === '\t') {
+                    sendKey('Tab');
+                } else {
+                    sendKey(ch);
+                }
+            }
+        }
+
+        var namedKeys = ['Backspace', 'Enter', 'Tab', 'Escape', 'Delete', 'Insert',
+            'Home', 'End', 'PageUp', 'PageDown', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'];
+        var modifierKeys = ['Shift', 'Control', 'Alt', 'Meta', 'OS', 'AltGraph', 'CapsLock',
+            'NumLock', 'ScrollLock', 'ContextMenu', 'Fn', 'FnLock', 'Hyper', 'Super', 'Symbol',
+            'Dead', 'Process', 'Unidentified'];
+
+        function isEditable(el) {
+            return el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+        }
+
+        function isNamedKey(event) {
+            return namedKeys.indexOf(event.key) !== -1 || /^F\d{1,2}$/.test(event.key);
+        }
+
+        // (1) On-screen keyboard box: characters arrive via the input event.
+        fakeKeyboard.addEventListener('input', function (event) {
+            // insertText is normal typing; insertFromPaste covers pasting into the box on browsers
+            // that don't fire a separate paste event. (The document paste handler below also covers
+            // it; sending happens once because that handler preventDefaults when it fires.)
+            if (event.data && (event.inputType === 'insertText' || event.inputType === 'insertFromPaste')) {
+                sendText(event.data);
+            }
+            fakeKeyboard.value = '';
+        });
+        // Named/special keys typed into the box.
+        fakeKeyboard.addEventListener('keydown', function (event) {
+            if (isNamedKey(event)) { sendKey(event.key, event.code); event.preventDefault(); }
+        });
+
+        // (2) Physical keyboard without clicking the box: capture keystrokes on the whole page.
+        // Skipped while a text field (incl. the box) is focused so nothing is doubled, and modifier
+        // combos are ignored so browser shortcuts and Ctrl+V paste still work.
+        document.addEventListener('keydown', function (event) {
+            if (isEditable(event.target)) return;
+            if (event.ctrlKey || event.metaKey || event.altKey) return;
+            if (modifierKeys.indexOf(event.key) !== -1) return;
+            if (event.key.length === 1) {
+                sendKey(event.key);
+                event.preventDefault();
+            } else if (isNamedKey(event)) {
+                sendKey(event.key, event.code);
+                event.preventDefault();
+            }
+        });
+
+        // (3) Paste anywhere on the page (or into the box) forwards the clipboard text. One
+        // document-level handler covers both cases; preventDefault stops a duplicate input event.
+        document.addEventListener('paste', function (event) {
+            var data = event.clipboardData || window.clipboardData;
+            var text = data ? data.getData('text') : '';
+            if (text) {
+                sendText(text);
+                event.preventDefault();
+            }
+            if (document.activeElement === fakeKeyboard) fakeKeyboard.value = '';
+        });
+
+        // Tap anywhere except the input itself -> blur it so the on-screen keyboard dismisses.
+        // The img's touch handlers call preventDefault (passive:false), which suppresses the normal
+        // synthetic-click blur; these passive document listeners still fire and blur explicitly.
+        ['touchstart', 'pointerdown'].forEach(function (type) {
+            document.addEventListener(type, function (e) {
+                if (document.activeElement === fakeKeyboard && e.target !== fakeKeyboard)
+                    fakeKeyboard.blur();
+            }, { passive: true });
+        });
+
+    </script>
+    <script>
+        // Fit screen: ask the PC for the display mode closest in shape to this screen,
+        // and report the result in the button's own label.
+        var fitBusy = false;
+        var fitTimer = null;
+        var fitLabel = null;
+        var fitGuard = null;
+
+        function fitShow(btn, text) {
+            if (fitTimer) clearTimeout(fitTimer);
+            btn.textContent = text;
+            fitTimer = setTimeout(function () {
+                btn.innerHTML = fitLabel;
+                fitTimer = null;
+            }, 4000);
+        }
+
+        function fitDone(btn) {
+            fitBusy = false;
+            if (fitGuard) { clearTimeout(fitGuard); fitGuard = null; }
+            btn.disabled = false;
+        }
+
+        function fitScreen(btn) {
+            if (fitBusy) return;
+            fitBusy = true;
+            if (fitLabel === null) fitLabel = btn.innerHTML;
+            var s = document.querySelector('.screen');
+            // Real pixels of the stream area, so the PC mode and the stream match what is shown.
+            var dpr = window.devicePixelRatio || 1;
+            var w = Math.round((s ? s.clientWidth : window.innerWidth) * dpr);
+            var h = Math.round((s ? s.clientHeight : window.innerHeight) * dpr);
+            btn.disabled = true;
+            var settled = false;
+            fitGuard = setTimeout(function () {
+                if (settled) return;
+                settled = true;
+                fitDone(btn);
+                fitShow(btn, 'Change failed');
+            }, 5000);
+            fetch('/display/match?w=' + w + '&h=' + h)
+                .then(function (r) {
+                    if (!r.ok) throw new Error('status ' + r.status);
+                    return r.json();
+                })
+                .then(function (d) {
+                    if (settled) return;
+                    settled = true;
+                    fitDone(btn);
+                    var size = d.width + 'x' + d.height;
+                    fitShow(btn, d.changed ? ('PC set to ' + size) : ('Unchanged ' + size));
+                })
+                .catch(function () {
+                    if (settled) return;
+                    settled = true;
+                    fitDone(btn);
+                    fitShow(btn, 'Change failed');
+                });
+        }
+
+        // Read-only indicator: real size of the received picture plus the video format.
+        function updateStreamInfo() {
+            var el = document.getElementById('streamInfo');
+            var im = document.getElementById('streamImg');
+            var lost = document.getElementById('disconnectPanel');
+            if (!el || !im) return;
+            var w = im.naturalWidth, h = im.naturalHeight;
+            var text = (w > 0 && h > 0 && !(lost && !lost.hidden))
+                ? (w + '\u00d7' + h + ' \u00b7 ' + VIDEO_STREAM.format)
+                : '\u2014';
+            if (el.textContent !== text) el.textContent = text;
+        }
+        setInterval(updateStreamInfo, 1000);
+
+        fetch('/config').then(function (r) { return r.json(); }).then(function (c) {
+            if (c && c.inputMode) inputMode = c.inputMode;
+        }).catch(function () {});
+    </script>
+</body>
+
+</html>
